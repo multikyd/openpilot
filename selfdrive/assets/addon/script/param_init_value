@@ -6,7 +6,7 @@ KisaEnableLogger:0
 KisaAutoResume:1
 KisaVariableCruise:1
 KisaLaneChangeSpeed:20
-KisaAutoLaneChangeDelay:0
+KisaAutoLaneChangeDelay:0.5
 KisaSteerAngleCorrection:0
 PutPrebuiltOn:0
 LdwsCarFix:0

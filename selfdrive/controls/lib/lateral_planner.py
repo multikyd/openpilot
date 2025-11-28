@@ -59,7 +59,7 @@ class LateralPlanner:
     self.lanelines_active_tmp = False
 
     self.useLaneLineSpeedApply = self.params.get("UseLaneLineSpeed")
-    self.pathOffset = float(self.params.get("PathOffset")) * 0.01
+    self.pathOffset = self.params.get("PathOffset")
     self.useLaneLineMode = False
     self.plan_a = np.zeros((TRAJECTORY_SIZE, ))
     self.plan_yaw = np.zeros((TRAJECTORY_SIZE,))
@@ -86,7 +86,7 @@ class LateralPlanner:
     if self.readParams <= 0:
       self.readParams = 100
       self.useLaneLineSpeedApply = sm['carState'].useLaneLineSpeed
-      self.pathOffset = float(self.params.get("PathOffset")) * 0.01
+      self.pathOffset = self.params.get("PathOffset")
       self.lateralPathCost = self.params.get("LatMpcPathCost") * 0.01
       self.lateralMotionCost = self.params.get("LatMpcMotionCost") * 0.01
       LATERAL_ACCEL_COST = self.params.get("LatMpcAccelCost") * 0.01

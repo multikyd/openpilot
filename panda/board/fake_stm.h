@@ -5,9 +5,7 @@
 
 #include "utils.h"
 
-#define CANFD
 #define ALLOW_DEBUG
-#define PANDA
 
 #define ENTER_CRITICAL() 0
 #define EXIT_CRITICAL() 0

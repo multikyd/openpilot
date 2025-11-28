@@ -71,6 +71,7 @@ sound_list: dict[int, tuple[str, int | None, float]] = {
   AudibleAlert.audio8: ("audio_8.wav", None, MAX_VOLUME),
   AudibleAlert.audio9: ("audio_9.wav", None, MAX_VOLUME),
   AudibleAlert.audio10: ("audio_10.wav", None, MAX_VOLUME),
+  AudibleAlert.dingdong: ("dingdong.wav", 1, MAX_VOLUME),
 }
 if HARDWARE.get_device_type() == "tizi":
   sound_list.update({
@@ -137,7 +138,7 @@ class Soundd:
     for sound in sound_list:
       filename, play_count, volume = sound_list[sound]
 
-      if self.lang == "ko":
+      if self.lang == "ko" or True:
         wavefile = wave.open(BASEDIR + "/selfdrive/assets/sounds/" + filename, 'r')
       else:
         wavefile = wave.open(BASEDIR + "/selfdrive/assets/sounds_eng/" + filename, 'r')

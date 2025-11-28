@@ -5,6 +5,7 @@ import signal
 import sys
 import time
 import traceback
+import subprocess
 
 from cereal import log
 import cereal.messaging as messaging
@@ -121,6 +122,10 @@ def manager_init() -> None:
     print("shapely Installing...")
     os.system("pip install shapely")
     print("shapely Installed!")
+  if importlib.util.find_spec("netifaces") is None:
+    print("netifaces Installing...")
+    os.system("pip install netifaces")
+    print("netifaces Installed!")
 
   # preimport all processes
   for p in managed_processes.values():
@@ -216,6 +221,15 @@ def manager_thread() -> None:
 
 
 def main() -> None:
+  try:
+    subprocess.run(
+      ["pkill", "-f", "kisa_agent.py"],
+      stdout=subprocess.DEVNULL,
+      stderr=subprocess.DEVNULL
+    )
+  except Exception as e:
+    print("Failed to stop kisa_agent:", e)
+
   manager_init()
   if os.getenv("PREPAREONLY") is not None:
     return

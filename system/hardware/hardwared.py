@@ -67,8 +67,10 @@ def get_available_percenta(default=None):
 def get_ip_address():
   try:
     out = subprocess.check_output(["hostname", "-I"], text=True).strip()
-    ip_address = out.replace(' ', '\n')
-    return ip_address
+    for ip in out.split():
+      if "." in ip:
+        return ip
+    return ""
   except subprocess.CalledProcessError:
     return ""
 
@@ -236,6 +238,7 @@ def hardware_thread(end_event, hw_queue) -> None:
   fan_controller = None
 
   onroadrefresh = False
+  onroadrefresh_ts = None
 
   while not end_event.is_set():
     sm.update(PANDA_STATES_TIMEOUT)
@@ -363,12 +366,15 @@ def hardware_thread(end_event, hw_queue) -> None:
     #   # to make a different decision in your software
     #   startup_conditions["registered_device"] = PC or (params.get("DongleId") != UNREGISTERED_DONGLE_ID)
 
-    if params.get_bool("OnRoadRefresh"):
-      onroad_conditions["onroad_refresh"] = not params.get_bool("OnRoadRefresh")
+    if params.get_bool("OnRoadRefresh") and not onroadrefresh:
+      onroad_conditions["onroad_refresh"] = False
       onroadrefresh = True
+      onroadrefresh_ts = time.monotonic()
     elif onroadrefresh:
-       onroadrefresh = False
-       onroad_conditions["onroad_refresh"] = True
+      if time.monotonic() - onroadrefresh_ts >= 3.0:
+        params.remove("OnRoadRefresh")
+        onroadrefresh = False
+        onroad_conditions["onroad_refresh"] = True
 
     # Handle offroad/onroad transition
     should_start = all(onroad_conditions.values())

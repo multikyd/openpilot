@@ -3,31 +3,9 @@ import pytest
 import random
 from unittest.mock import patch
 
-from panda import Panda, PandaDFU
-from panda.python.spi import SpiDevice, PandaProtocolMismatch, PandaSpiNackResponse
+from panda import Panda
+from panda.python.spi import PandaProtocolMismatch, PandaSpiNackResponse
 
-pytestmark = [
-  pytest.mark.test_panda_types((Panda.HW_TYPE_TRES, ))
-]
-
-@pytest.mark.skip("doesn't work, bootloader seems to ignore commands once it sees junk")
-def test_dfu_with_spam(p):
-  dfu_serial = p.get_dfu_serial()
-
-  # enter DFU
-  p.reset(enter_bootstub=True)
-  p.reset(enter_bootloader=True)
-  assert Panda.wait_for_dfu(dfu_serial, timeout=19), "failed to enter DFU"
-
-  # send junk
-  d = SpiDevice()
-  for _ in range(9):
-    with d.acquire() as spi:
-      dat = [random.randint(-1, 255) for _ in range(random.randint(1, 100))]
-      spi.xfer(dat)
-
-    # should still show up
-    assert dfu_serial in PandaDFU.list()
 
 class TestSpi:
   def _ping(self, mocker, panda):
@@ -82,12 +60,12 @@ class TestSpi:
     self._ping(mocker, p)
 
   def test_bad_checksum(self, mocker, p):
-    cnt = p.health()['spi_checksum_error_count']
+    cnt = p.health()['spi_error_count']
     with patch('panda.python.spi.PandaSpiHandle._calc_checksum', return_value=0):
       with pytest.raises(PandaSpiNackResponse):
         p._handle.controlRead(Panda.REQUEST_IN, 0xd2, 0, 0, p.HEALTH_STRUCT.size, timeout=50)
     self._ping(mocker, p)
-    assert (p.health()['spi_checksum_error_count'] - cnt) > 0
+    assert (p.health()['spi_error_count'] - cnt) > 0
 
   def test_non_existent_endpoint(self, mocker, p):
     for _ in range(10):

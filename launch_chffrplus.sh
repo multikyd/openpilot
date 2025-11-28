@@ -64,13 +64,13 @@ function agnos_init {
     chmod 600 /data/params/d/GithubSshKeys
   fi
 
-  cat /data/openpilot/opendbc_repo/opendbc/car/hyundai/values.py | grep ' = Hyundai' | awk '{print $1}' > /data/CarList
+  cat /data/openpilot/opendbc_repo/opendbc/car/hyundai/values.py | grep ' = Hyundai' | awk '{print $1}' > /data/params/d/CarList
 }
 
 function launch {
 
   # one touch git pull
-  KILINE="alias gi='git pull && touch /data/ks && sudo reboot'"; KIFILE="$HOME/.bashrc"; grep -qxF "$KILINE" "$KIFILE" || echo "$KILINE" >> "$KIFILE"
+  KILINE="alias gi='git -C /data/openpilot pull && rm -f /data/openpilot/prebuilt && touch /data/ks && echo -en 1 > /data/params/d/DoReboot'"; KIFILE="$HOME/.bashrc"; grep -qxF "$KILINE" "$KIFILE" || echo "$KILINE" >> "$KIFILE"
 
   # Remove orphaned git lock if it exists on boot
   [ -f "$DIR/.git/index.lock" ] && rm -f $DIR/.git/index.lock
@@ -123,6 +123,29 @@ function launch {
 
   # write tmux scrollback to a file
   tmux capture-pane -pq -S-1000 > /tmp/launch_log
+
+  # KisaPilot Current Stat
+  git log -n 1 --pretty=format:"/ %cd / %h" --date=short > /data/params/d/KisaPilotCurrentDescription
+
+# KisaPilot Model check
+
+Model_P_Hash=$(sha256sum /data/openpilot/selfdrive/modeld/models/driving_policy.onnx | awk '{print $1}')
+Model_V_Hash=$(sha256sum /data/openpilot/selfdrive/modeld/models/driving_vision.onnx | awk '{print $1}')
+
+MODEL_NAME=$(awk -v ph="$Model_P_Hash" -v vh="$Model_V_Hash" '
+  $2 == ph && $3 == vh {
+    print $1;
+  }
+' /data/openpilot/selfdrive/modeld/models/ModelList)
+
+if [ -z "$MODEL_NAME" ]; then
+  MODEL_NAME=$(head -n 1 /data/openpilot/selfdrive/modeld/models/ModelList | awk '{print $1}')
+fi
+
+echo -en "$MODEL_NAME" > /data/params/d/DrivingModel
+
+  # kisa agent start
+  python3 /data/openpilot/selfdrive/kisapilot/kisa_agent.py &
 
   # start manager
   cd system/manager

@@ -155,6 +155,9 @@ struct OnroadEvent @0xc4fa6047f024e718 {
     audio0 @116;
 
     torqueNNLoad @120;
+    chimeAtResume @121;
+    laneChangeMerging @122;
+    laneChangeFinish @123;
 
     soundsUnavailableDEPRECATED @47;
   }
@@ -475,6 +478,7 @@ enum LaneChangeState {
   preLaneChange @1;
   laneChangeStarting @2;
   laneChangeFinishing @3;
+  laneChangeMerging @4;
 }
 
 enum LaneChangeDirection {
@@ -1326,6 +1330,9 @@ struct LongitudinalPlan @0xe00b5b3eba12876c {
 
   solverExecutionTime @35 :Float32;
 
+  e2eX @49 :List(Float64);
+  lead0Obstacle @50 :List(Float64);
+  lead1Obstacle @51 :List(Float64);
   enum LongitudinalPlanSource {
     cruise @0;
     lead0 @1;
@@ -2598,13 +2605,10 @@ struct Event {
     controlsState @7 :ControlsState;
     selfdriveState @130 :SelfdriveState;
     gyroscope @99 :SensorEventData;
-    gyroscope2 @100 :SensorEventData;
     accelerometer @98 :SensorEventData;
-    accelerometer2 @101 :SensorEventData;
     magnetometer @95 :SensorEventData;
     lightSensor @96 :SensorEventData;
     temperatureSensor @97 :SensorEventData;
-    temperatureSensor2 @123 :SensorEventData;
     pandaStates @81 :List(PandaState);
     peripheralState @80 :PeripheralState;
     radarState @13 :RadarState;
@@ -2767,5 +2771,8 @@ struct Event {
     liveLocationKalmanDEPRECATED @72 :LiveLocationKalman;
     liveTracksDEPRECATED @16 :List(LiveTracksDEPRECATED);
     onroadEventsDEPRECATED @68: List(Car.OnroadEventDEPRECATED);
+    gyroscope2DEPRECATED @100 :SensorEventData;
+    accelerometer2DEPRECATED @101 :SensorEventData;
+    temperatureSensor2DEPRECATED @123 :SensorEventData;
   }
 }

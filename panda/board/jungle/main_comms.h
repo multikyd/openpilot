@@ -189,7 +189,7 @@ int comms_control_handler(ControlPacket_t *req, uint8_t *resp) {
       break;
     // **** 0xde: set can bitrate
     case 0xde:
-      if ((req->param1 < PANDA_BUS_CNT) && is_speed_valid(req->param2, speeds, sizeof(speeds)/sizeof(speeds[0]))) {
+      if ((req->param1 < PANDA_CAN_CNT) && is_speed_valid(req->param2, speeds, sizeof(speeds)/sizeof(speeds[0]))) {
         bus_config[req->param1].can_speed = req->param2;
         bool ret = can_init(CAN_NUM_FROM_BUS_NUM(req->param1));
         UNUSED(ret);
@@ -212,17 +212,12 @@ int comms_control_handler(ControlPacket_t *req, uint8_t *resp) {
       if (req->param1 == 0xFFFFU) {
         print("Clearing CAN Rx queue\n");
         can_clear(&can_rx_q);
-      } else if (req->param1 < PANDA_BUS_CNT) {
+      } else if (req->param1 < PANDA_CAN_CNT) {
         print("Clearing CAN Tx queue\n");
         can_clear(can_queues[req->param1]);
       } else {
         print("Clearing CAN CAN ring buffer failed: wrong bus number\n");
       }
-      break;
-    // **** 0xf2: Clear debug ring buffer.
-    case 0xf2:
-      print("Clearing debug queue.\n");
-      clear_uart_buff(get_ring_by_number(0));
       break;
     // **** 0xf4: Set CAN transceiver enable pin
     case 0xf4:
@@ -230,7 +225,7 @@ int comms_control_handler(ControlPacket_t *req, uint8_t *resp) {
       break;
     // **** 0xf5: Set CAN silent mode
     case 0xf5:
-      can_silent = (req->param1 > 0U) ? ALL_CAN_SILENT : ALL_CAN_LIVE;
+      can_silent = (req->param1 > 0U);
       can_init_all();
       break;
     // **** 0xf7: enable/disable header pin by number
@@ -240,7 +235,6 @@ int comms_control_handler(ControlPacket_t *req, uint8_t *resp) {
     // **** 0xf9: set CAN FD data bitrate
     case 0xf9:
       if ((req->param1 < PANDA_CAN_CNT) &&
-           current_board->has_canfd &&
            is_speed_valid(req->param2, data_speeds, sizeof(data_speeds)/sizeof(data_speeds[0]))) {
         bus_config[req->param1].can_data_speed = req->param2;
         bus_config[req->param1].canfd_enabled = (req->param2 >= bus_config[req->param1].can_speed);
@@ -251,7 +245,7 @@ int comms_control_handler(ControlPacket_t *req, uint8_t *resp) {
       break;
     // **** 0xfc: set CAN FD non-ISO mode
     case 0xfc:
-      if ((req->param1 < PANDA_CAN_CNT) && current_board->has_canfd) {
+      if (req->param1 < PANDA_CAN_CNT) {
         bus_config[req->param1].canfd_non_iso = (req->param2 != 0U);
         bool ret = can_init(CAN_NUM_FROM_BUS_NUM(req->param1));
         UNUSED(ret);

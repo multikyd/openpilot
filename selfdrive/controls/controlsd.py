@@ -56,8 +56,6 @@ class Controls:
 
     self.pose_calibrator = PoseCalibrator()
     self.calibrated_pose: Pose | None = None
-    
-    self.yStd = 0.0
 
     self.side_state = {
         "left":  {"main": {"dRel": None, "lat": None}, "sub": {"dRel": None, "lat": None}},
@@ -89,8 +87,8 @@ class Controls:
     # Update VehicleModel
     lp = self.sm['liveParameters']
     x = max(lp.stiffnessFactor, 0.1)
-    sr = max(lp.steerRatio, 0.1) * self.params.get("SteerRatioRate") / 100.0
-    custom_sr = self.params.get("CustomSR") / 10.0
+    sr = max(lp.steerRatio, 0.1) * (self.params.get("SteerRatioRate")/100)
+    custom_sr = self.params.get("CustomSR")
     sr = max(custom_sr if custom_sr > 1.0 else sr, 0.1)
     self.VM.update_params(x, sr)
 
@@ -147,16 +145,10 @@ class Controls:
     lat_plan = self.sm['lateralPlan']
     curve_speed_abs = abs(self.sm['carrotMan'].vTurnSpeed)
     self.lanefull_mode_enabled = (lat_plan.useLaneLines and curve_speed_abs > self.params.get("UseLaneLineCurveSpeed"))
-    lat_smooth_seconds = self.params.get("LatSmoothSec") * 0.01
-    steer_actuator_delay = self.params.get("SteerActuatorDelay") * 0.01
+    lat_smooth_seconds = self.params.get("LatSmoothSec")
+    steer_actuator_delay = self.params.get("SteerActuatorDelay")
     if steer_actuator_delay == 0.0:
-      steer_actuator_delay = self.sm['liveDelay'].lateralDelay 
-
-    if len(model_v2.position.yStd) > 0:
-      yStd = np.interp(steer_actuator_delay + lat_smooth_seconds, ModelConstants.T_IDXS, model_v2.position.yStd)
-      self.yStd = yStd * 0.02 + self.yStd * 0.98
-    else:
-      self.yStd = 0.0
+      steer_actuator_delay = self.sm['liveDelay'].lateralDelay
     
     if not CC.latActive:
       new_desired_curvature = self.curvature
@@ -182,7 +174,6 @@ class Controls:
                                                        curvature_limited, lat_delay)
     actuators.torque = float(steer)
     actuators.steeringAngleDeg = float(steeringAngleDeg)
-    actuators.yStd = float(self.yStd)
     # Ensure no NaNs/Infs
     for p in ACTUATOR_FIELDS:
       attr = getattr(actuators, p)
@@ -258,15 +249,7 @@ class Controls:
 
     lp = self.sm['longitudinalPlan']
     if self.CP.pcmCruise:
-      speed_from_pcm = self.params.get("SpeedFromPCM")
-      if speed_from_pcm == 1: #toyota
-        hudControl.setSpeed = float(CS.vCruiseCluster * CV.KPH_TO_MS)
-      elif speed_from_pcm == 2:
-        hudControl.setSpeed = float(max(30/3.6, desired_kph * CV.KPH_TO_MS))
-      elif speed_from_pcm == 3: # honda
-        hudControl.setSpeed = setSpeed if lp.xState == 3 else float(desired_kph * CV.KPH_TO_MS)
-      else:
-        hudControl.setSpeed = float(max(30/3.6, setSpeed))
+      hudControl.setSpeed = float(max(30/3.6, desired_kph * CV.KPH_TO_MS))
     else:
       hudControl.setSpeed = setSpeed if lp.xState == 3 else float(desired_kph * CV.KPH_TO_MS)
     hudControl.speedVisible = CC.enabled
@@ -293,6 +276,8 @@ class Controls:
     if self.sm.valid['driverAssistance']:
       hudControl.leftLaneDepart = self.sm['driverAssistance'].leftLaneDeparture
       hudControl.rightLaneDepart = self.sm['driverAssistance'].rightLaneDeparture
+    
+    hudControl.e2eX = self.sm['longitudinalPlan'].e2eX
 
     CO = self.sm['carOutput']
     if self.sm['selfdriveState'].active:
@@ -321,6 +306,7 @@ class Controls:
     cs.forceDecel = bool((self.sm['driverMonitoringState'].awarenessStatus < 0. and self.params.get("DisableDM") == 0) or
                          (self.sm['selfdriveState'].state == State.softDisabling))
 
+    CC.e2eStandstill = bool(CO.actuatorsOutput.e2eStandstill)
     lat_tuning = self.CP.lateralTuning.which()
     if self.CP.steerControlType == car.CarParams.SteerControlType.angle:
       cs.lateralControlState.angleState = lac_log

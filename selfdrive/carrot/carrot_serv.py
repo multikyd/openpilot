@@ -19,6 +19,7 @@ from openpilot.common.filter_simple import MyMovingAverage
 from openpilot.system.hardware import PC, TICI
 from openpilot.selfdrive.navd.helpers import Coordinate
 from opendbc.car.common.conversions import Conversions as CV
+from openpilot.common.gps import get_gps_location_service
 
 nav_type_mapping = {
   12: ("turn", "left", 1),
@@ -143,6 +144,7 @@ class CarrotServ:
     self.bearing_offset = 0.0
     self.bearing_measured = 0.0
     self.bearing = 0.0
+    self.gps_valid = False
 
     self.phone_gps_accuracy = 0.0
     self.gps_accuracy_device = 0.0
@@ -202,7 +204,7 @@ class CarrotServ:
     self.autoNaviSpeedCtrlEnd = float(self.params.get("AutoNaviSpeedCtrlEnd"))
     self.autoNaviSpeedCtrlMode = self.params.get("AutoNaviSpeedCtrlMode")
     self.autoNaviSpeedSafetyFactor = float(self.params.get("AutoNaviSpeedSafetyFactor")) * 0.01
-    self.autoNaviSpeedDecelRate = float(self.params.get("AutoNaviSpeedDecelRate")) * 0.01
+    self.autoNaviSpeedDecelRate = self.params.get("AutoNaviSpeedDecelRate")
     self.autoNaviCountDownMode = self.params.get("AutoNaviCountDownMode")
     self.turnSpeedControlMode= self.params.get("TurnSpeedControlMode")
     self.mapTurnSpeedFactor= self.params.get("MapTurnSpeedFactor") * 0.01
@@ -211,7 +213,7 @@ class CarrotServ:
     self.autoTurnMapChange = self.params.get("AutoTurnMapChange")
     self.autoTurnControl = self.params.get("AutoTurnControl")
     self.autoTurnControlTurnEnd = self.params.get("AutoTurnControlTurnEnd")
-    #self.autoNaviSpeedDecelRate = float(self.params.get("AutoNaviSpeedDecelRate")) * 0.01
+    #self.autoNaviSpeedDecelRate = self.params.get("AutoNaviSpeedDecelRate")
     self.autoCurveSpeedLowerLimit = int(self.params.get("AutoCurveSpeedLowerLimit"))
     self.is_metric = self.params.get_bool("IsMetric")
     self.autoRoadSpeedLimitOffset = self.params.get("AutoRoadSpeedLimitOffset")
@@ -646,12 +648,14 @@ class CarrotServ:
       self.xSpdType = -1
       self.xSpdDist = 0
 
-  def _update_gps(self, v_ego, sm):
+  def _update_gps(self, v_ego, sm, gps_service):
+    gps = sm[gps_service]
     #print(f"location = {sm.valid[llk]}, {sm.updated[llk]}, {sm.recv_frame[llk]}, {sm.recv_time[llk]}")
     if not sm.updated['carState'] or not sm.updated['carControl']: # or not sm.updated[llk]:
       return self.nPosAngle
     CS = sm['carState']
     CC = sm['carControl']
+    self.gps_valid = sm.updated[gps_service] and gps.hasFix
 
     now = time.monotonic()
     gps_updated_phone = (now - self.last_update_gps_time_phone) < 3
@@ -660,14 +664,26 @@ class CarrotServ:
     bearing = self.nPosAngle
     if gps_updated_phone:
       self.bearing_offset = 0.0
+    elif self.gps_valid:
+      bearing = self.nPosAngle = gps.bearingDeg
+      if self.gps_valid:
+        self.bearing_offset = 0.0
+      elif self.active_carrot > 0:
+        bearing = self.nPosAnglePhone
+        self.bearing_offset = 0.0
 
     #print(f"bearing = {bearing:.1f}, posA=={self.nPosAngle:.1f}, posP=={self.nPosAnglePhone:.1f}, offset={self.bearing_offset:.1f}, {gps_updated_phone}, {gps_updated_navi}")
     gpsDelayTimeAdjust = 0.0
     if gps_updated_navi:
-      gpsDelayTimeAdjust = 1.0
+      gpsDelayTimeAdjust = 0 #1.0
 
     external_gps_update_timedout = not (gps_updated_phone or gps_updated_navi)
-    if gps_updated_navi:  # carrot navi로부터 gps신호가 수신되는 경우..
+    #print(f"gps_valid = {self.gps_valid}, bearing = {bearing:.1f}, pos = {location.positionGeodetic.value[0]:.6f}, {location.positionGeodetic.value[1]:.6f}")
+    if self.gps_valid and external_gps_update_timedout:    # 내부GPS가 자동하고 carrotman으로부터 gps신호가 없는경우
+      self.vpPosPointLatNavi = gps.latitude
+      self.vpPosPointLonNavi = gps.longitude
+      self.last_calculate_gps_time = now #sm.recv_time[llk]
+    elif gps_updated_navi:  # carrot navi로부터 gps신호가 수신되는 경우..
       if abs(self.bearing_measured - bearing) < 0.1:
           self.diff_angle_count += 1
       else:
@@ -843,7 +859,7 @@ class CarrotServ:
         self.xSpdDist = distance
         self.xSpdType =xSpdType
 
-  def update_navi(self, remote_ip, sm, pm, vturn_speed, coords, distances, route_speed):
+  def update_navi(self, remote_ip, sm, pm, vturn_speed, coords, distances, route_speed, gps_service):
 
     limit_speed = 200
     self.debugText = ""
@@ -869,7 +885,7 @@ class CarrotServ:
     road_speed_limit_changed = True if self.nRoadLimitSpeed != self.nRoadLimitSpeed_last else False
     self.nRoadLimitSpeed_last = self.nRoadLimitSpeed
     #self.bearing = self.nPosAngle #self._update_gps(v_ego, sm)
-    self.bearing = self._update_gps(v_ego, sm)
+    self.bearing = self._update_gps(v_ego, sm, gps_service)
 
     self.xSpdDist = max(self.xSpdDist - delta_dist, -1000)
     self.xDistToTurn = self.xDistToTurn - delta_dist
@@ -972,7 +988,7 @@ class CarrotServ:
     if self.turnSpeedControlMode == 2:
       if -500 < self.xDistToTurn < 500:
         speed_n_sources.append((route_speed, "route"))
-    elif self.turnSpeedControlMode in [3, 4]:
+    elif self.turnSpeedControlMode == 3:
       speed_n_sources.append((route_speed, "route"))
       #speed_n_sources.append((self.calculate_current_speed(dist, speed * self.mapTurnSpeedFactor, 0, 1.2), "route"))
 
@@ -1213,7 +1229,7 @@ class CarrotServ:
         if nRoadLimitSpeed > 200:
           nRoadLimitSpeed = (nRoadLimitSpeed - 20) / 10
         elif nRoadLimitSpeed == 120:
-          nRoadLimitSpeed = 30
+          nRoadLimitSpeed = 115
       else:
         nRoadLimitSpeed = 30
       #self.nRoadLimitSpeed = nRoadLimitSpeed

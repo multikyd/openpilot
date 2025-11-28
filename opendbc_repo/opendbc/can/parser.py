@@ -1,15 +1,14 @@
-import time
 import math
 import numbers
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 
+from opendbc.car.carlog import carlog
 from opendbc.can.dbc import DBC, Signal
 
 
 MAX_BAD_COUNTER = 5
 CAN_INVALID_CNT = 5
-
 
 
 def get_raw_value(dat: bytes | bytearray, sig: Signal) -> int:
@@ -40,10 +39,16 @@ class MessageState:
   timeout_threshold: float = 1e5  # default to 1Hz threshold
   vals: list[float] = field(default_factory=list)
   all_vals: list[list[float]] = field(default_factory=list)
-  timestamps: deque[int] = field(default_factory=deque)
+  timestamps: deque[int] = field(default_factory=lambda: deque(maxlen=500))
   counter: int = 0
   counter_fail: int = 0
   first_seen_nanos: int = 0
+  last_warning_log_nanos: int = 0
+
+  def rate_limited_log(self, last_update_nanos: int, msg: str) -> None:
+    if (last_update_nanos - self.last_warning_log_nanos) >= 1_000_000_000:
+      carlog.warning(f"CANParser: {hex(self.address)} {self.name} {msg}")
+      self.last_warning_log_nanos = last_update_nanos
 
   def parse(self, nanos: int, dat: bytes) -> bool:
     tmp_vals: list[float] = [0.0] * len(self.signals)
@@ -59,8 +64,10 @@ class MessageState:
         tmp -= ((tmp >> (sig.size - 1)) & 0x1) * (1 << sig.size)
 
       if not self.ignore_checksum and sig.calc_checksum is not None:
-        if sig.calc_checksum(self.address, sig, bytearray(dat)) != tmp:
+        expected_checksum = sig.calc_checksum(self.address, sig, bytearray(dat))
+        if tmp != expected_checksum:
           checksum_failed = True
+          self.rate_limited_log(nanos, f"checksum failed: received {hex(tmp)}, calculated {hex(expected_checksum)}")
 
       if not self.ignore_counter and sig.type == 1:  # COUNTER
         if not self.update_counter(tmp, sig.size):
@@ -81,13 +88,10 @@ class MessageState:
       self.all_vals[i].append(v)
 
     self.timestamps.append(nanos)
-    max_buffer = 500
-    while len(self.timestamps) > max_buffer:
-      self.timestamps.popleft()
 
     if self.frequency < 1e-5 and len(self.timestamps) >= 3:
       dt = (self.timestamps[-1] - self.timestamps[0]) * 1e-9
-      if (dt > 1.0 or len(self.timestamps) >= max_buffer) and dt != 0:
+      if (dt > 1.0 or len(self.timestamps) >= self.timestamps.maxlen) and dt != 0:
         self.frequency = min(len(self.timestamps) / dt, 100.0)
         self.timeout_threshold = (1_000_000_000 / self.frequency) * 10
     return True
@@ -104,12 +108,8 @@ class MessageState:
     if self.ignore_alive:
       return True
     if not self.timestamps:
-      if self.first_seen_nanos != 0 and (current_nanos - self.first_seen_nanos) < 2e9:  # 2초 유예
-        return True
-      #print(f"Not Seen {self.name} on bus {self.address} has no timestamps yet, first seen at {self.first_seen_nanos} ns")
       return False
     if (current_nanos - self.timestamps[-1]) > self.timeout_threshold:
-      #print(f"Timeout {self.name} on bus {self.address} timed out: {current_nanos - self.timestamps[-1]} ns since last update")
       return False
     return True
 
@@ -124,6 +124,7 @@ class VLDict(dict):
       self.parser._add_message(key)
     return super().__getitem__(key)
 
+
 class CANParser:
   def __init__(self, dbc_name: str, messages: list[tuple[str | int, int]], bus: int):
     self.dbc_name: str = dbc_name
@@ -135,8 +136,6 @@ class CANParser:
     self.ts_nanos: dict[int | str, dict[str, int]] = {}
     self.addresses: set[int] = set()
     self.message_states: dict[int, MessageState] = {}
-    self.seen_addresses: set[int] = set()
-    self.controls_ready = False
 
     for name_or_addr, freq in messages:
       if isinstance(name_or_addr, numbers.Number):
@@ -150,14 +149,9 @@ class CANParser:
 
       self._add_message(name_or_addr, freq)
 
-    self.can_valid: bool = False
-    self.bus_timeout: bool = False
     self.can_invalid_cnt: int = CAN_INVALID_CNT
     self.last_nonempty_nanos: int = 0
-
-    self.invalid_name = None
-    self.invalid_time_counter = 0
-    self.invalid_print_counter = 0
+    self._last_update_nanos: int = 0
 
   def _add_message(self, name_or_addr: str | int, freq: int = None) -> None:
     if isinstance(name_or_addr, numbers.Number):
@@ -184,10 +178,8 @@ class CANParser:
       signals=list(msg.sigs.values()),
       ignore_alive=freq is not None and math.isnan(freq),
     )
-    state.first_seen_nanos = time.monotonic_ns()  # 등록시 즉시 타임스탬프 설정
     if freq is not None and freq > 0:
       state.frequency = freq
-      state.timeout_threshold = (1_000_000_000 / freq) * 10
     else:
       # if frequency not specified, assume 1Hz until we learn it
       freq = 1
@@ -195,24 +187,31 @@ class CANParser:
 
     self.message_states[msg.address] = state
 
-  def update_valid(self, nanos: int) -> None:
+  @property
+  def bus_timeout(self) -> bool:
+    ignore_alive = all(s.ignore_alive for s in self.message_states.values())
+    bus_timeout_threshold = 500 * 1_000_000
+    for st in self.message_states.values():
+      if st.timeout_threshold > 0:
+        bus_timeout_threshold = min(bus_timeout_threshold, st.timeout_threshold)
+    return ((self._last_update_nanos - self.last_nonempty_nanos) > bus_timeout_threshold) and not ignore_alive
+
+  @property
+  def can_valid(self) -> bool:
     valid = True
     counters_valid = True
+    bus_timeout = self.bus_timeout
     for state in self.message_states.values():
       if state.counter_fail >= MAX_BAD_COUNTER:
         counters_valid = False
-      if not state.valid(nanos, self.bus_timeout):
+        state.rate_limited_log(self._last_update_nanos, f"counter invalid, {state.counter_fail=} {MAX_BAD_COUNTER=}")
+      if not state.valid(self._last_update_nanos, bus_timeout):
         valid = False
-        self.invalid_time_counter += 1
-        if self.controls_ready and self.invalid_name is None or state.name != self.invalid_name or self.invalid_time_counter > 100:
-          if self.invalid_print_counter < 100:  
-            print(f"CAN_INVALID = {state.name}, bus = {self.bus}")
-            self.invalid_print_counter += 1
-          self.invalid_name = state.name
-          self.invalid_time_counter = 0
+        state.rate_limited_log(self._last_update_nanos, "not valid (timeout or missing)")
 
+    # TODO: probably only want to increment this once per update() call
     self.can_invalid_cnt = 0 if valid else min(self.can_invalid_cnt + 1, CAN_INVALID_CNT)
-    self.can_valid = self.can_invalid_cnt < CAN_INVALID_CNT and counters_valid
+    return self.can_invalid_cnt < CAN_INVALID_CNT and counters_valid
 
   def update(self, strings, sendcan: bool = False):
     if strings and not isinstance(strings[0], list | tuple):
@@ -230,34 +229,26 @@ class CANParser:
       for address, dat, src in frames:
         if src != self.bus:
           continue
-        if self.controls_ready:
-          self.seen_addresses.add(address)
         bus_empty = False
         state = self.message_states.get(address)
         if state is None or len(dat) > 64:
           continue
         if state.parse(t, dat):
           updated_addrs.add(address)
-          msgname = state.name
+
+          vl_addr = self.vl[address]
+          vl_all_addr = self.vl_all[address]
+          ts_addr = self.ts_nanos[address]
+
           for i, sig in enumerate(state.signals):
-            val = state.vals[i]
-            self.vl[address][sig.name] = val
-            self.vl[msgname][sig.name] = val
-            self.vl_all[address][sig.name] = state.all_vals[i]
-            self.vl_all[msgname][sig.name] = state.all_vals[i]
-            self.ts_nanos[address][sig.name] = state.timestamps[-1]
-            self.ts_nanos[msgname][sig.name] = state.timestamps[-1]
+            vl_addr[sig.name] = state.vals[i]
+            vl_all_addr[sig.name] = state.all_vals[i]
+            ts_addr[sig.name] = state.timestamps[-1]
 
       if not bus_empty:
         self.last_nonempty_nanos = t
 
-      ignore_alive = all(s.ignore_alive for s in self.message_states.values())
-      bus_timeout_threshold = 500 * 1_000_000
-      for st in self.message_states.values():
-        if st.timeout_threshold > 0:
-          bus_timeout_threshold = min(bus_timeout_threshold, st.timeout_threshold)
-      self.bus_timeout = ((t - self.last_nonempty_nanos) > bus_timeout_threshold) and not ignore_alive
-      self.update_valid(t)
+      self._last_update_nanos = t
 
     return updated_addrs
 

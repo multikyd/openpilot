@@ -392,8 +392,8 @@ class RadarD:
 
     self.enable_radar_tracks = self.params.get("EnableRadarTracks")
     self.enable_corner_radar = self.params.get("EnableCornerRadar")
-    self.radar_lat_factor = self.params.get("RadarLatFactor") * 0.01
-    self.radar_reaction_factor = self.params.get("RadarReactionFactor") * 0.01
+    self.radar_lat_factor = self.params.get("RadarLatFactor")
+    self.radar_reaction_factor = self.params.get("RadarReactionFactor")
     self.detect_cut_in = self.radar_lat_factor > 0
 
     leads_v3 = sm['modelV2'].leadsV3

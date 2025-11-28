@@ -71,18 +71,12 @@ class SelfdriveD:
     self.sensor_packets = ["accelerometer", "gyroscope"]
     self.camera_packets = ["roadCameraState", "driverCameraState", "wideRoadCameraState"]
 
-    self.disable_dm = self.params.get("DisableDM")
-
     # TODO: de-couple selfdrived with card/conflate on carState without introducing controls mismatches
     self.car_state_sock = messaging.sub_sock('carState', timeout=20)
 
     ignore = self.sensor_packets + self.gps_packets + ['alertDebug']
     if SIMULATION:
       ignore += ['driverCameraState', 'managerState']
-    elif self.disable_dm > 0:
-      self.camera_packets.remove("driverCameraState")
-    ignore += ['driverMonitoringState']
-
     if REPLAY:
       # no vipc in replay will make them ignored anyways
       ignore += ['roadCameraState', 'wideRoadCameraState']
@@ -134,6 +128,8 @@ class SelfdriveD:
     self.interface_safetyModel = ""
     self.rx_checks_ok = False
     self.mismatch_counter_ok = False
+
+    self.lane_change_delay = self.params.get("LaneChangeDelay", return_default=True)
 
     # Determine startup event
     self.startup_event = EventName.startup
@@ -191,7 +187,7 @@ class SelfdriveD:
     if not self.CP.pcmCruise and CS.vCruise > 250 and resume_pressed:
       self.events.add(EventName.resumeBlocked)
 
-    if not self.CP.notCar and self.params.get("DisableDM") == 0:
+    if not self.CP.notCar:
       self.events.add_from_msg(self.sm['driverMonitoringState'].events)
 
     self.events.add_from_msg(self.sm['longitudinalPlan'].events)  ## carrot
@@ -251,6 +247,10 @@ class SelfdriveD:
       if self.sm['driverAssistance'].leftLaneDeparture or self.sm['driverAssistance'].rightLaneDeparture:
         self.events.add(EventName.ldw)
 
+    # ******************************************************************************************
+    #  NOTE: To fork maintainers.
+    #  Disabling or nerfing safety features will get you and your users banned from our servers.
+    #  We recommend that you do not change these numbers from the defaults.
     if self.sm.updated['liveCalibration']:
       self.pose_calibrator.feed_live_calib(self.sm['liveCalibration'])
     if self.sm.updated['livePose']:
@@ -273,16 +273,25 @@ class SelfdriveD:
     if self.sm['modelV2'].meta.laneChangeState == LaneChangeState.preLaneChange:
       direction = self.sm['modelV2'].meta.laneChangeDirection
       if (CS.leftBlindspot and direction == LaneChangeDirection.left) or \
-         (CS.rightBlindspot and direction == LaneChangeDirection.right):
+        (CS.rightBlindspot and direction == LaneChangeDirection.right):
         self.events.add(EventName.laneChangeBlocked)
       else:
         if direction == LaneChangeDirection.left:
-          self.events.add(EventName.preLaneChangeLeft)
+          if self.lane_change_delay == 0:
+            self.events.add(EventName.preLaneChangeLeft)
+          else:
+            self.events.add(EventName.laneChange)
         else:
-          self.events.add(EventName.preLaneChangeRight)
-    elif self.sm['modelV2'].meta.laneChangeState in (LaneChangeState.laneChangeStarting,
-                                                    LaneChangeState.laneChangeFinishing):
+          if self.lane_change_delay == 0:
+            self.events.add(EventName.preLaneChangeRight)
+          else:
+            self.events.add(EventName.laneChange)
+    elif self.sm['modelV2'].meta.laneChangeState == LaneChangeState.laneChangeStarting:
       self.events.add(EventName.laneChange)
+    elif self.sm['modelV2'].meta.laneChangeState == LaneChangeState.laneChangeMerging:
+      self.events.add(EventName.laneChangeMerging)
+    elif self.sm['modelV2'].meta.laneChangeState == LaneChangeState.laneChangeFinishing:
+      self.events.add(EventName.laneChangeFinish)
 
     for i, pandaState in enumerate(self.sm['pandaStates']):
       # All pandas must match the list of safetyConfigs, and if outside this list, must be silent or noOutput
@@ -375,7 +384,8 @@ class SelfdriveD:
 
     if not REPLAY:
       # Check for mismatch between openpilot and car's PCM
-      cruise_mismatch = CS.cruiseState.enabled and (not self.enabled or not self.CP.pcmCruise)
+      #cruise_mismatch = CS.cruiseState.enabled and (not self.enabled or not self.CP.pcmCruise)
+      cruise_mismatch = CS.cruiseState.enabled and not self.enabled
       self.cruise_mismatch_counter = self.cruise_mismatch_counter + 1 if cruise_mismatch else 0
       if self.cruise_mismatch_counter > int(6. / DT_CTRL):
         self.events.add(EventName.cruiseMismatch)

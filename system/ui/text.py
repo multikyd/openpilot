@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import re
 import sys
+import subprocess
+import time
 import pyray as rl
 from openpilot.system.hardware import HARDWARE, PC
 from openpilot.system.ui.lib.application import BIG_UI, gui_app
@@ -87,6 +89,27 @@ class TextWindow(Widget):
 
 
 if __name__ == "__main__":
+  try:
+    subprocess.run(
+      ["pkill", "-f", "kisa_agent.py"],
+      stdout=subprocess.DEVNULL,
+      stderr=subprocess.DEVNULL
+    )
+  except Exception as e:
+    print("Failed to stop kisa_agent:", e)
+
+  time.sleep(0.5)
+
+  try:
+    subprocess.Popen(
+      ["python3", "/data/openpilot/selfdrive/kisapilot/kisa_agent.py"],
+      stdout=subprocess.DEVNULL,
+      stderr=subprocess.DEVNULL,
+      start_new_session=True,
+    )
+  except Exception as e:
+    print("Failed to restart kisa_agent:", e)
+
   text = sys.argv[1] if len(sys.argv) > 1 else DEMO_TEXT
   gui_app.init_window("Text Viewer")
   text_window = TextWindow(text)

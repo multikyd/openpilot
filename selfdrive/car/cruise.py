@@ -245,7 +245,7 @@ class VCruiseCarrot:
     if self.frame % 10 == 0:
       self.autoCruiseControl = self.params.get("AutoCruiseControl") * unit_factor
       self.autoGasTokSpeed = self.params.get("AutoGasTokSpeed") * unit_factor
-      self.autoGasSyncSpeed = self.params.get_bool("AutoGasSyncSpeed") * unit_factor
+      self.autoGasSyncSpeed = self.params.get_bool("AutoGasSyncSpeed")
       self.autoSpeedUptoRoadSpeedLimit = self.params.get("AutoSpeedUptoRoadSpeedLimit") * 0.01
       self.autoRoadSpeedAdjust = self.params.get("AutoRoadSpeedAdjust") * 0.01
       self.smartSpeedControl = self.params.get("CarrotSmartSpeedControl")
@@ -255,7 +255,6 @@ class VCruiseCarrot:
         self.useLaneLineSpeedApply = useLaneLineSpeed
       self.useLaneLineSpeed = useLaneLineSpeed
 
-      self.speed_from_pcm = self.params.get("SpeedFromPCM")
       self._cruise_speed_unit = self.params.get("CruiseSpeedUnit")
       self._cruise_speed_unit_basic = self.params.get("CruiseSpeedUnitBasic")
       self._paddle_mode = self.params.get("PaddleMode")
@@ -264,7 +263,7 @@ class VCruiseCarrot:
       self._lfa_button_mode = self.params.get("LfaButtonMode")
       self.autoRoadSpeedLimitOffset = self.params.get("AutoRoadSpeedLimitOffset")
       self.autoNaviSpeedSafetyFactor = self.params.get("AutoNaviSpeedSafetyFactor") * 0.01
-      self.cruiseOnDist = self.params.get("CruiseOnDist") * 0.01
+      self.cruiseOnDist = self.params.get("CruiseOnDist")
       cruiseSpeed1 = self.params.get("CruiseSpeed1") * unit_factor
       cruiseSpeed2 = self.params.get("CruiseSpeed2") * unit_factor
       cruiseSpeed3 = self.params.get("CruiseSpeed3") * unit_factor
@@ -337,12 +336,8 @@ class VCruiseCarrot:
         self.v_cruise_kph = np.clip(v_cruise_kph, self._cruise_speed_min, self._cruise_speed_max)
         self.v_cruise_cluster_kph = self.v_cruise_kph
       else:
-        if self.speed_from_pcm == 1:
-          self.v_cruise_kph = CS.cruiseState.speed * CV.MS_TO_KPH
-          self.v_cruise_cluster_kph = CS.cruiseState.speedCluster * CV.MS_TO_KPH
-        else:
-          self.v_cruise_kph = np.clip(v_cruise_kph, 30, self._cruise_speed_max)
-          self.v_cruise_cluster_kph = self.v_cruise_kph
+        self.v_cruise_kph = np.clip(v_cruise_kph, 30, self._cruise_speed_max)
+        self.v_cruise_cluster_kph = self.v_cruise_kph
     else:
       self.v_cruise_kph = np.clip(v_cruise_kph, self._cruise_speed_min, self._cruise_speed_max) #max(20, self.v_ego_kph_set) #V_CRUISE_UNSET
       self.v_cruise_cluster_kph = self.v_cruise_kph #V_CRUISE_UNSET
@@ -355,9 +350,6 @@ class VCruiseCarrot:
   def initialize_v_cruise(self, CS, experimental_mode: bool) -> None:
     return
     # initializing is handled by the PCM
-    if self.CP.pcmCruise and self.speed_from_pcm == 1:
-      return
-
     initial = V_CRUISE_INITIAL_EXPERIMENTAL_MODE if experimental_mode else CS.vEgoCluster * CV.MS_TO_KPH
 
     v_ego_kph = int(round(np.clip(CS.vEgoCluster * CV.MS_TO_KPH, initial, V_CRUISE_MAX)))

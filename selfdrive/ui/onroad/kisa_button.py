@@ -4,8 +4,6 @@ from openpilot.common.params import Params
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.ui.widgets import Widget
-from openpilot.common.params import Params
-
 
 class KisaButton(Widget):
   def __init__(self, button_size: int, icon_size: int):
@@ -52,12 +50,17 @@ class KisaButton(Widget):
     self._white_color.a = 180 if self.is_pressed else 255
 
     if ui_state.rec_status:
-      bg_color = rl.Color(255, 0, 0, 100)
+      ring_color  = rl.Color(255, 0, 0, 100)
     else:
-      bg_color = self._black_bg
+      ring_color  = self._black_bg
+
+    radius = self._rect.width / 2
+    ring_thickness = 25
+
+    rl.draw_circle(center_x, center_y, radius, ring_color)
+    rl.draw_circle(center_x, center_y, radius - ring_thickness, self._black_bg)
 
     texture = self._txt_kisa if self._held_or_actual_mode() else self._txt_kisa
-    rl.draw_circle(center_x, center_y, self._rect.width / 2, bg_color)
     rl.draw_texture(texture, center_x - texture.width // 2, center_y - texture.height // 2, self._white_color)
 
   def _held_or_actual_mode(self):

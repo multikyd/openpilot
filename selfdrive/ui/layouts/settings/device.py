@@ -1,6 +1,5 @@
 import os
 import math
-import threading
 import subprocess
 
 from cereal import messaging, log
@@ -198,11 +197,6 @@ class DeviceLayout(Widget):
   def _perform_refresh(self, result: int):
     if not ui_state.engaged and result == DialogResult.CONFIRM:
       self._params.put_bool_nonblocking("OnRoadRefresh", True)
-      try:
-        t = threading.Timer(3.0, lambda: self._params.put_bool_nonblocking("OnRoadRefresh", False))
-        t.start()
-      except Exception:
-        pass
 
   def _reboot_prompt(self):
     if ui_state.engaged:

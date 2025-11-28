@@ -301,14 +301,14 @@ def main(demo=False):
   frame = 0
   custom_lat_delay = 0.0
   lat_smooth_seconds = LAT_SMOOTH_SECONDS
-  vEgoStopping = params.get("VEgoStopping") * 0.01
+  vEgoStopping = params.get("VEgoStopping")
   while True:
     frame += 1
     if frame % 100 == 0:
-      custom_lat_delay = params.get("SteerActuatorDelay") * 0.01
-      lat_smooth_seconds = params.get("LatSmoothSec") * 0.01
-      long_delay = params.get("LongActuatorDelay")*0.01
-      vEgoStopping = params.get("VEgoStopping") * 0.01
+      custom_lat_delay = params.get("SteerActuatorDelay")
+      lat_smooth_seconds = params.get("LatSmoothSec")
+      long_delay = params.get("LongActuatorDelay")
+      vEgoStopping = params.get("VEgoStopping")
       
     if custom_lat_delay > 0.0:
       lat_delay = custom_lat_delay + lat_smooth_seconds

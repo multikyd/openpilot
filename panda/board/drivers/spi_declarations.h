@@ -1,6 +1,6 @@
 #pragma once
 
-#include "crc.h"
+#include "board/crc.h"
 
 #define SPI_TIMEOUT_US 10000U
 
@@ -8,16 +8,10 @@
 // in a tight loop, plus some buffer
 #define SPI_IRQ_RATE  16000U
 
-#ifdef STM32H7
-#define SPI_BUF_SIZE 2048U
+#define SPI_BUF_SIZE 4096U
 // H7 DMA2 located in D2 domain, so we need to use SRAM1/SRAM2
 __attribute__((section(".sram12"))) extern uint8_t spi_buf_rx[SPI_BUF_SIZE];
 __attribute__((section(".sram12"))) extern uint8_t spi_buf_tx[SPI_BUF_SIZE];
-#else
-#define SPI_BUF_SIZE 1024U
-extern uint8_t spi_buf_rx[SPI_BUF_SIZE];
-extern uint8_t spi_buf_tx[SPI_BUF_SIZE];
-#endif
 
 #define SPI_CHECKSUM_START 0xABU
 #define SPI_SYNC_BYTE 0x5AU
@@ -35,7 +29,7 @@ enum {
   SPI_STATE_DATA_TX
 };
 
-extern uint16_t spi_checksum_error_count;
+extern uint16_t spi_error_count;
 
 #define SPI_HEADER_SIZE 7U
 
@@ -45,8 +39,6 @@ void llspi_mosi_dma(uint8_t *addr, int len);
 void llspi_miso_dma(uint8_t *addr, int len);
 
 void can_tx_comms_resume_spi(void);
-#if defined(ENABLE_SPI) || defined(BOOTSTUB)
 void spi_init(void);
 void spi_rx_done(void);
 void spi_tx_done(bool reset);
-#endif

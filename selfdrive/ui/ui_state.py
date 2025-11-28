@@ -162,6 +162,9 @@ class UIState:
     self.cruise_gap: int = self.params.get("LongitudinalPersonality") + 1
     self.debug_msg: int = self.params.get("ShowDebugUI")
     self.camera_scc: int = self.params.get("HyundaiCameraSCC")
+    self.show_radar_info: int = self.params.get("ShowRadarInfo")
+    self.radar_lat_factor: float = self.params.get("RadarLatFactor")
+    self.show_plot_mode: int = self.params.get("ShowPlotMode")
 
     # Carrot
     self.active_carrot: int = 0
@@ -233,6 +236,7 @@ class UIState:
     self.recording_audio = self.params.get_bool("RecordAudio") and self.started
 
     self.is_metric = self.params.get_bool("IsMetric")
+    self.always_on_dm = self.params.get_bool("AlwaysOnDM")
 
     # Kisa states update
     if self.sm.updated["deviceState"]:
@@ -377,6 +381,15 @@ class UIState:
         self.has_longitudinal_control = self.params.get_bool("AlphaLongitudinalEnabled")
       else:
         self.has_longitudinal_control = self.CP.openpilotLongitudinalControl
+
+    # Update user params
+    self.show_ui_bsm = self.params.get_bool("KisaBlindSpotDetect")
+    self.debug_msg = self.params.get("ShowDebugUI")
+    self.show_radar_info = self.params.get("ShowRadarInfo")
+    self.radar_lat_factor = self.params.get("RadarLatFactor")
+    self.show_plot_mode = self.params.get("ShowPlotMode")
+    self.rec_status = self.params.get_bool("RecordingRunning")
+
     self._param_update_time = time.monotonic()
 
 
@@ -384,6 +397,7 @@ class Device:
   def __init__(self):
     self._ignition = False
     self._interaction_time: float = -1
+    self._override_interactive_timeout: int | None = None
     self._interactive_timeout_callbacks: list[Callable] = []
     self._prev_timed_out = False
     self._awake: bool = True
@@ -400,11 +414,21 @@ class Device:
   def awake(self) -> bool:
     return self._awake
 
-  def reset_interactive_timeout(self, timeout: int = -1) -> None:
-    if timeout == -1:
-      ignition_timeout = 10 if gui_app.big_ui() else 5
-      timeout = ignition_timeout if ui_state.ignition else 30
-    self._interaction_time = time.monotonic() + timeout
+  def set_override_interactive_timeout(self, timeout: int | None) -> None:
+    # Override the interactive timeout duration temporarily
+    self._override_interactive_timeout = timeout
+    self._reset_interactive_timeout()
+
+  @property
+  def interactive_timeout(self) -> int:
+    if self._override_interactive_timeout is not None:
+      return self._override_interactive_timeout
+
+    ignition_timeout = 10 if gui_app.big_ui() else 5
+    return ignition_timeout if ui_state.ignition else 30
+
+  def _reset_interactive_timeout(self) -> None:
+    self._interaction_time = time.monotonic() + self.interactive_timeout
 
   def add_interactive_timeout_callback(self, callback: Callable):
     self._interactive_timeout_callbacks.append(callback)
@@ -412,7 +436,7 @@ class Device:
   def update(self):
     # do initial reset
     if self._interaction_time <= 0:
-      self.reset_interactive_timeout()
+      self._reset_interactive_timeout()
 
     self._update_brightness()
     self._update_wakefulness()
@@ -454,7 +478,7 @@ class Device:
     self._ignition = ui_state.ignition
 
     if ignition_just_turned_off or any(ev.left_down for ev in gui_app.mouse_events):
-      self.reset_interactive_timeout()
+      self._reset_interactive_timeout()
       self.custom_brightness = 100
 
     interaction_timeout = time.monotonic() > self._interaction_time

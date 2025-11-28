@@ -16,7 +16,6 @@ from openpilot.common.params import Params
 
 FRAME_FINGERPRINT = 100  # 1s
 
-
 def load_interfaces(brand_names):
   ret = {}
   for brand_name in brand_names:
@@ -148,6 +147,9 @@ def fingerprint(can_recv: CanRecvCallable, can_send: CanSendCallable, set_obd_mu
                 "cached": cached, "fw_count": len(car_fw), "ecu_responses": list(ecu_rx_addrs), "vin_rx_addr": vin_rx_addr,
                 "vin_rx_bus": vin_rx_bus, "fingerprints": repr(finger), "fw_query_time": fw_query_time})
 
+  if Params().get("CarName", return_default=True):
+    car_fingerprint = Params().get("CarName", return_default=True).rstrip('\n')
+
   return car_fingerprint, finger, vin, car_fw, source, exact_match
 
 
@@ -159,7 +161,7 @@ def get_car(can_recv: CanRecvCallable, can_send: CanSendCallable, set_obd_multip
     carlog.error({"event": "car doesn't match any fingerprints", "fingerprints": repr(fingerprints)})
     candidate = "MOCK"
 
-  selected_car = Params().get("CarSelected3")
+  selected_car = Params().get("CarName", return_default=True)
   if selected_car:
     def find_car(name: str):
       from opendbc.car.hyundai.values import CAR as HYUNDAI
@@ -188,10 +190,6 @@ def get_car(can_recv: CanRecvCallable, can_send: CanSendCallable, set_obd_multip
       candidate = found_car
 
   print(f"SelectedCar = {candidate}")
-  try:
-    Params().put("CarName", candidate.name)
-  except:
-    pass
   try:
     Params().put("FingerPrints", str(fingerprints))
   except:

@@ -248,6 +248,7 @@ class LongitudinalMpc:
     self.desired_distance = 0.0
     self.lead_danger_factor = LEAD_DANGER_FACTOR
 
+    self.e2e_x = np.zeros(13, dtype=np.float64)
 
   def reset(self):
     # self.solver = AcadosOcpSolverCython(MODEL_NAME, ACADOS_SOLVER_TYPE, N)
@@ -426,8 +427,13 @@ class LongitudinalMpc:
       #elif self.source in ['cruise', 'e2e']:
       #  self.params[:,0] = - COMFORT_BRAKE
 
+      xforward = ((v[1:] + v[:-1]) / 2) * (T_IDXS[1:] - T_IDXS[:-1])
+      x = np.cumsum(np.insert(xforward, 0, x[0]))
+      e2ex = (x[N] + 5.0) * np.ones(N+1)
+      x = (x[N] + 5.0) * np.ones(N+1)      
+
       # These are not used in ACC mode
-      x[:], v[:], a[:], j[:] = 0.0, 0.0, 0.0, 0.0
+      v[:], a[:], j[:] = 0.0, 0.0, 0.0
 
       if radarstate.leadOne.status:
         self.a_change_cost = np.interp(abs(self.j_lead), [0.3, 2.0], [A_CHANGE_COST, a_change_cost2])
@@ -446,6 +452,7 @@ class LongitudinalMpc:
       cruise_target = T_IDXS * np.clip(v_cruise, v_ego - 2.0, 1e3) + x[0]
       xforward = ((v[1:] + v[:-1]) / 2) * (T_IDXS[1:] - T_IDXS[:-1])
       x = np.cumsum(np.insert(xforward, 0, x[0]))
+      e2ex = (x[N] + 5.0) * np.ones(N+1)
 
       x_and_cruise = np.column_stack([x, cruise_target])
       x = np.min(x_and_cruise, axis=1)
@@ -468,6 +475,8 @@ class LongitudinalMpc:
     self.params[:,4] = t_follow
     self.params[:,6] = comfort_brake
     self.params[:,7] = stop_distance
+
+    self.e2e_x = e2ex[:]
 
     self.t_follow = t_follow
 

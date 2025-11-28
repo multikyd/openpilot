@@ -26,6 +26,7 @@ class CarInterface(CarInterfaceBase):
   CarController = CarController
   RadarInterface = RadarInterface
 
+  DRIVABLE_GEARS = (structs.CarState.GearShifter.sport, structs.CarState.GearShifter.manumatic)
   @staticmethod
   def _get_params(ret: structs.CarParams, candidate, fingerprint, car_fw, alpha_long, is_release, docs) -> structs.CarParams:
 
@@ -37,6 +38,10 @@ class CarInterface(CarInterfaceBase):
 
     ret.brand = "hyundai"
 
+    # "LKA steering" if LKAS or LKAS_ALT messages are seen coming from the camera.
+    # Generally means our LKAS message is forwarded to another ECU (commonly ADAS ECU)
+    # that finally retransmits our steering command in LFA or LFA_ALT to the MDPS.
+    # "LFA steering" if camera directly sends LFA to the MDPS
     cam_can = CanBus(None, fingerprint).CAM if camera_scc == 0 else 1
     lka_steering = False #0x50 in fingerprint[cam_can] or 0x110 in fingerprint[cam_can]
     lka_steering = lka_steering or params.get("CanfdHDA2") > 0
@@ -49,7 +54,7 @@ class CarInterface(CarInterfaceBase):
       # Shared configuration for CAN-FD cars
       ret.alphaLongitudinalAvailable = True #candidate not in (CANFD_UNSUPPORTED_LONGITUDINAL_CAR | CANFD_RADAR_SCC_CAR)
       #ret.enableBsm = 0x1e5 in fingerprint[CAN.ECAN]
-      ret.enableBsm = 0x1ba in fingerprint[CAN.ECAN] # BLINDSPOTS_REAR_CORNERS 0x1ba(442)
+      ret.enableBsm = 0x1ba in fingerprint[CAN.ECAN] or 0x1ba in fingerprint[cam_can] # BLINDSPOTS_REAR_CORNERS 0x1ba(442)
 
       if 0x105 in fingerprint[CAN.ECAN]:
         ret.flags |= HyundaiFlags.HYBRID.value

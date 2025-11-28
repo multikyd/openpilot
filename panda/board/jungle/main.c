@@ -1,7 +1,7 @@
 // ********************* Includes *********************
 #include "board/config.h"
 
-#include "safety.h"
+#include "opendbc/safety/safety.h"
 
 #include "board/drivers/led.h"
 #include "board/drivers/pwm.h"
@@ -11,20 +11,16 @@
 #include "board/provision.h"
 
 #include "board/health.h"
-#include "jungle_health.h"
+#include "board/jungle/jungle_health.h"
 
 #include "board/drivers/can_common.h"
 
-#ifdef STM32H7
-  #include "board/drivers/fdcan.h"
-#else
-  #include "board/drivers/bxcan.h"
-#endif
+#include "board/drivers/fdcan.h"
 
 #include "board/obj/gitversion.h"
 
 #include "board/can_comms.h"
-#include "main_comms.h"
+#include "board/jungle/main_comms.h"
 
 
 // ********************* Serial debugging *********************
@@ -88,8 +84,6 @@ void tick_handler(void) {
       uptime_cnt += 1U;
     }
 
-    led_set(LED_GREEN, green_led_enabled);
-
     // Check on button
     bool current_button_status = current_board->get_button();
 
@@ -106,17 +100,15 @@ void tick_handler(void) {
     current_board->set_individual_ignition(ignition_bitmask);
 
     // SBU voltage reporting
-    if (current_board->has_sbu_sense) {
-      for (uint8_t i = 0U; i < 6U; i++) {
-        CANPacket_t pkt = { 0 };
-        pkt.data_len_code = 8U;
-        pkt.addr = 0x100U + i;
-        *(uint16_t *) &pkt.data[0] = current_board->get_sbu_mV(i + 1U, SBU1);
-        *(uint16_t *) &pkt.data[2] = current_board->get_sbu_mV(i + 1U, SBU2);
-        pkt.data[4] = (ignition_bitmask >> i) & 1U;
-        can_set_checksum(&pkt);
-        can_send(&pkt, 0U, false);
-      }
+    for (uint8_t i = 0U; i < 6U; i++) {
+      CANPacket_t pkt = { 0 };
+      pkt.data_len_code = 8U;
+      pkt.addr = 0x100U + i;
+      *(uint16_t *) &pkt.data[0] = current_board->get_sbu_mV(i + 1U, SBU1);
+      *(uint16_t *) &pkt.data[2] = current_board->get_sbu_mV(i + 1U, SBU2);
+      pkt.data[4] = (ignition_bitmask >> i) & 1U;
+      can_set_checksum(&pkt);
+      can_send(&pkt, 0U, false);
     }
 #else
     // toggle ignition on button press
@@ -183,7 +175,7 @@ int main(void) {
   print("**** INTERRUPTS ON ****\n");
   enable_interrupts();
 
-  can_silent = ALL_CAN_LIVE;
+  can_silent = false;
   set_safety_hooks(SAFETY_ALLOUTPUT, 0U);
 
   can_init_all();

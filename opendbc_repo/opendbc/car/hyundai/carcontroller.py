@@ -88,7 +88,7 @@ class CarController(CarControllerBase):
 
     self.apply_angle_last = 0
     self.lkas_max_torque = 0
-    self.angle_max_torque = 240
+    self.angle_max_torque = 250
 
     self.canfd_debug = 0
     self.MainMode_ACC_trigger = 0
@@ -97,6 +97,15 @@ class CarController(CarControllerBase):
     self.activeCarrot = 0
     self.camera_scc_params = Params().get("HyundaiCameraSCC")
     self.is_ldws_car = Params().get_bool("IsLdwsCar")
+
+    self.traffic_detection_mode = Params().get("TrafficLightDetectMode")
+
+    self.e2e_standstill = False
+    self.e2e_standstill_stat = False
+    self.e2e_standstill_timer = 0
+    self.e2e_standstill_timer2 = 0
+    self.e2e_standstill_timer_buf = 0
+    self.e2e_x = 0
 
     self.steerDeltaUpOrg = self.steerDeltaUp = self.steerDeltaUpLC = self.params.STEER_DELTA_UP
     self.steerDeltaDownOrg = self.steerDeltaDown = self.steerDeltaDownLC = self.params.STEER_DELTA_DOWN
@@ -139,13 +148,17 @@ class CarController(CarControllerBase):
       self.button_spam1 = params.get("CruiseButtonTest1")
       self.button_spam2 = params.get("CruiseButtonTest2")
       self.button_spam3 = params.get("CruiseButtonTest3")
-      self.speed_from_pcm = params.get("SpeedFromPCM")
 
       self.canfd_debug = params.get("CanfdDebug")
       self.camera_scc_params = params.get("HyundaiCameraSCC")
 
     actuators = CC.actuators
     hud_control = CC.hudControl
+
+    try:
+      self.e2e_x = hud_control.e2eX[12]
+    except:
+      self.e2e_x = 0
 
     if hud_control.modelDesire in [3,4]:
       self.params.STEER_DELTA_UP = self.steerDeltaUpLC
@@ -179,24 +192,7 @@ class CarController(CarControllerBase):
       self.apply_angle_last = actuators.steeringAngleDeg
       self.lkas_max_torque = self.lkas_max_torque = max(self.lkas_max_torque - 20, 25)
     else:
-      if hud_control.modelDesire in [1,2]:
-        base_max_torque = self.angle_max_torque
-      else:
-        curv = abs(actuators.curvature)
-        y_std = actuators.yStd
-        #curvature_threshold = np.interp(y_std, [0.0, 0.2], [0.5, 0.006])
-        curvature_threshold = np.interp(y_std, [0.0, 0.1], [0.5, 0.006])
-
-        curve_scale = np.clip(curv / curvature_threshold, 0.0, 1.0)
-        torque_pts = [
-          (1 - curve_scale) * self.angle_max_torque + curve_scale * 25,
-          (1 - curve_scale) * self.angle_max_torque + curve_scale * 50,
-          self.angle_max_torque
-        ]        
-        #base_max_torque = np.interp(CS.out.vEgo * CV.MS_TO_KPH, [0, 30, 60], torque_pts)
-        base_max_torque = np.interp(CS.out.vEgo * CV.MS_TO_KPH, [0, 20, 30], torque_pts)
-      
-      target_torque = np.interp(abs(actuators.curvature), [0.0, 0.003, 0.006], [0.5 * base_max_torque, 0.75 * base_max_torque, base_max_torque])
+      target_torque = self.angle_max_torque
 
       max_steering_tq = self.params.STEER_DRIVER_ALLOWANCE * 0.7
       rate_ratio = max(20, max_steering_tq - abs(CS.out.steeringTorque)) / max_steering_tq
@@ -302,10 +298,10 @@ class CarController(CarControllerBase):
 
         if True: #not camera_scc:
           can_sends.extend(hyundaicanfd.create_ccnc_messages(self.CP, self.packer, self.CAN, self.frame, CC, CS, hud_control, apply_angle, left_lane_warning, right_lane_warning, self.canfd_debug, self.MainMode_ACC_trigger, self.LFA_trigger))
-          if hda2:
-            can_sends.extend(hyundaicanfd.create_adrv_messages(self.CP, self.packer, self.CAN, self.frame))
-          else:
-            can_sends.extend(hyundaicanfd.create_fca_warning_light(self.CP, self.packer, self.CAN, self.frame))
+          # if hda2:
+          #   can_sends.extend(hyundaicanfd.create_adrv_messages(self.CP, self.packer, self.CAN, self.frame))
+          # else:
+          #   can_sends.extend(hyundaicanfd.create_fca_warning_light(self.CP, self.packer, self.CAN, self.frame))
         if self.frame % 2 == 0:
           if self.CP.flags & HyundaiFlags.CAMERA_SCC.value:
             can_sends.append(hyundaicanfd.create_acc_control_scc2(self.packer, self.CAN, CC.enabled, self.accel_last, accel, stopping, CC.cruiseControl.override,
@@ -334,6 +330,7 @@ class CarController(CarControllerBase):
       if self.CP.carFingerprint in CAN_GEARS["send_mdps12"]:  # send mdps12 to LKAS to prevent LKAS error
         can_sends.append(hyundaican.create_mdps12(self.packer, self.frame, CS.mdps12))
 
+      casper_opt = self.CP.carFingerprint in (CAR.HYUNDAI_CASPER_EV)
       if self.frame % 2 == 0 and self.CP.openpilotLongitudinalControl:
         self.hyundai_jerk.make_jerk(self.CP, CS, accel, actuators, hud_control)
         self.hyundai_jerk.check_carrot_cruise(CC, CS, hud_control, stopping, accel, actuators.aTarget)
@@ -342,7 +339,7 @@ class CarController(CarControllerBase):
         if camera_scc:
           can_sends.extend(hyundaican.create_acc_commands_scc(self.packer, CC.enabled, accel, self.hyundai_jerk, int(self.frame / 2),
                                                           hud_control, set_speed_in_units, stopping,
-                                                          CC.cruiseControl.override, use_fca, CS, self.soft_hold_mode))
+                                                          CC.cruiseControl.override, casper_opt, CS, self.soft_hold_mode))
         else:
           can_sends.extend(hyundaican.create_acc_commands(self.packer, CC.enabled, accel, self.hyundai_jerk, int(self.frame / 2),
                                                 hud_control, set_speed_in_units, stopping,
@@ -356,8 +353,10 @@ class CarController(CarControllerBase):
       # 5 Hz ACC options
       if self.frame % 20 == 0 and self.CP.openpilotLongitudinalControl:
         if camera_scc:
-          #if CS.scc13 is not None:
-          #  can_sends.append(hyundaican.create_acc_opt_copy(CS, self.packer))
+          if CS.scc13 is not None:
+            if casper_opt:
+              #can_sends.append(hyundaican.create_acc_opt_copy(CS, self.packer))
+              pass
           pass
         else:
           can_sends.extend(hyundaican.create_acc_opt(self.packer, self.CP))
@@ -366,11 +365,47 @@ class CarController(CarControllerBase):
       if self.frame % 50 == 0 and self.CP.openpilotLongitudinalControl and not camera_scc:
         can_sends.append(hyundaican.create_frt_radar_opt(self.packer))
 
+    if CS.out.cruiseState.enabled:
+      self.e2e_standstill = False
+      self.e2e_standstill_stat = False
+      self.e2e_standstill_timer = 0
+      self.e2e_standstill_timer2 = 0
+      self.e2e_standstill_timer_buf = 0
+    else:
+      if self.e2e_standstill: # 1초동안 출발 이벤트 보냄
+        self.e2e_standstill_timer += 1
+        if self.e2e_standstill_timer > 100:
+          self.e2e_standstill = False
+          self.e2e_standstill_timer = 0
+      elif CS.out.vEgo > 0.2: # 움직일때
+        self.e2e_standstill = False
+        self.e2e_standstill_stat = False
+        self.e2e_standstill_timer = 0
+        self.e2e_standstill_timer2 = 0
+        self.e2e_standstill_timer_buf = 0
+      elif self.e2e_standstill_stat and self.e2e_x > (40 if 0 < CS.out.radarDRel < 15 else 25) and CS.out.vEgo < 0.2: # 신호가 바뀌면 이벤트 발생
+        self.e2e_standstill_timer2 += 1
+        if self.e2e_standstill_timer2 > 20 and not CS.out.gasPressed:
+          self.e2e_standstill_timer2 = 0
+          self.e2e_standstill = True
+          self.e2e_standstill_stat = False
+          self.e2e_standstill_timer = 0
+          self.e2e_standstill_timer_buf += 500 # 멈췄는데 다른 이벤트로 e2eX가 변한경우 5초 추가
+      elif 0 < self.e2e_x < 10 and CS.out.vEgo == 0: # 멈췄을때
+        self.e2e_standstill_timer += 1
+        self.e2e_standstill_timer2 = 0
+        if self.e2e_standstill_timer > (100 + self.e2e_standstill_timer_buf): # 멈추고 1초+(5초) 후 standstill상태
+          self.e2e_standstill_stat = True
+      else:
+        self.e2e_standstill_timer = 0
+        self.e2e_standstill_timer_buf = 0
+
     new_actuators = actuators.as_builder()
     new_actuators.torque = apply_torque / self.params.STEER_MAX
     new_actuators.torqueOutputCan = apply_torque
     new_actuators.steeringAngleDeg = float(apply_angle)
     new_actuators.accel = accel
+    new_actuators.e2eStandstill = self.e2e_standstill
 
     self.frame += 1
     return new_actuators, can_sends
@@ -491,9 +526,9 @@ class CarController(CarControllerBase):
           activate_cruise = True
       elif CC.cruiseControl.resume:
         send_button = Buttons.RES_ACCEL
-      elif target < current and current>= 31 and self.speed_from_pcm != 1:
+      elif target < current and current>= 31:
         send_button = Buttons.SET_DECEL
-      elif target > current and current < 160 and self.speed_from_pcm != 1:
+      elif target > current and current < 160:
         send_button = Buttons.RES_ACCEL
     elif CS.out.activateCruise: #CC.cruiseControl.activate:
       if (hud_control.leadVisible or v_ego_kph > 10.0) and self.activateCruise == 0:

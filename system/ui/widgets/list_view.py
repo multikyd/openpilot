@@ -595,7 +595,7 @@ class ListItem(Widget):
 class NumericStepperAction(ItemAction):
   def __init__(self, param_key: str, value_type: str = "STR", step: float = 1,
                min_value: float | None = None, max_value: float | None = None,
-               decimals: int = 0, button_width: int = 120, enabled: bool | Callable[[], bool] = True,
+               decimal_places: int = 0, button_width: int = 120, enabled: bool | Callable[[], bool] = True,
                special_texts: dict[int | float, str] | None = None):
     total_width = button_width * 2 + 140
     super().__init__(width=total_width, enabled=enabled)
@@ -605,7 +605,7 @@ class NumericStepperAction(ItemAction):
     self.step = step
     self.min_value = min_value
     self.max_value = max_value
-    self.decimals = int(decimals)
+    self.decimal_places = int(decimal_places)
     self.button_width = button_width
     self.special_texts = special_texts
 
@@ -658,7 +658,7 @@ class NumericStepperAction(ItemAction):
       elif self.value_type == "INT":
         self.params.put(self.param_key, int(round(value)))
       elif self.value_type == "FLOAT":
-        fval = round(float(value), self.decimals)
+        fval = round(float(value), self.decimal_places)
         self.params.put(self.param_key, fval)
       else:
         self.params.put(self.param_key, str(value))
@@ -689,12 +689,20 @@ class NumericStepperAction(ItemAction):
     return raw
 
   def _format_display(self, v):
+    if self.special_texts:
+      for k, txt in self.special_texts.items():
+        if abs(v - float(k)) < 1e-6:
+          return txt
+
     if self.value_type in ("INT", "BOOL"):
       return str(int(v))
+
     if self.value_type == "FLOAT":
-      if self.decimals > 0:
-        return f"{v:.{self.decimals}f}"
+      if self.decimal_places > 0:
+        s = f"{v:.{self.decimal_places}f}"
+        return s.rstrip("0").rstrip(".")
       return repr(float(v))
+
     return str(v)
 
   def _render(self, rect: rl.Rectangle) -> bool:
@@ -803,11 +811,11 @@ class NumericStepperAction(ItemAction):
 
 def numeric_item(title: str, param_key: str, value_type: str = "INT", step: float = 1,
                  min_value: float | None = None, max_value: float | None = None,
-                 decimals: int = 0, enabled: bool | Callable[[], bool] = True,
+                 decimal_places: int = 0, enabled: bool | Callable[[], bool] = True,
                  description: str | Callable[[], str] | None = None,
                  special_texts: dict[int | float, str] | None = None) -> ListItem:
   action = NumericStepperAction(param_key, value_type=value_type, step=step,
-                                min_value=min_value, max_value=max_value, decimals=decimals,
+                                min_value=min_value, max_value=max_value, decimal_places=decimal_places,
                                 button_width=120, enabled=enabled, special_texts=special_texts)
   return ListItem(title=title, description=description, action_item=action)
 

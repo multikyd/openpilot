@@ -281,7 +281,7 @@ struct CarState {
     standstill @4 :Bool;
     nonAdaptive @5 :Bool;
 
-    speedOffset @3 :Float32;
+    speedOffsetDEPRECATED @3 :Float32;
   }
 
   enum GearShifter {
@@ -402,6 +402,7 @@ struct CarControl {
   cruiseControl @4 :CruiseControl;
   hudControl @5 :HUDControl;
 
+  e2eStandstill @18: Bool;
   struct Actuators {
     # lateral commands, mutually exclusive
     torque @2: Float32;  # [0.0, 1.0]
@@ -420,7 +421,8 @@ struct CarControl {
 
     jerk @9: Float32;  # m/s^3
     aTarget @10: Float32;  # m/s^2
-    yStd @11: Float32;  
+
+    e2eStandstill @11: Bool;
 
     enum LongControlState @0xe40f3a917d908282{
       off @0;
@@ -466,6 +468,8 @@ struct CarControl {
     leadRightDist2 @23: Float32;
     leadLeftLat2 @24: Float32;
     leadRightLat2 @25: Float32;
+
+    e2eX @26 :List(Float64);
 
     # not used with the dash, TODO: separate structs for dash UI and device UI
     audibleAlert @5: AudibleAlert;
@@ -524,6 +528,7 @@ struct CarControl {
       audio10 @33;
 
       nnff @34;
+      dingdong @35;
     }
   }
 
@@ -553,7 +558,6 @@ struct CarParams {
   notCar @66 :Bool;  # flag for non-car robotics platforms
 
   pcmCruise @3 :Bool;        # is openpilot's state tied to the PCM's cruise state?
-  enableDsu @5 :Bool;        # driving support unit
   enableBsm @56 :Bool;       # blind spot monitoring
   flags @64 :UInt32;         # flags for car specific quirks
   alphaLongitudinalAvailable @71 :Bool;
@@ -826,4 +830,5 @@ struct CarParams {
   longitudinalActuatorDelayLowerBoundDEPRECATED @61 :Float32;
   stoppingControlDEPRECATED @31 :Bool; # Does the car allow full control even at lows speeds when stopping
   radarTimeStep @45: Float32;  # time delta between radar updates, 20Hz is very standard
+  enableDsuDEPRECATED @5 :Bool;        # driving support unit
 }

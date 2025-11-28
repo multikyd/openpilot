@@ -84,7 +84,7 @@ def create_steering_messages_camera_scc(frame, packer, CP, CAN, CC, lat_active, 
 
   emergency_steering = False
   if CS.adrv_info_161 is not None:
-    values = CS.adrv_info_161
+    values = copy.copy(CS.adrv_info_161)
     emergency_steering = values["ALERTS_1"] in [11, 12, 13, 14, 15, 21, 22, 23, 24, 25, 26]
 
 
@@ -464,6 +464,11 @@ def create_ccnc_messages(CP, packer, CAN, frame, CC, CS, hud_control, disp_angle
         #values["SET_ME_9"] = 17 # steer_temp관련없음, 계기판에러
         #values["SET_ME_2"] = 0   #커멘트해도 steer_temp에러남, 2값은 콤마에서 찾은거니...
         #values["DATA102"] = 0  # steer_temp관련없음
+        # values["SET_ME_2"] = 0x2
+        # values["SET_ME_FF"] = 0xff
+        # values["SET_ME_FC"] = 0xfc
+        # values["SET_ME_9"] = 0x9
+        values["NEW_SIGNAL_7"] = 0
         ret.append(packer.make_can_msg("ADRV_0x160", CAN.ECAN, values))
 
       if CS.cruise_buttons_msg is not None:
@@ -518,10 +523,11 @@ def create_ccnc_messages(CP, packer, CAN, frame, CC, CS, hud_control, disp_angle
         values["LKA_ICON"] = 4 if lat_active else 3 if lat_enabled else 0
         values["FCA_ALT_ICON"] = 0
 
-        if values["ALERTS_2"] in [1, 2, 5]:
+        if values["ALERTS_2"] in [1, 2, 5, 10, 21, 22]:  # 10,21,22: 운전자모니터 알람/경고
           values["ALERTS_2"] = 0
           values["DAW_ICON"] = 0
 
+        values["SOUNDS_1"] = 0  # 운전자모니터경고음.
         values["SOUNDS_2"] = 0  # 2: STEER중지 경고후에도 사운드가 나옴.
         values["SOUNDS_4"] = 0  # 차선변경알림? 에이 그냥0으로..
 
@@ -563,13 +569,13 @@ def create_ccnc_messages(CP, packer, CAN, frame, CC, CS, hud_control, disp_angle
 
       if CS.adrv_info_200 is not None:
         values = copy.copy(CS.adrv_info_200)
-        values["TauGapSet"] = hud_control.leadDistanceBars
+        #values["TauGapSet"] = hud_control.leadDistanceBars
         ret.append(packer.make_can_msg("ADRV_0x200", CAN.ECAN, values))
 
       if CS.adrv_info_1ea is not None:
         values = copy.copy(CS.adrv_info_1ea)
-        #values["HDA_MODE1"] = 8
-        #values["HDA_MODE2"] = 1
+        # values["HDA_MODE1"] = 8
+        # values["HDA_MODE2"] = 2
         if values['LF_DETECT'] == 0 and hud_control.leadLeftDist > 0:
           values['LF_DETECT'] = 3 if hud_control.leadLeftDist > 30 else 4
           values['LF_DETECT_DISTANCE'] = hud_control.leadLeftDist
@@ -588,6 +594,9 @@ def create_ccnc_messages(CP, packer, CAN, frame, CC, CS, hud_control, disp_angle
           values['RR_DETECT_DISTANCE'] = 2
           values['RR_DETECT_LATERAL'] = hud_control.leadRightLat2
         """
+        #values["CURRENT_LANE_NUMBER"]  차량이 현재 몇번째 차선에 있는 나타낸 표시 같음 약간의 시간차 있음. SET_ME_FF 대신 이거 같음
+        #values["TOTAL_LANE_COUNT"]  전체 레인 숫자 레인 갯수가 늘어나면 이것도 늘어남 추측이 맞는듯
+
         ret.append(packer.make_can_msg("ADRV_0x1ea", CAN.ECAN, values))
 
       if CS.adrv_info_162 is not None:
@@ -643,10 +652,23 @@ def create_ccnc_messages(CP, packer, CAN, frame, CC, CS, hud_control, disp_angle
           values["VIBRATE"] = 1
         ret.append(packer.make_can_msg("CCNC_0x162", CAN.ECAN, values))
 
-    if canfd_debug > 0:
-      if frame % 20 == 0: # 아직 시험중..
-        if CS.hda_info_4a3 is not None:
-          values = copy.copy(CS.hda_info_4a3)
+    if frame % 20 == 0:
+      if CS.adrv_info_345 is not None:
+        values = copy.copy(CS.adrv_info_345)
+        # values['SET_ME_15'] = 0x15
+        ret.append(packer.make_can_msg("ADRV_0x345", CAN.ECAN, values))
+
+    if frame % 100 == 0:
+      if CS.adrv_info_1da is not None:
+        values = copy.copy(CS.adrv_info_1da)
+        # values['SET_ME_22'] = 0x22
+        # values['SET_ME_41'] = 0x41
+        ret.append(packer.make_can_msg("ADRV_0x1da", CAN.ECAN, values))
+
+    if frame % 20 == 0: # 아직 시험중..
+      if CS.hda_info_4a3 is not None:
+        values = copy.copy(CS.hda_info_4a3)
+        if canfd_debug == 5:
           #if canfd_debug == 1:
           values["SIGNAL_0"] = 5
           values["NEW_SIGNAL_1"] = 4
@@ -655,7 +677,8 @@ def create_ccnc_messages(CP, packer, CAN, frame, CC, CS, hud_control, disp_angle
           values["NEW_SIGNAL_4"] = 9
           values["NEW_SIGNAL_5"] = 0
           values["NEW_SIGNAL_6"] = 256
-          ret.append(packer.make_can_msg("HDA_INFO_4A3", CAN.CAM, values))
+
+        ret.append(packer.make_can_msg("HDA_INFO_4A3", CAN.CAM, values))
 
   return ret
 

@@ -61,6 +61,7 @@ def or_(*fns):
 def and_(*fns):
   return lambda *args: operator.and_(*(fn(*args) for fn in fns))
 
+
 EnableLogger = Params().get_bool('KisaEnableLogger')
 procs = [
   DaemonProcess("manage_athenad", "system.athena.manage_athenad", "AthenadPid"),
@@ -117,6 +118,7 @@ procs = [
 
   PythonProcess("fleet_manager", "selfdrive.frogpilot.fleetmanager.fleet_manager", always_run, enabled=not PC),
   PythonProcess("carrot_man", "selfdrive.carrot.carrot_man", always_run),#, enabled=not PC),
+  PythonProcess("kisa_agent", "selfdrive.kisapilot.kisa_agent", always_run, enabled=not PC),
 ]
 
 if EnableLogger:

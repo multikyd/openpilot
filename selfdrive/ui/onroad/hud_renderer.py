@@ -11,6 +11,7 @@ from openpilot.system.ui.widgets import Widget
 # kisa
 from openpilot.selfdrive.ui.onroad.kisa_button import KisaButton
 import math
+from collections import deque
 
 # Constants
 SET_SPEED_NA = 255
@@ -39,20 +40,20 @@ class FontSizes:
 
 @dataclass(frozen=True)
 class Colors:
-  white: rl.Color = rl.WHITE
-  disengaged: rl.Color = rl.Color(145, 155, 149, 255)
-  override: rl.Color = rl.Color(145, 155, 149, 255)  # Added
-  engaged: rl.Color = rl.Color(128, 216, 166, 255)
-  disengaged_bg: rl.Color = rl.Color(0, 0, 0, 153)
-  override_bg: rl.Color = rl.Color(145, 155, 149, 204)
-  engaged_bg: rl.Color = rl.Color(128, 216, 166, 204)
-  grey: rl.Color = rl.Color(166, 166, 166, 255)
-  dark_grey: rl.Color = rl.Color(114, 114, 114, 255)
-  black_translucent: rl.Color = rl.Color(0, 0, 0, 166)
-  white_translucent: rl.Color = rl.Color(255, 255, 255, 200)
-  border_translucent: rl.Color = rl.Color(255, 255, 255, 75)
-  header_gradient_start: rl.Color = rl.Color(0, 0, 0, 114)
-  header_gradient_end: rl.Color = rl.BLANK
+  WHITE = rl.WHITE
+  DISENGAGED = rl.Color(145, 155, 149, 255)
+  OVERRIDE = rl.Color(145, 155, 149, 255)  # Added
+  ENGAGED = rl.Color(128, 216, 166, 255)
+  DISENGAGED_BG = rl.Color(0, 0, 0, 153)
+  OVERRIDE_BG = rl.Color(145, 155, 149, 204)
+  ENGAGED_BG = rl.Color(128, 216, 166, 204)
+  GREY = rl.Color(166, 166, 166, 255)
+  DARK_GREY = rl.Color(114, 114, 114, 255)
+  BLACK_TRANSLUCENT = rl.Color(0, 0, 0, 166)
+  WHITE_TRANSLUCENT = rl.Color(255, 255, 255, 200)
+  BORDER_TRANSLUCENT = rl.Color(255, 255, 255, 75)
+  HEADER_GRADIENT_START = rl.Color(0, 0, 0, 114)
+  HEADER_GRADIENT_END = rl.BLANK
   # kisa
   green_translucent: rl.Color = rl.Color(0, 200, 0, 100)
   blue_translucent: rl.Color = rl.Color(0, 140, 255, 120)
@@ -87,6 +88,8 @@ class HudRenderer(Widget):
     self.img_speed_bump = gui_app.texture("addon/img/img_speed_bump.png", self.img_width, self.img_width)
     self.img_car = gui_app.texture("addon/img/car.png", self.img_car_width, self.img_car_height)
 
+    self._draw_plot = DrawPlot()
+
   def _update_state(self) -> None:
     """Update HUD state based on car state and controls state."""
     sm = ui_state.sm
@@ -120,8 +123,8 @@ class HudRenderer(Widget):
       int(rect.y),
       int(rect.width),
       UI_CONFIG.header_height,
-      COLORS.header_gradient_start,
-      COLORS.header_gradient_end,
+      COLORS.HEADER_GRADIENT_START,
+      COLORS.HEADER_GRADIENT_END,
     )
 
     if self.is_cruise_available:
@@ -133,6 +136,8 @@ class HudRenderer(Widget):
     self._draw_standstill_timer(rect)
     self._draw_car_stat(rect)
     self._draw_debug_msg(rect)
+    
+    self._draw_plot.draw(self)
 
     button_x = rect.x + rect.width - UI_CONFIG.border_size - UI_CONFIG.button_size
     button_y = rect.y + UI_CONFIG.border_size
@@ -160,11 +165,11 @@ class HudRenderer(Widget):
     elif s.enabled:
       bg_brush = COLORS.blue_translucent
     else:
-      bg_brush = COLORS.black_translucent
+      bg_brush = COLORS.BLACK_TRANSLUCENT
 
     # Draw rounded rect background + border
     rl.draw_rectangle_rounded(set_speed_rect, 0.35, 32, bg_brush)
-    rl.draw_rectangle_rounded_lines_ex(set_speed_rect, 0.35, 32, 6, COLORS.white_translucent)
+    rl.draw_rectangle_rounded_lines_ex(set_speed_rect, 0.35, 32, 6, COLORS.WHITE_TRANSLUCENT)
 
     # mid line
     line_y = y + UI_CONFIG.set_speed_height // 2 - 7
@@ -173,13 +178,13 @@ class HudRenderer(Widget):
     try:
       rl.draw_line(start, end, 6)
     except Exception:
-      rl.draw_rectangle_rounded(rl.Rectangle(start.x, start.y - 3, end.x - start.x, 6), 0.1, 3, COLORS.white)
+      rl.draw_rectangle_rounded(rl.Rectangle(start.x, start.y - 3, end.x - start.x, 6), 0.1, 3, COLORS.WHITE)
 
     setSpeedStr = str(round(self.set_speed)) if 0 < self.set_speed < 254 and s.enabled else CRUISE_DISABLED_CHAR
     # Draw top text
     top_font_size = 80
     setSpeedStr_w = measure_text_cached(self._font_semi_bold, setSpeedStr, top_font_size).x
-    rl.draw_text_ex(self._font_semi_bold, setSpeedStr, rl.Vector2(x + (set_speed_width - setSpeedStr_w) / 2, y), top_font_size, 0, COLORS.white)
+    rl.draw_text_ex(self._font_semi_bold, setSpeedStr, rl.Vector2(x + (set_speed_width - setSpeedStr_w) / 2, y), top_font_size, 0, COLORS.WHITE)
 
     # Draw bottom text
     if not (s.has_longitudinal_control or s.camera_scc > 0):
@@ -188,7 +193,7 @@ class HudRenderer(Widget):
       bottom_text = str(int(min(s.desiredSpeed, self.set_speed))) if s.enabled else CRUISE_DISABLED_CHAR
     bottom_font_size = FONT_SIZES.set_speed + 3
     bottom_text_w = measure_text_cached(self._font_bold, bottom_text, bottom_font_size).x
-    rl.draw_text_ex(self._font_bold, bottom_text, rl.Vector2(x + (set_speed_width - bottom_text_w) / 2, y + 90), bottom_font_size, 0, COLORS.white)
+    rl.draw_text_ex(self._font_bold, bottom_text, rl.Vector2(x + (set_speed_width - bottom_text_w) / 2, y + 90), bottom_font_size, 0, COLORS.WHITE)
 
     if s.desiredSpeed > self.set_speed:
       source_text = ""
@@ -229,7 +234,7 @@ class HudRenderer(Widget):
       b = clamp(255 - int(gas_opacity), 0, 255)
       speed_color = rl.Color(r, g, b, 255)
     else:
-      speed_color = COLORS.white
+      speed_color = COLORS.WHITE
 
     set_speed_width = UI_CONFIG.set_speed_width_metric if s.is_metric else UI_CONFIG.set_speed_width_imperial
     x = rect.x + 50 + (UI_CONFIG.set_speed_width_imperial - set_speed_width) // 2
@@ -240,7 +245,7 @@ class HudRenderer(Widget):
     # unit_text = "KPH" if ui_state.is_metric else "MPH"
     # unit_text_size = measure_text_cached(self._font_medium, unit_text, FONT_SIZES.speed_unit)
     # unit_pos = rl.Vector2(rect.x + rect.width / 2 - unit_text_size.x / 2, 290 - unit_text_size.y / 2)
-    # rl.draw_text_ex(self._font_medium, unit_text, unit_pos, FONT_SIZES.speed_unit, 0, COLORS.white_translucent)
+    # rl.draw_text_ex(self._font_medium, unit_text, unit_pos, FONT_SIZES.speed_unit, 0, COLORS.WHITE_TRANSLUCENT)
 
   def _draw_blinkers(self, rect: rl.Rectangle) -> None:
     """Draw KisaPilot-style blinkers."""
@@ -250,9 +255,9 @@ class HudRenderer(Widget):
     t = rl.get_time()
     center_x = rect.x + rect.width // 2
     center_y = rect.y + 200
-    size, thickness, freq, sway_amp = 100, 40, 6, 20
+    size, thickness, freq, sway_amp = 100, 50, 3, 20
     sway = sway_amp * math.sin(t * freq)
-    count, spacing = 5, 90
+    count, spacing = 3, 110
     base_color = rl.Color(230, 165, 0, 230)
     overlap = 0.25
 
@@ -334,7 +339,7 @@ class HudRenderer(Widget):
 
     opacity = max(0, min(255, int((600 - dist) * 0.425))) if dist <= 600 else 0
     rl.draw_rectangle_rounded(rects["dist"], 0.35, 32, rl.Color(255, 0, 0, opacity))
-    rl.draw_rectangle_rounded_lines_ex(rects["dist"], 0.35, 32, 6, COLORS.white_translucent)
+    rl.draw_rectangle_rounded_lines_ex(rects["dist"], 0.35, 32, 6, COLORS.WHITE_TRANSLUCENT)
 
     dist_text = (
       f"{dist:.0f}m" if dist < 1000 else
@@ -355,7 +360,7 @@ class HudRenderer(Widget):
       second = int(ui_state.standstillElapsedTimer % 60)
       time_text = f"{minute:02d}:{second:02d}"
 
-      stop_x = rect.x + rect.width - UI_CONFIG.border_size - 645
+      stop_x = rect.x + rect.width - UI_CONFIG.border_size - 745
       stop_y = rect.y + UI_CONFIG.border_size + 320
 
       time_x = stop_x
@@ -376,7 +381,7 @@ class HudRenderer(Widget):
 
     img = self.img_car
     x_center = rect.x + UI_CONFIG.border_size + 56 + img.width // 2
-    y_center = rect.y + 450
+    y_center = rect.y + 460
     icon_x = x_center - img.width // 2
     icon_y = y_center - img.height // 2
     icon_rect = rl.Rectangle(icon_x, icon_y, self.img_car_width, self.img_car_height)
@@ -475,64 +480,349 @@ class HudRenderer(Widget):
         rl.draw_rectangle_rounded(rect, 0.9, radius, color)
         rl.draw_rectangle_rounded_lines(rect, radius, 1, border)
 
+      lead_dist = s.radarDRel
+
+      if lead_dist is not None and 0 < lead_dist < 150:
+        dist_text = f"{lead_dist:.1f} m"
+
+        text_font = self._font_bold
+        text_size = 40
+        tsz = measure_text_cached(text_font, dist_text, text_size).x
+
+        top_y = base_y - (gap_count * (gap_h + spacing)) - 35
+
+        if lead_dist < 5:
+          color = rl.Color(255, 0, 0, 255)
+        elif lead_dist < 10:
+          color = rl.Color(255, 140, 0, 255)
+        else:
+          color = rl.Color(255, 255, 255, 230)
+
+        rl.draw_text_ex(text_font, dist_text, rl.Vector2(x_center - tsz / 2 + 14, top_y), text_size, 0, color)
+
   def _draw_debug_msg(self, rect: rl.Rectangle) -> None:
-    if ui_state.debug_msg > 0:
-      s = ui_state
-      x = rect.x + UI_CONFIG.border_size + 350
-      y = rect.y + UI_CONFIG.border_size + 50
-      line_height = 50
+    if ui_state.debug_msg <= 0:
+      return
 
-      debug_lines = [
-        f"Storage Usage: {s.storageUsage:.0f}%",
-        f"Memory Usage: {s.memoryUsage:.0f}%",
-        f"CPU Usage: {s.cpuUsage:.0f}%",
-        f"CPU Temp: {s.cpuTemp:.0f}°C",
-        f"GPU Temp: {s.gpuTemp:.0f}°C",
-        f"DSP Temp: {s.dspTemp:.0f}°C",
-        f"Memory Temp: {s.memoryTemp:.0f}°C",
-        f"Modem Temp: {s.modemTemp:.0f}°C",
-        f"PMIC Temp: {s.pmicTemp:.0f}°C",
-        f"Max Temp: {s.maxTemp:.0f}°C",
-        f"Fan Speed: {s.fanSpeedRpm}",
-        f"Voltage: {s.voltage:.1f}V",
-        f"GPS Acc: {s.gpsAccuracy:.1f}m",
-        f"Altitude: {s.altitude:.0f}m",
-        f"Bearing: {s.bearing:.0f}°",
-      ]
+    s = ui_state
 
-      for i, msg in enumerate(debug_lines):
-        rl.draw_text_ex(
-          self._font_bold,
-          msg,
-          rl.Vector2(x, y + i * line_height),
-          40,  #font size
-          0,   #spacing
-          rl.Color(255, 255, 255, 220),
-      )
+    right_debug_lines = [
+      ("CPU", f"{s.cpuUsage:.0f}%"),
+      ("MaxTemp", f"{s.maxTemp:.0f}°C"),
+      ("Storage", f"{s.storageUsage:.0f}%"),
+      ("FAN", f"{s.fanSpeedRpm}"),
+      ("Altitude", f"{s.altitude:.0f}m"),
+      ("Bearing", f"{s.bearing:.0f}°"),
+      ("Voltage", f"{s.voltage:.1f}V"),
+    ]
 
+    left_debug_lines = []
     if ui_state.debug_msg > 1:
-      x = rect.x + UI_CONFIG.border_size + 850
-      y = rect.y + UI_CONFIG.border_size + 50
-      line_height = 50
-
-      debug_lines = [
-        f"Panda: {s.pandaSafetyModel}",
-        f"Interface: {s.interfaceSafetyModel}",
-        f"RX Checks: {'PASS' if s.rxChecks else 'FAIL'}",
-        f"MissCnt Check: {'PASS' if s.mismatchCounter else 'FAIL'}",
-        f"Controls Allowed: {'YES' if s.controlAllowed else 'NO'}",
-        f"Enabled: {'Lat' if s.latEnabled else 'NO'}/{'Yes' if s.enabled else 'NO'}",
-        f"AngleOffset: {s.angleOffsetDeg:.1f}°",
-        f"AngleOffsetAvg: {s.angleOffsetAverageDeg:.1f}°",
-        f"steerRatio: {s.steerRatio:.2f}",
+      left_debug_lines = [
+        ("AngOffset", f"{s.angleOffsetDeg:.1f}°"),
+        ("SteerRatio", f"{s.steerRatio:.2f}"),
+        ("Accel", f"{s.accel:.2f}"),
       ]
 
-      for i, msg in enumerate(debug_lines):
+    small_font_size = 30
+    large_font_size = 40
+    line_spacing = 6
+    value_spacing = 0
+    line_height = small_font_size + large_font_size + line_spacing
+
+    def draw_debug_box(box_x, box_y, debug_lines, box_width=160, bg_alpha=10):
+      total_lines = len(debug_lines)
+      box_height = total_lines * line_height + 15
+      # Draw semi-transparent background
+      bg_color = rl.Color(0, 0, 0, bg_alpha)
+      rl.draw_rectangle(int(box_x), int(box_y), int(box_width), int(box_height), bg_color)
+
+      # Draw top and bottom lines safely
+      line_color = rl.Color(255, 255, 255, 180)
+      line_thickness = 5
+
+      # top line
+      top_start = rl.Vector2(box_x, box_y)
+      top_end = rl.Vector2(box_x + box_width, box_y)
+      try:
+        rl.draw_line_ex(top_start, top_end, line_thickness, line_color)
+      except Exception:
+        rl.draw_rectangle_rounded(rl.Rectangle(top_start.x, top_start.y - line_thickness//2, box_width, line_thickness), 0.1, 3, line_color)
+
+      # bottom line
+      bottom_start = rl.Vector2(box_x, box_y + box_height)
+      bottom_end = rl.Vector2(box_x + box_width, box_y + box_height)
+      try:
+        rl.draw_line_ex(bottom_start, bottom_end, line_thickness, line_color)
+      except Exception:
+        rl.draw_rectangle_rounded(rl.Rectangle(bottom_start.x, bottom_start.y - line_thickness//2, box_width, line_thickness), 0.1, 3, line_color)
+
+      # Draw text
+      for i, (label, value) in enumerate(debug_lines):
+        item_y = box_y + 10 + i * line_height
+
+        # Label
+        label_size = rl.measure_text_ex(self._font_bold, label, small_font_size, 0)
+        label_x = box_x + (box_width - label_size.x) / 2 - 5
         rl.draw_text_ex(
           self._font_bold,
-          msg,
-          rl.Vector2(x, y + i * line_height),
-          40,  #font size
-          0,   #spacing
-          rl.Color(255, 255, 255, 220),
-      )
+          label,
+          rl.Vector2(label_x, item_y),
+          small_font_size,
+          0,
+          rl.Color(200, 200, 200, 220)
+        )
+
+        # Value
+        value_size = rl.measure_text_ex(self._font_bold, value, large_font_size, 0)
+        value_x = box_x + (box_width - value_size.x) / 2 - 5
+        value_y = item_y + small_font_size + value_spacing
+        rl.draw_text_ex(
+          self._font_bold,
+          value,
+          rl.Vector2(value_x, value_y),
+          large_font_size,
+          0,
+          rl.Color(255, 255, 255, 220)
+        )
+
+    # Draw right box
+    right_box_x = rect.x + rect.width - UI_CONFIG.border_size - UI_CONFIG.button_size + 15
+    right_box_y = rect.y + UI_CONFIG.border_size + 210
+    draw_debug_box(right_box_x, right_box_y, right_debug_lines)
+
+    if left_debug_lines:
+      left_box_x = rect.x + rect.width + UI_CONFIG.border_size - UI_CONFIG.button_size + 15 - 160 - 65
+      left_box_y = rect.y + UI_CONFIG.border_size + 210
+      draw_debug_box(left_box_x, left_box_y, left_debug_lines)
+
+class DrawPlot:
+  PLOT_MAX = 400
+
+  def __init__(self):
+    self.plotSize = 0
+    self.plotIndex = 0
+    self.plotQueue = [[0.0]*self.PLOT_MAX for _ in range(3)]
+    self.plotMin = -2.0
+    self.plotMax = 2.0
+    self.plotX = 350.0
+    self.plotY = 70.0
+    self.plotHeight = 300.0
+    self.plotDx = 2.0
+    self.plotRatio = 1.0
+    self.show_plot_mode_prev = -1
+    self.minDeque = [deque() for _ in range(3)]
+    self.maxDeque = [deque() for _ in range(3)]
+
+    self._font_semi_bold: rl.Font = gui_app.font(FontWeight.SEMI_BOLD)
+
+  def _draw_plotting(self, renderer, index, start, x, y_list, size, color, stroke=2):
+    span = (self.plotMax - self.plotMin)
+    self.plotRatio = self.plotHeight if span < 1.0 else (self.plotHeight / span)
+    dx = self.plotDx
+
+    if size <= 0:
+      size = 1
+
+    prev_x = None
+    prev_y = None
+    for i in range(size):
+      data = y_list[(start - i) % self.PLOT_MAX]
+      plot_y = self.plotY + self.plotHeight - (data - self.plotMin) * self.plotRatio
+      x_pos = x + (size - i) * dx
+
+      if prev_x is not None:
+        # pyray wrapper uses rl.draw_line
+        try:
+          rl.draw_line(int(prev_x), int(prev_y), int(x_pos), int(plot_y), color)
+          if stroke > 1:
+            rl.draw_line(int(prev_x), int(prev_y)+1, int(x_pos), int(plot_y)+1, color)
+        except Exception:
+          pass
+      else:
+        txt = "{:.2f}".format(data)
+        y_offset = 40 if index > 0 else 0
+        try:
+          rl.draw_text_ex(self._font_semi_bold, txt, rl.Vector2(float(x_pos + 50), float(plot_y + y_offset)), 25, 0, rl.WHITE)
+        except Exception:
+          pass
+
+      prev_x = x_pos
+      prev_y = plot_y
+
+  def make_plot_data(self, renderer):
+    sm = ui_state.sm
+    try:
+      car_state = sm["carState"]
+      lp = sm["longitudinalPlan"]
+      car_control = sm["carControl"]
+      controls_state = sm["controlsState"]
+      lateral = controls_state.lateralControlState
+      if hasattr(lateral, "which"):
+        if lateral.which() == "torqueState":
+          torque_state = lateral.torqueState
+        else:
+          torque_state = None
+      else:
+        torque_state = getattr(lateral, "torqueState", None)
+      
+      a_ego = car_state.aEgo
+      v_ego = car_state.vEgo
+      
+      accel = lp.accels[0] if len(lp.accels) > 0 else 0.0
+      speeds_0 = lp.speeds[0] if len(lp.speeds) > 0 else 0.0
+      
+      accel_out = car_control.actuators.accel
+
+      model_data = sm["modelV2"]
+      model = model_data.modelV2 if hasattr(model_data, "modelV2") else None
+
+      position = model.position if model and len(model.position) > 0 else [0.0]
+      velocity = model.velocity if model and len(model.velocity) > 0 else [0.0]
+
+      live_params = sm["liveParameters"]
+    except Exception as e:
+      print(f"[UI Error] make_plot_data error: {e}")
+      return [0.0, 0.0, 0.0], "no data"
+
+    m = ui_state.show_plot_mode
+    data = [0.0, 0.0, 0.0]
+    title = "no data"
+
+    if m in (0, 1):
+      data[0] = a_ego
+      data[1] = accel
+      data[2] = accel_out
+      title = "1.Accel (Y:a_ego, G:a_target, O:a_out)"
+    elif m == 2:
+      data[0] = speeds_0
+      data[1] = v_ego
+      data[2] = a_ego
+      title = "2.Speed/Accel(Y:speed_0, G:v_ego, O:a_ego)"
+    elif m == 3:
+      try:
+        data[0] = position.x[32]
+      except Exception:
+        data[0] = 0.0
+      try:
+        data[1] = velocity.x[32]
+        data[2] = velocity.x[0]
+      except Exception:
+        data[1] = data[2] = 0.0
+      title = "3.Model(Y:pos_32, G:vel_32, O:vel_0)"
+    elif m == 4:
+      data[0] = accel
+      if sm.valid['radarState']:
+        lead = sm['radarState'].leadOne
+        data[1] = lead.aLeadK if lead is not None else 0.0
+        data[2] = lead.vRel if lead is not None else 0.0
+      title = "4.Lead(Y:accel, G:a_lead, O:v_rel)"
+    elif m == 5:
+      data[0] = a_ego
+      if sm.valid['radarState']:
+        lead = sm['radarState'].leadOne
+        data[1] = lead.aLead if lead else 0.0
+        data[2] = lead.jLead if lead else 0.0
+      title = "5.Lead(Y:a_ego, G:a_lead, O:j_lead)"
+    elif m == 6 and torque_state is not None:
+      data[0] = torque_state.actualLateralAccel * 10.0
+      data[1] = torque_state.desiredLateralAccel * 10.0
+      data[2] = torque_state.output * 10.0
+      title = "6.Steer(Y:actual, G:desire, O:output)"
+    elif m == 7:
+      data[0] = car_state.steeringAngleDeg
+      data[1] = car_control.actuators.steeringAngleDeg
+      data[2] = live_params.angleOffsetDeg * 10.0
+      title = "7.SteerA (Y:Actual, G:Target, O:Offset*10)"
+    elif m == 8:
+      try:
+        curv = car_control.actuators.curvature * 10000.0
+      except Exception:
+        curv = 0.0
+      data = [curv, curv, curv]
+      title = "8.SteerA (Y:Actual, G:Target, O:Offset*10)"
+    else:
+      data = [0.0, 0.0, 0.0]
+      title = "no data"
+
+    if ui_state.show_plot_mode != self.show_plot_mode_prev:
+      self.plotSize = 0
+      self.plotIndex = 0
+      self.plotMin = 0.0
+      self.plotMax = 0.0
+      for i in range(3):
+        self.minDeque[i].clear()
+        self.maxDeque[i].clear()
+      self.show_plot_mode_prev = ui_state.show_plot_mode
+
+    return data, title
+
+  def update_plot_queue(self, plot_data):
+    self.plotIndex = (self.plotIndex + 1) % self.PLOT_MAX
+    for i in range(3):
+      if self.plotSize == self.PLOT_MAX:
+        if self.minDeque[i] and self.minDeque[i][0] == self.plotQueue[i][self.plotIndex]:
+          self.minDeque[i].popleft()
+        if self.maxDeque[i] and self.maxDeque[i][0] == self.plotQueue[i][self.plotIndex]:
+          self.maxDeque[i].popleft()
+
+      self.plotQueue[i][self.plotIndex] = plot_data[i]
+
+      while self.minDeque[i] and self.minDeque[i][-1] > plot_data[i]:
+        self.minDeque[i].pop()
+      self.minDeque[i].append(plot_data[i])
+
+      while self.maxDeque[i] and self.maxDeque[i][-1] < plot_data[i]:
+        self.maxDeque[i].pop()
+      self.maxDeque[i].append(plot_data[i])
+
+    if self.plotSize < self.PLOT_MAX:
+      self.plotSize += 1
+
+    self.plotMin = float('inf')
+    self.plotMax = -float('inf')
+    for i in range(3):
+      if self.minDeque[i]:
+        self.plotMin = min(self.plotMin, self.minDeque[i][0])
+      if self.maxDeque[i]:
+        self.plotMax = max(self.plotMax, self.maxDeque[i][0])
+
+    # 최소/최대 범위 고정
+    if self.plotMin > -2.0:
+      self.plotMin = -2.0
+    if self.plotMax < 2.0:
+      self.plotMax = 2.0
+
+  def draw(self, renderer):
+    if ui_state.show_plot_mode == 0:
+      return
+
+    # sm = ui_state.sm
+    # if not (sm.alive('carState') and sm.alive('longitudinalPlan')):
+    #   print("carState alive:", sm.alive('carState'))
+    #   print("longitudinalPlan alive:", sm.alive('longitudinalPlan'))
+    #   return
+
+    plot_data, title = self.make_plot_data(renderer)
+    self.update_plot_queue(plot_data)
+
+    if getattr(renderer, "_rect", None) is None:
+      return
+    if renderer._rect.width < 1200:
+      return
+
+    COLOR_YELLOW = rl.Color(240, 200, 0, 255)
+    COLOR_GREEN  = rl.Color(0, 200, 100, 255)
+    COLOR_ORANGE = rl.Color(255, 128, 0, 255)
+    COLOR_WHITE  = rl.Color(255,255,255,255)
+    colors = [COLOR_YELLOW, COLOR_GREEN, COLOR_ORANGE]
+
+    # Each Channel Plot
+    for i in range(3):
+      self._draw_plotting(renderer, i, self.plotIndex, self.plotX, self.plotQueue[i], self.plotSize, colors[i], stroke=2)
+
+    # title
+    try:
+      rl.draw_text_ex(self._font_semi_bold, title, rl.Vector2(float(self.plotX + 150), float(self.plotY - 20)), 25, 0, COLOR_WHITE)
+    except Exception:
+      pass

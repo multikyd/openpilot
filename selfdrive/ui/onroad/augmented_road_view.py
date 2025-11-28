@@ -147,7 +147,7 @@ class AugmentedRoadView(CameraView):
       rl.draw_text(text, int(x), int(y), font_size, rl.WHITE)
 
       x += text_width + padding
-      
+
 
   def _switch_stream_if_needed(self, sm):
     if ui_state.gearShifter == car.CarState.GearShifter.reverse:

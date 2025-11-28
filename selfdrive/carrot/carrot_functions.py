@@ -79,7 +79,7 @@ class CarrotPlanner:
     self.stopSignCount = 0
 
     self.stop_distance = 6.0
-    self.trafficStopDistanceAdjust = 2.5 #params.get("TrafficStopDistanceAdjust") / 100.
+    self.trafficStopDistanceAdjust = 2.5 #params.get("TrafficStopDistanceAdjust")
     self.comfortBrake = 2.4
     self.comfort_brake = self.comfortBrake
     self.a_change_cost2 = 30
@@ -151,30 +151,29 @@ class CarrotPlanner:
         self.myDrivingMode = myDrivingMode
 
     if self.params_count == 10:
-      self.myHighModeFactor = 1.2 #float(self.params.get("MyHighModeFactor")) / 100.
+      self.myHighModeFactor = 1.2 #self.params.get("MyHighModeFactor")
       self.trafficLightDetectMode = self.params.get("TrafficLightDetectMode") # 0: None, 1:Stop, 2:Stop&Go
     elif self.params_count == 20:
-      self.tFollowGap1 = self.params.get("TFollowGap1") / 100.
-      self.tFollowGap2 = self.params.get("TFollowGap2") / 100.
-      self.tFollowGap3 = self.params.get("TFollowGap3") / 100.
-      self.tFollowGap4 = self.params.get("TFollowGap4") / 100.
-      self.dynamicTFollow = self.params.get("DynamicTFollow") / 100.
-      self.dynamicTFollowLC = self.params.get("DynamicTFollowLC") / 100.
+      self.tFollowGap1 = self.params.get("TFollowGap1")
+      self.tFollowGap2 = self.params.get("TFollowGap2")
+      self.tFollowGap3 = self.params.get("TFollowGap3")
+      self.tFollowGap4 = self.params.get("TFollowGap4")
+      self.dynamicTFollow = self.params.get("DynamicTFollow")
+      self.dynamicTFollowLC = self.params.get("DynamicTFollowLC")
     elif self.params_count == 30:
-      self.cruiseMaxVals0 = self.params.get("CruiseMaxVals0") / 100.
-      self.cruiseMaxVals1 = self.params.get("CruiseMaxVals1") / 100.
-      self.cruiseMaxVals2 = self.params.get("CruiseMaxVals2") / 100.
-      self.cruiseMaxVals3 = self.params.get("CruiseMaxVals3") / 100.
-      self.cruiseMaxVals4 = self.params.get("CruiseMaxVals4") / 100.
-      self.cruiseMaxVals5 = self.params.get("CruiseMaxVals5") / 100.
-      self.cruiseMaxVals6 = self.params.get("CruiseMaxVals6") / 100.
+      self.cruiseMaxVals0 = self.params.get("CruiseMaxVals0")
+      self.cruiseMaxVals1 = self.params.get("CruiseMaxVals1")
+      self.cruiseMaxVals2 = self.params.get("CruiseMaxVals2")
+      self.cruiseMaxVals3 = self.params.get("CruiseMaxVals3")
+      self.cruiseMaxVals4 = self.params.get("CruiseMaxVals4")
+      self.cruiseMaxVals5 = self.params.get("CruiseMaxVals5")
+      self.cruiseMaxVals6 = self.params.get("CruiseMaxVals6")
     elif self.params_count == 40:
-      self.stop_distance = self.params.get("StopDistanceCarrot") / 100.
-      self.j_lead_factor = self.params.get("JLeadFactor3") / 100.
+      self.stop_distance = self.params.get("StopDistanceCarrot")
+      self.j_lead_factor = self.params.get("JLeadFactor3")
       self.eco_over_speed = self.params.get("CruiseEcoControl")
-      self.autoNaviSpeedDecelRate = float(self.params.get("AutoNaviSpeedDecelRate")) * 0.01
-      self.aChangeCostStaring = self.params.get("AChangeCostStarting")
-      self.trafficStopDistanceAdjust = self.params.get("TrafficStopDistanceAdjust") / 100.
+      self.autoNaviSpeedDecelRate = self.params.get("AutoNaviSpeedDecelRate")
+      self.trafficStopDistanceAdjust = self.params.get("TrafficStopDistanceAdjust")
       self.a_change_cost2 = self.params.get("AChangeCost2")
     elif self.params_count >= 100:
 
@@ -204,7 +203,7 @@ class CarrotPlanner:
   def _update_model_desire(self, sm):
     meta = sm['modelV2'].meta
     carState = sm['carState']
-    if meta.laneChangeState == LaneChangeState.laneChangeStarting: # laneChangig
+    if meta.laneChangeState in (LaneChangeState.laneChangeStarting, LaneChangeState.laneChangeMerging): # laneChangig
       self.desireState = meta.desireState[3] if carState.leftBlinker else meta.desireState[4]
       self.desireStateCount += 1
     else:
@@ -441,8 +440,8 @@ class CarrotPlanner:
           self.comfort_brake = self.comfortBrake * 0.9
           #self.comfort_brake = COMFORT_BRAKE
           self.trafficStopAdjustRatio = np.interp(v_ego_kph, [0, 100], [1.0, 0.7])
-          stop_dist = self.xStop * np.interp(self.xStop, [0, 50], [1.0, self.trafficStopAdjustRatio])  ##�����Ÿ��� ���� �����Ÿ� ��������
-          if stop_dist > 10.0: ### 10M�̻��϶���, self.actual_stop_distance�� ������Ʈ��.
+          stop_dist = self.xStop * np.interp(self.xStop, [0, 50], [1.0, self.trafficStopAdjustRatio])
+          if stop_dist > 10.0:
             self.actual_stop_distance = stop_dist
           stop_model_x = 0
           self.fakeCruiseDistance = 0 if self.actual_stop_distance > 10.0 else 10.0
@@ -496,7 +495,7 @@ class CarrotPlanner:
     #   f"stopDist={self.actual_stop_distance:.1f}," +
     #   f"Traffic={str(self.trafficState)}"
     # )
-    #��ȣ�� �������� self.xState.value
+    #self.xState.value
 
     stop_dist =  stop_model_x + self.actual_stop_distance
     stop_dist = max(stop_dist, v_ego ** 2 / (self.comfort_brake * 2))

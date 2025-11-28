@@ -86,6 +86,8 @@ class CarState(CarStateBase):
     self.adrv_info_1ea = None
     self.adrv_info_160 = None
     self.adrv_info_162 = None
+    self.adrv_info_345 = None
+    self.adrv_info_1da = None
     self.hda_info_4a3 = None
     self.cluster_speed_limit_info = None
     self.new_msg_4b4 = None
@@ -132,13 +134,15 @@ class CarState(CarStateBase):
       ecu_disabled = True
 
     if ecu_disabled:
-      self.SCC11 = self.SCC12 = self.SCC13 = self.SCC14 = False
+      self.SCC11 = self.SCC12 = self.SCC13 = self.SCC14 = self.FCA11 = False
     else:
       bus_cruise = 2 if self.CP.flags & HyundaiFlags.CAMERA_SCC else 0
       self.SCC11 = True if 1056 in fingerprints[bus_cruise] else False
       self.SCC12 = True if 1057 in fingerprints[bus_cruise] else False
       self.SCC13 = True if 1290 in fingerprints[bus_cruise] else False
       self.SCC14 = True if 905 in fingerprints[bus_cruise] else False
+    self.FCA11 = False
+    self.FCA11_bus = Bus.cam
       
     self.HAS_LFA_BUTTON = True if 913 in fingerprints[0] else False
     self.CRUISE_BUTTON_ALT = True if 1007 in fingerprints[0] else False
@@ -151,6 +155,8 @@ class CarState(CarStateBase):
     self.ADRV_0x200 = True if 0x200 in fingerprints[cam_bus] else False
     self.ADRV_0x1ea = True if 0x1ea in fingerprints[cam_bus] else False
     self.ADRV_0x160 = True if 0x160 in fingerprints[cam_bus] else False
+    self.ADRV_0x345 = True if 0x345 in fingerprints[cam_bus] else False
+    self.ADRV_0x1DA = True if 0x1da in fingerprints[cam_bus] else False
     self.LFAHDA_CLUSTER = True if 480 in fingerprints[cam_bus] else False
     self.HDA_INFO_4A3 = True if 0x4a3 in fingerprints[pt_bus] else False
     self.CLU_SPD_LIM_INFO = True if 0x1fa in fingerprints[pt_bus] else False
@@ -163,10 +169,8 @@ class CarState(CarStateBase):
     self.TPMS = True if 0x3a0 in fingerprints[pt_bus] else False
     self.LOCAL_TIME = True if 1264 in fingerprints[pt_bus] else False
 
-    self.cp_bsm = None
     self.time_zone = "UTC"
-    
-    self.controls_ready_count = 0
+
   def get_tpms(self, unit, fl, fr, rl, rr):
     factor = 0.72519 if unit == 1 else 0.1 if unit == 2 else 1 # 0:psi, 1:kpa, 2:bar
     tpms = car.CarState.TPMS.new_message()
@@ -179,21 +183,9 @@ class CarState(CarStateBase):
 
   def update(self, can_parsers) -> structs.CarState:
 
-    if self.controls_ready_count <= 200:
-      if Params().get_bool("ControlsReady"):
-        self.controls_ready_count += 1
     cp = can_parsers[Bus.pt]
     cp_cam = can_parsers[Bus.cam]
     cp_alt = can_parsers[Bus.alt] if Bus.alt in can_parsers else None
-    if self.controls_ready_count == 50:
-      cp.controls_ready = cp_cam.controls_ready = True
-      if cp_alt is not None:
-        cp_alt.controls_ready = True
-    elif self.controls_ready_count == 100:
-      print("cp_cam.seen_addresses =", cp_cam.seen_addresses)
-      print("cp.seen_addresses =", cp.seen_addresses)
-      if cp_alt is not None:
-        print("cp_alt.seen_addresses =", cp_alt.seen_addresses)
 
     if self.CP.flags & HyundaiFlags.CANFD:
       return self.update_canfd(can_parsers)
@@ -377,6 +369,7 @@ class CarState(CarStateBase):
     self.scc12 = cp_cruise.vl["SCC12"] if self.SCC12 else None
     self.scc13 = cp_cruise.vl["SCC13"] if self.SCC13 else None
     self.scc14 = cp_cruise.vl["SCC14"] if self.SCC14 else None
+    self.fca11 = can_parsers[self.FCA11_bus].vl["FCA11"] if self.FCA11 else None
     cluSpeed = cp.vl["CLU11"]["CF_Clu_Vanz"]
     decimal = cp.vl["CLU11"]["CF_Clu_VanzDecimal"]
     if 0. < decimal < 0.5:
@@ -461,7 +454,14 @@ class CarState(CarStateBase):
     ret.brakeLights = ret.brakePressed or cp.vl["TCS"]["BrakeLight"] == 1 or ret.brakeHoldActive or self.i_pedel_stop
 
     ret.steeringRateDeg = cp.vl["STEERING_SENSORS"]["STEERING_RATE"]
-    ret.steeringAngleDeg = cp.vl["STEERING_SENSORS"]["STEERING_ANGLE"] * -1
+
+    # steering angle deg값이 이상함. mdps값이 더 신뢰가 가는듯.. torque steering 차량도 확인해야함.
+    #ret.steeringAngleDeg = cp.vl["STEERING_SENSORS"]["STEERING_ANGLE"] * -1
+    if self.CP.flags & HyundaiFlags.ANGLE_CONTROL:
+      ret.steeringAngleDeg = cp.vl["MDPS"]["STEERING_ANGLE_2"] * -1
+    else:
+      ret.steeringAngleDeg = cp.vl["STEERING_SENSORS"]["STEERING_ANGLE"] * -1
+
     ret.steeringTorque = cp.vl["MDPS"]["STEERING_COL_TORQUE"]
     ret.steeringTorqueEps = cp.vl["MDPS"]["STEERING_OUT_TORQUE"]
     ret.steeringPressed = self.update_steering_pressed(abs(ret.steeringTorque) > self.params.STEER_THRESHOLD, 5)
@@ -479,17 +479,10 @@ class CarState(CarStateBase):
     ret.leftBlinker, ret.rightBlinker = self.update_blinker_from_lamp(50, left_blinker_lamp, right_blinker_lamp)
 
     if self.CP.enableBsm:
-      if self.cp_bsm is None:
-        if 442 in cp.seen_addresses:
-          self.cp_bsm = cp
-          print("######## BSM in ECAN")
-        elif 442 in cp_cam.seen_addresses:
-          self.cp_bsm = cp_cam
-          print("######## BSM in CAM")
-      else:
-        bsm_info = self.cp_bsm.vl["BLINDSPOTS_REAR_CORNERS"]
-        ret.leftBlindspot = (bsm_info["FL_INDICATOR"] + bsm_info["INDICATOR_LEFT_TWO"] + bsm_info["INDICATOR_LEFT_FOUR"]) > 0
-        ret.rightBlindspot = (bsm_info["FR_INDICATOR"] + bsm_info["INDICATOR_RIGHT_TWO"] + bsm_info["INDICATOR_RIGHT_FOUR"]) > 0
+      cp_bsm = cp_cam if self.CP.flags & HyundaiFlags.CAMERA_SCC.value else cp
+      bsm_info = cp_bsm.vl["BLINDSPOTS_REAR_CORNERS"]
+      ret.leftBlindspot = (bsm_info["FL_INDICATOR"] + bsm_info["INDICATOR_LEFT_TWO"] + bsm_info["INDICATOR_LEFT_FOUR"]) > 0
+      ret.rightBlindspot = (bsm_info["FR_INDICATOR"] + bsm_info["INDICATOR_RIGHT_TWO"] + bsm_info["INDICATOR_RIGHT_FOUR"]) > 0
 
     # cruise state
     if cp.vl[self.cruise_btns_msg_canfd]["CRUISE_BUTTONS"] in [Buttons.RES_ACCEL, Buttons.SET_DECEL] and self.CP.openpilotLongitudinalControl:
@@ -553,6 +546,8 @@ class CarState(CarStateBase):
           ret.leftLatDist = self.adrv_info_1ea["LF_DETECT_LATERAL"]
           ret.rightLatDist = self.adrv_info_1ea["RF_DETECT_LATERAL"]
       self.adrv_info_160 = cp_cam.vl["ADRV_0x160"] if self.ADRV_0x160 else None
+      self.adrv_info_345 = cp_cam.vl["ADRV_0x345"] if self.ADRV_0x345 else None
+      self.adrv_info_1da = cp_cam.vl["ADRV_0x1da"] if self.ADRV_0x1DA else None
 
       self.hda_info_4a3 = cp.vl["HDA_INFO_4A3"] if self.HDA_INFO_4A3 else None
       if self.hda_info_4a3 is not None:
@@ -648,10 +643,8 @@ class CarState(CarStateBase):
     ret.accFaulted = cp.vl["TCS"]["ACCEnable"] != 0  # 0 ACC CONTROL ENABLED, 1-3 ACC CONTROL DISABLED
 
     if not (self.CP.flags & HyundaiFlags.CAMERA_SCC):
-      if self.msg_0x362 is not None or 0x362 in cp_cam.seen_addresses:
-        self.msg_0x362 = cp_cam.vl["CAM_0x362"]
-      elif self.msg_0x2a4 is not None or 0x2a4 in cp_cam.seen_addresses:
-        self.msg_0x2a4 = cp_cam.vl["CAM_0x2a4"]
+      self.msg_0x362 = cp_cam.vl["CAM_0x362"]
+      self.msg_0x2a4 = cp_cam.vl["CAM_0x2a4"]
 
     speed_conv = CV.KPH_TO_MS # if self.is_metric else CV.MPH_TO_MS
     cluSpeed = cp.vl["CRUISE_BUTTONS_ALT"]["CLU_SPEED"]
