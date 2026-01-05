@@ -219,6 +219,9 @@ class LateralPlanner:
     lateralPlan.modelMonoTime = sm.logMonoTime['modelV2']
     lateralPlan.dPathPoints = self.y_pts.tolist()
     lateralPlan.psis = self.lat_mpc.x_sol[0:CONTROL_N, 2].tolist()
+    lateralPlan.lProb = float(self.LP.lll_prob)
+    lateralPlan.rProb = float(self.LP.rll_prob)
+
     lateralPlan.distances = self.lat_mpc.x_sol[0:CONTROL_N, 0].tolist()
 
     v_div = np.maximum(self.v_plan[:CONTROL_N], 6.0)

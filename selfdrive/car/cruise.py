@@ -242,7 +242,7 @@ class VCruiseCarrot:
 
   def update_params(self, is_metric):
     unit_factor = 1.0 if is_metric else CV.MPH_TO_KPH
-    if self.frame % 10 == 0:
+    if self.frame % 300 == 0:
       self.autoCruiseControl = self.params.get("AutoCruiseControl") * unit_factor
       self.autoGasTokSpeed = self.params.get("AutoGasTokSpeed") * unit_factor
       self.autoGasSyncSpeed = self.params.get_bool("AutoGasSyncSpeed")
@@ -435,7 +435,11 @@ class VCruiseCarrot:
     return button_kph, button_type, self.long_pressed
 
   def _carrot_command(self, v_cruise_kph, button_type, long_pressed):
-    carrot_speed = self.params_memory.get("CarrotSpeed")
+    if button_type != 0:
+      self.params_memory.put_nonblocking("CarrotSpeed", 0)
+      carrot_speed = 0
+    else:
+      carrot_speed = self.params_memory.get("CarrotSpeed")
     if carrot_speed != 0:
       if carrot_speed > 0:
         if self.smartSpeedControl in [1,3]:
@@ -447,7 +451,7 @@ class VCruiseCarrot:
         #  v_cruise_kph = max(-carrot_speed, v_cruise_kph)
         elif self.smartSpeedControl == 2:
           v_cruise_kph = min(-carrot_speed, v_cruise_kph)
-      self.params_memory.put_nonblocking("CarrotSpeed", 0)
+      #self.params_memory.put_nonblocking("CarrotSpeed", 0)
       self._add_log(f"Carrot speed set to {v_cruise_kph}")
     if self.carrot_cmd_index_last != self.carrot_cmd_index:
       self.carrot_cmd_index_last = self.carrot_cmd_index
@@ -592,9 +596,12 @@ class VCruiseCarrot:
         self._add_log("Lateral " + "enabled" if self._lat_enabled else "disabled")
 
     if self._paddle_mode > 0 and button_type in [ButtonType.paddleLeft, ButtonType.paddleRight]:  # paddle button
-      self._cruise_control(-2, -1, "Cruise off & Ready (paddle)")
-      if self._paddle_mode == 2:
-        self._paddle_decel_active = True
+      if self._paddle_mode == 3:
+        self.carrot_cruise_active = True
+      else:
+        self._cruise_control(-2, -1, "Cruise off & Ready (paddle)")
+        if self._paddle_mode == 2:
+          self._paddle_decel_active = True
     elif self._paddle_decel_active:
       if not CC.enabled:
         self._cruise_control(1, -1, "Cruise on (paddle decel)")
@@ -805,8 +812,6 @@ class VCruiseCarrot:
       self._brake_pressed_count = max(1, self._brake_pressed_count + 1)
       if self._brake_pressed_count == 1 and self.enabled_last:
         self._v_cruise_kph_at_brake = self.v_cruise_kph_last
-        #if self.autoRoadSpeedLimitOffset > 0:
-        #  self._v_cruise_kph_at_brake = self.nRoadLimitSpeed + self.autoRoadSpeedLimitOffset
         self._add_log(f"{self.v_cruise_kph} Cruise speed at brake")
       self._soft_hold_count = self._soft_hold_count + 1 if CS.vEgo < 0.1 and CS.gearShifter == GearShifter.drive else 0
       if self.autoCruiseControl == 0 or self.CP.pcmCruise:

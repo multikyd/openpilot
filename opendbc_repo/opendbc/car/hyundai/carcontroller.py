@@ -54,6 +54,38 @@ def process_hud_alert(enabled, fingerprint, hud_control):
 
   return sys_warning, sys_state, left_lane_warning, right_lane_warning
 
+def calc_rate_limit_by_lat_accel(delta_deg: float,
+                                 v_ego: float,
+                                 wheelbase: float,
+                                 max_lat_accel: float,
+                                 max_rate_low: float,
+                                 max_rate_high: float) -> float:
+  """
+  반환값: 허용 스티어링휠 각속도 (deg/s)
+  delta_deg : 현재 스티어링휠 각도 (deg)
+  v_ego     : 속도 (m/s)
+  wheelbase : 축거 (m)
+  """
+
+  # v가 너무 작으면 공식이 터지니까, 저속 전용 상수 사용
+  if v_ego < 0.5:
+    return max_rate_low   # 예: 300 deg/s
+
+  delta_rad = np.radians(delta_deg)
+
+  # cos^2 항이 0에 가까워지면 rate가 폭발하니 하한 넣어줌
+  cos_delta = np.cos(delta_rad)
+  cos2 = max(cos_delta * cos_delta, 0.05)   # 0.05 정도면 충분
+
+  # 물리식: |δ̇| <= L * a_lat_max / (v^2 * sec^2(δ))
+  # 여기서 sec^2(δ) = 1 / cos^2(δ)
+  delta_rate_rad_s = (wheelbase * max_lat_accel) / (v_ego * v_ego * cos2)
+
+  delta_rate_deg_s = np.degrees(delta_rate_rad_s)
+
+  # 저속에서는 너무 크지 않게, 고속에서는 너무 작지 않게 clip
+  #   max_rate_high <= delta_rate_deg_s <= max_rate_low
+  return float(np.clip(delta_rate_deg_s, max_rate_high, max_rate_low))
 
 class CarController(CarControllerBase):
   def __init__(self, dbc_names, CP):
@@ -97,6 +129,7 @@ class CarController(CarControllerBase):
     self.activeCarrot = 0
     self.camera_scc_params = Params().get("HyundaiCameraSCC")
     self.is_ldws_car = Params().get_bool("IsLdwsCar")
+    self.enable_corner_radar = 0
 
     self.traffic_detection_mode = Params().get("TrafficLightDetectMode")
 
@@ -112,7 +145,7 @@ class CarController(CarControllerBase):
 
   def update(self, CC, CS, now_nanos):
 
-    if self.frame % 50 == 0:
+    if self.frame % 300 == 0:
       params = Params()
       self.max_angle_frames = params.get("MaxAngleFrames")
       steerMax = params.get("CustomSteerMax")
@@ -151,6 +184,7 @@ class CarController(CarControllerBase):
 
       self.canfd_debug = params.get("CanfdDebug")
       self.camera_scc_params = params.get("HyundaiCameraSCC")
+      self.enable_corner_radar = params.get("EnableCornerRadar")
 
     actuators = CC.actuators
     hud_control = CC.hudControl
@@ -178,12 +212,41 @@ class CarController(CarControllerBase):
                                                                        self.angle_limit_counter, self.max_angle_frames,
                                                                        MAX_ANGLE_CONSECUTIVE_FRAMES)
 
-    apply_angle = apply_std_steer_angle_limits(actuators.steeringAngleDeg, self.apply_angle_last, CS.out.vEgoRaw, 
-                                               CS.out.steeringAngleDeg, CC.latActive, self.params.ANGLE_LIMITS)
+    #apply_angle = apply_std_steer_angle_limits(actuators.steeringAngleDeg, self.apply_angle_last, CS.out.vEgoRaw, 
+    #                                           CS.out.steeringAngleDeg, CC.latActive, self.params.ANGLE_LIMITS)
 
-    if abs(apply_angle - self.apply_angle_last) > 0.1:
-      alpha = min(0.1 + 0.9 * CS.out.vEgoRaw / (30.0 * CV.KPH_TO_MS), 1.0)
-      apply_angle = self.apply_angle_last * (1 - alpha) + apply_angle * alpha
+    MAX_LAT_ACCEL = 8.0
+    MAX_RATE_LOW = 200 # 저속, deg/s
+    MAX_RATE_HIGH = 40 # 고속, deg/s
+    UNWIND_SCALE = 1.5
+    UNWIND_MAX = 200
+
+    delta = actuators.steeringAngleDeg - self.apply_angle_last
+    same_dir = (np.sign(delta) == np.sign(self.apply_angle_last)) or (abs(self.apply_angle_last) < 2.0)
+
+    rate_deg_s = calc_rate_limit_by_lat_accel(self.apply_angle_last, CS.out.vEgoRaw, self.CP.wheelbase, MAX_LAT_ACCEL, MAX_RATE_LOW, MAX_RATE_HIGH)
+    if not same_dir:
+      rate_deg_s = min(rate_deg_s * UNWIND_SCALE, UNWIND_MAX)
+      
+    rate_deg_per_tick = rate_deg_s * DT_CTRL
+    apply_angle = np.clip(actuators.steeringAngleDeg,
+                        self.apply_angle_last - rate_deg_per_tick,
+                        self.apply_angle_last + rate_deg_per_tick)
+
+    angle_limits = self.params.ANGLE_LIMITS
+    apply_angle = np.clip(apply_angle, -angle_limits.STEER_ANGLE_MAX, angle_limits.STEER_ANGLE_MAX)
+
+    #if abs(apply_angle - self.apply_angle_last) > 0.1:
+    #  alpha = min(0.1 + 0.9 * CS.out.vEgoRaw / (30.0 * CV.KPH_TO_MS), 1.0)
+    #  apply_angle = self.apply_angle_last * (1 - alpha) + apply_angle * alpha
+
+    v_ego_kph = CS.out.vEgoRaw * CV.MS_TO_KPH
+    #if abs(apply_angle - self.apply_angle_last) < 0.1:
+    #  alpha = min(0.05 + 0.45 * v_ego_kph / 30.0, 0.5)
+    #else:
+    #  alpha = 1.0 # min(0.1 + 0.9 * v_ego_kph / 30.0, 1.0)
+    alpha = np.interp(v_ego_kph, [0, 20, 30], [0.5, 0.8, 1.0])
+    apply_angle = self.apply_angle_last * (1 - alpha) + apply_angle * alpha
 
     if angle_control:
       apply_steer_req = CC.latActive
@@ -297,7 +360,7 @@ class CarController(CarControllerBase):
         self.hyundai_jerk.check_carrot_cruise(CC, CS, hud_control, stopping, accel, actuators.aTarget)
 
         if True: #not camera_scc:
-          can_sends.extend(hyundaicanfd.create_ccnc_messages(self.CP, self.packer, self.CAN, self.frame, CC, CS, hud_control, apply_angle, left_lane_warning, right_lane_warning, self.canfd_debug, self.MainMode_ACC_trigger, self.LFA_trigger))
+          can_sends.extend(hyundaicanfd.create_ccnc_messages(self.CP, self.packer, self.CAN, self.frame, CC, CS, hud_control, apply_angle, left_lane_warning, right_lane_warning, self.enable_corner_radar))
           # if hda2:
           #   can_sends.extend(hyundaicanfd.create_adrv_messages(self.CP, self.packer, self.CAN, self.frame))
           # else:
@@ -577,23 +640,29 @@ class HyundaiJerk:
     self.jerk_u_min = 0.5
     self.carrot_cruise = 1
     self.carrot_cruise_accel = 0.0
+    self.carrot_cruise_decel = self.params.get("CarrotCruiseDecel", return_default=True)
+    self.carrot_cruise_atc_decel = self.params.get("CarrotCruiseAtcDecel", return_default=True)
+    self.timer = 0
 
   def check_carrot_cruise(self, CC, CS, hud_control, stopping, accel, a_target):
-    carrot_cruise_decel = self.params.get("CarrotCruiseDecel", return_default=True)
-    carrot_cruise_atc_decel = self.params.get("CarrotCruiseAtcDecel", return_default=True)
-    if carrot_cruise_atc_decel >= 0 and 0 < hud_control.atcDistance < 500:
-      carrot_cruise_decel = max(carrot_cruise_decel, carrot_cruise_atc_decel)
+    self.timer += 1
+    if self.timer % int(3.0/DT_CTRL) == 0:
+      self.timer = 0
+      self.carrot_cruise_decel = self.params.get("CarrotCruiseDecel", return_default=True)
+      self.carrot_cruise_atc_decel = self.params.get("CarrotCruiseAtcDecel", return_default=True)
+    if self.carrot_cruise_atc_decel >= 0 and 0 < hud_control.atcDistance < 500:
+      self.carrot_cruise_decel = max(self.carrot_cruise_decel, self.carrot_cruise_atc_decel)
     self.carrot_cruise = 0
     if CS.out.carrotCruise > 0 and not CC.cruiseControl.override:
       if CS.softHoldActive == 0 and not stopping:
         if CS.out.vEgo > 10/3.6:
-          if carrot_cruise_decel < 0:
+          if self.carrot_cruise_decel < 0:
             if (a_target > -0.1 or accel > -0.1):
               self.carrot_cruise = 1
               self.carrot_cruise_accel = 0.0
           else:
             self.carrot_cruise = 2
-            carrot_cruise = min(accel, -carrot_cruise_decel * 0.01)
+            carrot_cruise = min(accel, -self.carrot_cruise_decel * 0.01)
             self.carrot_cruise_accel = max(carrot_cruise, self.carrot_cruise_accel - 1.0 * DT_CTRL) #  점진적으로 줄임.
     if self.carrot_cruise == 0:
       self.carrot_cruise_accel = CS.out.aEgo

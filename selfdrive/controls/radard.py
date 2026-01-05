@@ -379,22 +379,35 @@ class RadarD:
     self.vision_tracks = [VisionTrack(DT_MDL), VisionTrack(DT_MDL)]
 
     self.params = Params()
-    self.enable_radar_tracks = self.params.get("EnableRadarTracks")
-    self.enable_corner_radar = self.params.get("EnableCornerRadar")
-    self.radar_lat_factor = 0.0
+    self.enable_radar_tracks = self.params.get("EnableRadarTracks", return_default=True)
+    self.enable_corner_radar = self.params.get("EnableCornerRadar", return_default=True)
+    self.radar_lat_factor = self.params.get("RadarLatFactor", return_default=True)
+    self.radar_reaction_factor = self.params.get("RadarReactionFactor", return_default=True)
+    self.detect_cut_in = self.radar_lat_factor > 0
 
     self.radar_detected = False
+
+    self._corner_lat_hist = {
+      "L": deque(maxlen=20),
+      "R": deque(maxlen=20),
+    }
+    self._corner_state = {"L": 0, "R": 0}  # -1,0,+1
+
+    self.timer = 0
 
 
   def update(self, sm: messaging.SubMaster, rr: car.RadarData):
     self.ready = sm.seen['modelV2']
     self.current_time = 1e-9*max(sm.logMonoTime.values())
 
-    self.enable_radar_tracks = self.params.get("EnableRadarTracks")
-    self.enable_corner_radar = self.params.get("EnableCornerRadar")
-    self.radar_lat_factor = self.params.get("RadarLatFactor")
-    self.radar_reaction_factor = self.params.get("RadarReactionFactor")
-    self.detect_cut_in = self.radar_lat_factor > 0
+    self.timer += 1
+    if self.timer % int(3.0/DT_MDL) == 0:
+      self.timer = 0
+      self.enable_radar_tracks = self.params.get("EnableRadarTracks")
+      self.enable_corner_radar = self.params.get("EnableCornerRadar")
+      self.radar_lat_factor = self.params.get("RadarLatFactor")
+      self.radar_reaction_factor = self.params.get("RadarReactionFactor")
+      self.detect_cut_in = self.radar_lat_factor > 0
 
     leads_v3 = sm['modelV2'].leadsV3
     if sm.recv_frame['carState'] != self.last_v_ego_frame:
@@ -480,7 +493,7 @@ class RadarD:
 
     if (track is None or lead_msg.prob < .6) and track_scc is not None and track_scc.cnt > 2:
       #if self.enable_radar_tracks in [-1, 2] or model_v_ego < 5 or track_scc.vLead < 5.0:
-      if self.enable_radar_tracks in [-1, 2] or track_scc.vLead < 5.0:
+      if self.enable_radar_tracks in [-1, 2] and track_scc.vLead < 5.0:
         track = track_scc      
 
     lead_dict = {'status': False}
@@ -491,7 +504,7 @@ class RadarD:
     elif (track is None) and ready and (lead_msg.prob > .5):
         lead_dict = self.vision_tracks[index].get_lead(md)
 
-    if self.enable_corner_radar > 0:
+    if self.enable_corner_radar > 1:
       lead_dict = self.corner_radar(CS, lead_dict)
 
     if low_speed_override:
@@ -522,7 +535,7 @@ class RadarD:
     for c in tracks.values():
       y_rel_neg = - c.yRel
       # center
-      if c.in_lane_prob > 0.1:
+      if c.in_lane_prob > 0.3:
         if c.cnt > 3:
           ld = c.get_RadarState(lead_msg.prob, float(-lead_msg.y[0]))
           ld['modelProb'] = 0.01
@@ -641,19 +654,74 @@ class RadarD:
         self.radar_state.leadOne = chosen
         self.radar_detected = detected
 
-  
-  def corner_radar(self, CS, lead_dict):
-    lat_dist = 1e6
-    long_dist = 1e6
-    if 0 < CS.leftLatDist < 2.5:
-      lat_dist = CS.leftLatDist
-      long_dist = CS.leftLongDist
-    if 0 < CS.rightLatDist < 2.5 and CS.rightLongDist < long_dist:
-      lat_dist = -CS.rightLatDist
-      long_dist = CS.rightLongDist
+  def _corner_update_state(self, side: str, cur_lat: float, enter_lat: float = 2.5) -> int:
+    # 유효 범위 밖이면 리셋
+    if not (0.0 < cur_lat < enter_lat):
+      self._corner_lat_hist[side].clear()
+      self._corner_state[side] = 0
+      return 0
 
-    if lat_dist == 0.0 or abs(lat_dist) >= 2.5 or long_dist == 1e6:
+    h = self._corner_lat_hist[side]
+    h.append(cur_lat)
+
+    n = len(h)
+    if n < 3:
+      # 데이터 너무 적으면 이전 상태 유지
+      return self._corner_state[side]
+
+    delta = h[-1] - h[0]
+    th = 0.3 * (20 / n)
+
+    if delta < -th:
+      self._corner_state[side] = +1   # approaching
+    elif delta > th:
+      self._corner_state[side] = -1   # leaving
+    else:
+      self._corner_state[side] = 0    # maintain
+
+    return self._corner_state[side]
+ 
+  def corner_radar(self, CS, lead_dict):
+    ENTER_LAT = 2.2
+    KEEP_LAT  = 2.0
+    EXIT_LAT  = 1.2
+
+    left_lat, right_lat = abs(CS.leftLatDist), abs(CS.rightLatDist)
+    left_state  = self._corner_update_state("L", left_lat)
+    right_state = self._corner_update_state("R", right_lat)
+
+    # 1) left usable?
+    left_ok = False
+    if left_state > 0:
+      left_ok = left_lat < ENTER_LAT
+    elif left_state == 0:
+      left_ok = 0 < left_lat < KEEP_LAT
+    else:  # leaving
+      left_ok = left_lat <= EXIT_LAT
+
+    # 2) right usable?
+    right_ok = False
+    if right_state > 0:
+      right_ok = right_lat < ENTER_LAT
+    elif right_state == 0:
+      right_ok = 0 < right_lat < KEEP_LAT
+    else:
+      right_ok = right_lat <= EXIT_LAT
+
+    # 3) 아무도 못 쓰면 skip
+    if not left_ok and not right_ok:
       return lead_dict
+
+    # 4) 둘 다 되면 longDist로 선택
+    if left_ok and right_ok:
+      if CS.leftLongDist <= CS.rightLongDist:
+        lat_dist, long_dist = +left_lat, CS.leftLongDist
+      else:
+        lat_dist, long_dist = -right_lat, CS.rightLongDist
+    elif left_ok:
+      lat_dist, long_dist = +left_lat, CS.leftLongDist
+    else:
+      lat_dist, long_dist = -right_lat, CS.rightLongDist
     
     if lead_dict['status']:
       if lead_dict['dRel'] > long_dist:

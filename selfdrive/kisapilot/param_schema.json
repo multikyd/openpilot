@@ -1413,7 +1413,7 @@
     "param": "ShowDebugUI",
     "value_type": "INT",
     "min_value": 0,
-    "max_value": 2,
+    "max_value": 3,
     "step": 1,
     "decimal_places": 0,
     "special_texts": {
@@ -1426,13 +1426,17 @@
         "en": "Dev Stat"
       },
       "2": {
-        "ko": "디바이스 상태 + 세이프티",
-        "en": "Dev Stat + Safety"
+        "ko": "+ UI 메시지",
+        "en": "+ UI Msgs"
+      },
+      "3": {
+        "ko": "+ 디버그 메시지",
+        "en": "+ Debut Msgs"
       }
     },
     "description": {
-      "ko": "장치 상태 및 안전 관련 디버그 정보를 화면에 표시합니다.",
-      "en": "Displays device status and safety-related debug information on the screen."
+      "ko": "장치 상태 및 차량 신호 관련 디버그 정보를 화면에 표시합니다.",
+      "en": "Displays device status, car signals and debug information on the screen."
     }
   },
   {

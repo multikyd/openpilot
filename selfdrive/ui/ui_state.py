@@ -155,6 +155,8 @@ class UIState:
     self.autoHold: bool = False
     self.aReqValue: float = 0.0
     self.latEnabled: bool = False
+    self.lProb: float = 0.0
+    self.rProb: float = 0.0
 
     self.enabled: bool = False
     self.show_ui_bsm: bool = self.params.get_bool("KisaBlindSpotDetect")
@@ -326,6 +328,11 @@ class UIState:
       self.aReqValue = car_state.aReqValue
       self.latEnabled = car_state.latEnabled
       self.cruise_gap = car_state.cruiseGap
+
+    if self.sm.updated["lateralPlan"]:
+      lat_plan = self.sm["lateralPlan"]
+      self.lProb = lat_plan.lProb
+      self.rProb = lat_plan.rProb
 
     if self.sm.updated["carrotMan"]:
       carrotman_state = self.sm["carrotMan"]

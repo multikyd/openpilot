@@ -469,7 +469,14 @@ class HudRenderer(Widget):
     if s.cruise_gap:
       gap_count = int(s.cruise_gap)
       gap_w, gap_h, spacing, radius = 50, 12, 6, 0
-      color = rl.Color(0, 150, 255, 255)
+      if gap_count == 1:
+        color = rl.Color(220, 60, 60, 255)    # Red
+      elif gap_count == 2:
+        color = rl.Color(230, 200, 60, 255)   # Yellow
+      elif gap_count == 3:
+        color = rl.Color(60, 200, 120, 255)   # Green
+      else:
+        color = rl.Color(230, 230, 230, 255)  # White
       border = rl.WHITE
       x = x_center - gap_w // 2 + 15
       base_y = y_center - img.height // 2 - 20
@@ -522,6 +529,18 @@ class HudRenderer(Widget):
         ("AngOffset", f"{s.angleOffsetDeg:.1f}°"),
         ("SteerRatio", f"{s.steerRatio:.2f}"),
         ("Accel", f"{s.accel:.2f}"),
+        ("LaneProb", f"{s.lProb:.1f}|{s.rProb:.1f}"),
+      ]
+
+    kisa_debug_lines = []
+    if ui_state.debug_msg > 2:
+      kisa_debug_lines = [
+        ("panda", f"{s.pandaSafetyModel}"),
+        ("interface", f"{s.interfaceSafetyModel}"),
+        ("rxCheck", "Pass" if s.rxChecks else "Fail"),
+        ("mismatch", "Pass" if s.mismatchCounter else "Fail"),
+        ("control", f"{s.controlAllowed}"),
+        ("enabled", f"{s.enabled}"),
       ]
 
     small_font_size = 30
@@ -586,6 +605,68 @@ class HudRenderer(Widget):
           rl.Color(255, 255, 255, 220)
         )
 
+    def draw_kisa_debug_box(box_x, box_y, debug_lines, box_width, bg_alpha=10):
+      line_font_size = 38
+      line_spacing = 10
+      line_height = line_font_size + line_spacing
+      padding = 5
+
+      total_lines = len(debug_lines)
+      box_height = total_lines * line_height + padding * 2
+
+      # Background
+      bg_color = rl.Color(0, 0, 0, bg_alpha)
+      rl.draw_rectangle(int(box_x), int(box_y), int(box_width), int(box_height), bg_color)
+
+      # Top / Bottom line
+      line_color = rl.Color(255, 255, 255, 180)
+      line_thickness = 5
+
+      try:
+        rl.draw_line_ex(
+          rl.Vector2(box_x, box_y),
+          rl.Vector2(box_x + box_width, box_y),
+          line_thickness,
+          line_color
+        )
+        rl.draw_line_ex(
+          rl.Vector2(box_x, box_y + box_height),
+          rl.Vector2(box_x + box_width, box_y + box_height),
+          line_thickness,
+          line_color
+        )
+      except Exception:
+        pass
+
+      # Text
+      for i, (key, value) in enumerate(debug_lines):
+        y = box_y + padding + i * line_height
+
+        text = f"{key}:"
+        value_text = f" {value}"
+
+        rl.draw_text_ex(
+          self._font_bold,
+          text,
+          rl.Vector2(box_x + padding, y),
+          line_font_size,
+          0,
+          rl.Color(200, 200, 200, 220)
+        )
+
+        key_width = rl.measure_text_ex(
+          self._font_bold, text, line_font_size, 0
+        ).x
+
+        rl.draw_text_ex(
+          self._font_bold,
+          value_text,
+          rl.Vector2(box_x + padding + key_width + (key_width*0.2), y),
+          line_font_size,
+          0,
+          rl.Color(255, 255, 255, 240)
+        )
+
     # Draw right box
     right_box_x = rect.x + rect.width - UI_CONFIG.border_size - UI_CONFIG.button_size + 15
     right_box_y = rect.y + UI_CONFIG.border_size + 210
@@ -595,6 +676,11 @@ class HudRenderer(Widget):
       left_box_x = rect.x + rect.width + UI_CONFIG.border_size - UI_CONFIG.button_size + 15 - 160 - 65
       left_box_y = rect.y + UI_CONFIG.border_size + 210
       draw_debug_box(left_box_x, left_box_y, left_debug_lines)
+
+    if kisa_debug_lines:
+      left_box_x = rect.x + rect.width + UI_CONFIG.border_size - UI_CONFIG.button_size + 15 - 160 - 65 - 1400
+      left_box_y = rect.y + UI_CONFIG.border_size + 210 - 100
+      draw_kisa_debug_box(left_box_x, left_box_y, kisa_debug_lines, box_width=300)
 
 class DrawPlot:
   PLOT_MAX = 400

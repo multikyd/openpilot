@@ -608,7 +608,7 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
   },
 
   EventName.laneChange: {
-    ET.WARNING: Alert(
+    ET.PERMANENT: Alert(
       "Changing Lanes",
       "",
       AlertStatus.normal, AlertSize.small,
@@ -1042,14 +1042,14 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
       Priority.LOW, VisualAlert.none, AudibleAlert.none, .1),
   },
   EventName.laneChangeMerging: {
-    ET.WARNING: Alert(
+    ET.PERMANENT: Alert(
       "Lane Change Merging",
       "",
       AlertStatus.clear, AlertSize.small,
       Priority.LOW, VisualAlert.none, AudibleAlert.none, .1),
   },
   EventName.laneChangeFinish: {
-    ET.WARNING: Alert(
+    ET.PERMANENT: Alert(
       "Lane Change Finished",
       "",
       AlertStatus.clear, AlertSize.small,
@@ -1142,7 +1142,7 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
      ET.WARNING: EngagementAlert(AudibleAlert.longDisengaged),
   },
   EventName.chimeAtResume: {
-    ET.WARNING: Alert(
+    ET.PERMANENT: Alert(
       "Start Moving",
       "",
       AlertStatus.normal, AlertSize.small,

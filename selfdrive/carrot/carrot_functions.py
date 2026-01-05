@@ -82,7 +82,7 @@ class CarrotPlanner:
     self.trafficStopDistanceAdjust = 2.5 #params.get("TrafficStopDistanceAdjust")
     self.comfortBrake = 2.4
     self.comfort_brake = self.comfortBrake
-    self.a_change_cost2 = 30
+    self.a_change_cost2 = 50
 
     self.soft_hold_active = 0
     self.events = Events()
@@ -134,11 +134,13 @@ class CarrotPlanner:
     self.atcType = ""
     self.atc_active = False
 
+    self._stop_x_rl = None
+
 
   def _params_update(self):
     self.frame += 1
     self.params_count += 1
-    if self.params_count % 10 == 0:
+    if self.params_count % 100 == 0:
       myDrivingMode = DrivingMode(self.params.get("MyDrivingMode"))
       if myDrivingMode != self.myDrivingMode_last:
         self.myDrivingMode_disable_auto = True
@@ -150,17 +152,17 @@ class CarrotPlanner:
       else:
         self.myDrivingMode = myDrivingMode
 
-    if self.params_count == 10:
+    if self.params_count == 100:
       self.myHighModeFactor = 1.2 #self.params.get("MyHighModeFactor")
       self.trafficLightDetectMode = self.params.get("TrafficLightDetectMode") # 0: None, 1:Stop, 2:Stop&Go
-    elif self.params_count == 20:
+    elif self.params_count == 120:
       self.tFollowGap1 = self.params.get("TFollowGap1")
       self.tFollowGap2 = self.params.get("TFollowGap2")
       self.tFollowGap3 = self.params.get("TFollowGap3")
       self.tFollowGap4 = self.params.get("TFollowGap4")
       self.dynamicTFollow = self.params.get("DynamicTFollow")
       self.dynamicTFollowLC = self.params.get("DynamicTFollowLC")
-    elif self.params_count == 30:
+    elif self.params_count == 130:
       self.cruiseMaxVals0 = self.params.get("CruiseMaxVals0")
       self.cruiseMaxVals1 = self.params.get("CruiseMaxVals1")
       self.cruiseMaxVals2 = self.params.get("CruiseMaxVals2")
@@ -168,14 +170,15 @@ class CarrotPlanner:
       self.cruiseMaxVals4 = self.params.get("CruiseMaxVals4")
       self.cruiseMaxVals5 = self.params.get("CruiseMaxVals5")
       self.cruiseMaxVals6 = self.params.get("CruiseMaxVals6")
-    elif self.params_count == 40:
+    elif self.params_count == 140:
       self.stop_distance = self.params.get("StopDistanceCarrot")
       self.j_lead_factor = self.params.get("JLeadFactor3")
       self.eco_over_speed = self.params.get("CruiseEcoControl")
       self.autoNaviSpeedDecelRate = self.params.get("AutoNaviSpeedDecelRate")
+      self.aChangeCostStarting = self.params.get("AChangeCostStarting")
       self.trafficStopDistanceAdjust = self.params.get("TrafficStopDistanceAdjust")
       self.a_change_cost2 = self.params.get("AChangeCost2")
-    elif self.params_count >= 100:
+    elif self.params_count >= 200:
 
       self.params_count = 0
 
@@ -281,7 +284,7 @@ class CarrotPlanner:
     if sm.alive['carrotMan']:
       carrot_man = sm['carrotMan']
       atc_turn_left = carrot_man.atcType in ["turn left", "atc left"]
-      trigger_start = self.carrot_staty_stop = False
+      trigger_start = self.carrot_stay_stop = False
       if atc_turn_left or sm['carState'].leftBlinker:
         if self.trafficState_carrot == 1 and carrot_man.trafficState == 3: # red -> left triggered
           trigger_start = True
@@ -354,8 +357,6 @@ class CarrotPlanner:
 
     leadOne = radarstate.leadOne
     self.mySafeFactor = 1.0
-    if leadOne.status and leadOne.vLead < 5 and leadOne.aLead < 0.2 and v_ego > 1.0: # 앞차가 매우 느리거나 정지한경우
-      self.myDrivingMode = DrivingMode.Safe
     if self.myDrivingMode == DrivingMode.Eco: # eco
       self.mySafeFactor = self.myEcoModeFactor
     elif self.myDrivingMode == DrivingMode.Safe: #safe
@@ -392,7 +393,18 @@ class CarrotPlanner:
     lead_detected = radarstate.leadOne.status # & radarstate.leadOne.radar
 
     self.xStop = self.update_stop_dist(x[31])
-    stop_model_x = self.xStop
+    stop_model_x_raw = self.xStop
+    if self._stop_x_rl is None:
+      self._stop_x_rl = stop_model_x_raw
+    else:
+      max_close = v_ego * DT_MDL + 0.5
+      if stop_model_x_raw > self._stop_x_rl:
+        self._stop_x_rl = stop_model_x_raw
+      else:
+        self._stop_x_rl = max(self._stop_x_rl - max_close, stop_model_x_raw)
+
+    stop_model_x = self._stop_x_rl
+    stop_model_x_rl = self._stop_x_rl
 
     trafficState_last = self.trafficState
     #self.check_model_stopping(v, v_ego, self.xStop, y)
@@ -404,7 +416,6 @@ class CarrotPlanner:
       self.trafficState = TrafficState.off
 
     #self.update_user_control()
-
     if carstate.gasPressed or carstate.brakePressed:
       self.user_stop_distance = -1
 
@@ -415,7 +426,7 @@ class CarrotPlanner:
     elif self.xState == XState.e2eStopped:
       if carstate.gasPressed:
         self.xState = XState.e2eCruise #XState.e2ePrepare
-      elif lead_detected and (radarstate.leadOne.dRel - stop_model_x) < 2.0:
+      elif lead_detected and (radarstate.leadOne.dRel - stop_model_x_raw) < 2.0:
         self.xState = XState.lead
       elif self.stopping_count == 0:
         if self.trafficState == TrafficState.green and not self.carrot_stay_stop and not carstate.leftBlinker and self.trafficLightDetectMode != 1:
@@ -430,7 +441,7 @@ class CarrotPlanner:
         #self.xState = XState.e2ePrepare
         self.xState = XState.e2eCruise
         self.traffic_starting_count = 10.0 / DT_MDL
-      elif lead_detected and (radarstate.leadOne.dRel - stop_model_x) < 2.0:
+      elif lead_detected and (radarstate.leadOne.dRel - stop_model_x_raw) < 2.0:
         self.xState = XState.lead
       else:
         if self.trafficState == TrafficState.green:
@@ -440,7 +451,7 @@ class CarrotPlanner:
           self.comfort_brake = self.comfortBrake * 0.9
           #self.comfort_brake = COMFORT_BRAKE
           self.trafficStopAdjustRatio = np.interp(v_ego_kph, [0, 100], [1.0, 0.7])
-          stop_dist = self.xStop * np.interp(self.xStop, [0, 50], [1.0, self.trafficStopAdjustRatio])
+          stop_dist = stop_model_x_rl * np.interp(stop_model_x_rl, [0, 50], [1.0, self.trafficStopAdjustRatio])  ##�����Ÿ��� ���� �����Ÿ� ��������
           if stop_dist > 10.0:
             self.actual_stop_distance = stop_dist
           stop_model_x = 0
@@ -466,7 +477,7 @@ class CarrotPlanner:
       elif self.trafficState == TrafficState.red and abs(carstate.steeringAngleDeg) < 30 and self.traffic_starting_count == 0:
         self.events.add(EventName.trafficStopping)
         self.xState = XState.e2eStop
-        self.actual_stop_distance = self.xStop
+        self.actual_stop_distance = stop_model_x_rl
       else:
         self.xState = XState.e2eCruise
 
@@ -489,6 +500,10 @@ class CarrotPlanner:
     elif self.actual_stop_distance > 0: ## e2eStop, e2eStopped�ΰ��..
       stop_model_x = 0.0
 
+    stopping_active = self.xState not in [XState.e2eStop, XState.e2eStopped]
+    if not stopping_active:
+      self._stop_x_rl = stop_model_x_raw
+
     # self.debugLongText = (
     #   f"XState({str(self.xState)})," +
     #   f"stop_x={stop_x:.1f}," +
@@ -498,7 +513,13 @@ class CarrotPlanner:
     #self.xState.value
 
     stop_dist =  stop_model_x + self.actual_stop_distance
-    stop_dist = max(stop_dist, v_ego ** 2 / (self.comfort_brake * 2))
+    stop_dist = max(stop_dist, 0.0)
+
+    stopping_active = (self.xState in [XState.e2eStop, XState.e2eStopped])
+    if stopping_active and stop_dist < 300.0:
+      stop_dist_soft = max(stop_dist - 1.0, 0.0)
+      v_soft = float(np.sqrt(max(0.0, 2.0 * self.comfort_brake * stop_dist_soft)))
+      v_cruise = min(v_cruise, v_soft)
 
     self.v_cruise = v_cruise
     self.stop_dist = stop_dist
@@ -511,19 +532,49 @@ class CarrotPlanner:
 class DrivingModeDetector:
     def __init__(self):
         self.congested = False
-        self.speed_threshold = 2  # (km/h)
-        self.accel_threshold = 1.5  # (m/s^2)
-        self.distance_threshold = 12  # (m)
-        self.lead_speed_exit_threshold = 35  # (km/h)
+
+        self.enter_count = 0
+        self.exit_count = 0
+        self.enter_needed = 3
+        self.exit_needed = 3
+
+        self.distance_threshold = 12
+        self.speed_threshold = 2
+        self.accel_threshold = 1.5
+        self.lead_speed_exit_threshold = 35
 
     def update_data(self, my_speed, lead_speed, my_accel, lead_accel, distance):
-        # 1. 정체 조건: 앞차가 가까이 있고 정지된 상황
-        if distance <= self.distance_threshold and lead_speed <= self.speed_threshold:
-            self.congested = True
+        # ---- 진입 조건(OR로 묶기) ----
+        enter = (
+            (distance <= self.distance_threshold and lead_speed <= self.speed_threshold) or
+            (lead_speed < 5 and lead_accel < 0.2 and my_speed > 1.0 and distance < 200)
+        )
 
-        # 2. 주행 조건: 앞차가 가속하거나 빠르게 이동
-        if lead_accel > self.accel_threshold or my_speed > self.lead_speed_exit_threshold or distance >= 200:
+        # ---- 탈출 조건(더 보수적으로) ----
+        exit_ = (
+            (lead_accel > self.accel_threshold) or
+            (my_speed > self.lead_speed_exit_threshold) or
+            (distance >= 200)
+        )
+
+        # ---- 디바운스 로직 ----
+        if enter:
+            self.enter_count += 1
+        else:
+            self.enter_count = 0
+
+        if exit_:
+            self.exit_count += 1
+        else:
+            self.exit_count = 0
+
+        if not self.congested and self.enter_count >= self.enter_needed:
+            self.congested = True
+            self.exit_count = 0  # 진입 시 반대 카운터 리셋
+
+        if self.congested and self.exit_count >= self.exit_needed:
             self.congested = False
+            self.enter_count = 0
 
     def get_mode(self):
         return DrivingMode.Safe if self.congested else DrivingMode.Normal

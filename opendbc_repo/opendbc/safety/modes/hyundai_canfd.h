@@ -303,6 +303,7 @@ static safety_config hyundai_canfd_init(uint16_t param) {
 
     {0xEA,  2, 24, .check_relay = true},  // MDPS
     {0x2AF, 2,  8, .check_relay = true},  // STEER_TOUCH
+    {0x4B9, 2,  8, .check_relay = true},
 
     {0x38C, 0, 32, .check_relay = false},
     {0x57A, 0, 32, .check_relay = false},
