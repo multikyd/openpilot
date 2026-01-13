@@ -1,5 +1,5 @@
 import unittest
-from tinygrad import Tensor, UOp, Context
+from tinygrad import Tensor, UOp
 from tinygrad.dtype import AddrSpace
 from tinygrad.uop.ops import KernelInfo, AxisType
 
@@ -102,6 +102,11 @@ def backward_gemm_custom(gradient:UOp, kernel:UOp) -> tuple[UOp, UOp]:
 # **** tests ****
 
 class TestCustomKernel(unittest.TestCase):
+  def test_empty(self):
+    a = Tensor.empty(1)
+    a = Tensor.custom_kernel(a, fxn=lambda _: UOp.sink())[0]
+    a.realize()
+
   def test_simple(self):
     a = Tensor.ones(16, 16).contiguous()
     b = Tensor.ones(16, 16).contiguous()
@@ -109,6 +114,17 @@ class TestCustomKernel(unittest.TestCase):
 
     c = Tensor.custom_kernel(c,a,b, fxn=custom_elementwise_add_kernel)[0]
 
+    out = c.flatten().tolist()
+    assert all(x == 2 for x in out), "all 2"
+
+  def test_simple_sharded(self):
+    devs = ("CPU:0", "CPU:1")
+
+    a = Tensor.ones(16, 16).contiguous().shard(devs, axis=0)
+    b = Tensor.ones(16, 16).contiguous().shard(devs, axis=0)
+    # ugly construction to get a sharded empty tensor
+    c = Tensor(Tensor.empty(8, 16, device=devs).uop.multi(0), device=devs)
+    c = Tensor.custom_kernel(c,a,b, fxn=custom_elementwise_add_kernel)[0]
     out = c.flatten().tolist()
     assert all(x == 2 for x in out), "all 2"
 
@@ -150,9 +166,14 @@ class TestCustomKernel(unittest.TestCase):
     self.assertTrue((b_p1 == 3).all().item())
 
   def test_sum(self):
-    # TODO: this only works for float, and silently fails with int
     a = Tensor([1.0, 2, 3, 4, 5])
     tst = Tensor.empty(1)
+    b = Tensor.custom_kernel(tst, a, fxn=custom_sum)[0]
+    self.assertEqual(b.item(), 15)
+
+  def test_sum_int(self):
+    a = Tensor([1, 2, 3, 4, 5])
+    tst = Tensor.empty(1, dtype=a.dtype)
     b = Tensor.custom_kernel(tst, a, fxn=custom_sum)[0]
     self.assertEqual(b.item(), 15)
 
@@ -174,7 +195,6 @@ class TestCustomKernel(unittest.TestCase):
 
   def test_gemm_backward_custom(self): self.test_gemm_backward(True)
   # NOTE: grad_fxn doesn't work with pyrender
-  @Context(SPEC=1)
   def test_gemm_backward(self, custom_backward_gemm=False):
     N = 4
     a_rand = Tensor.randn(N, 8)

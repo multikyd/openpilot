@@ -39,20 +39,19 @@ class CarSpecificEvents:
 
   def update_params(self):
     if self.frame % 100 == 0:
+      self.frame = 0
       self.mute_seatbelt = self.params.get_bool("MuteSeatbelt")
       self.mute_door = self.params.get_bool("MuteDoor")
     
   def update(self, CS: car.CarState, CS_prev: car.CarState, CC: car.CarControl):
-    extra_gears = interfaces[self.CP.carFingerprint].DRIVABLE_GEARS
-
     self.frame += 1
     self.update_params()
     if self.CP.brand in ('body', 'mock'):
-      events = Events()
+      return Events()
 
-    elif self.CP.brand == 'chrysler':
-      events = self.create_common_events(CS, CS_prev, extra_gears=extra_gears)
+    events = self.create_common_events(CS, CS_prev)
 
+    if self.CP.brand == 'chrysler':
       # Low speed steer alert hysteresis logic
       if self.CP.minSteerSpeed > 0. and CS.vEgo < (self.CP.minSteerSpeed + 0.5):
         self.low_speed_alert = True
@@ -62,8 +61,6 @@ class CarSpecificEvents:
         events.add(EventName.belowSteerSpeed)
 
     elif self.CP.brand == 'honda':
-      events = self.create_common_events(CS, CS_prev, extra_gears=extra_gears, pcm_enable=False)
-
       if self.CP.pcmCruise and CS.vEgo < self.CP.minEnableSpeed:
         events.add(EventName.belowEngageSpeed)
 
@@ -84,8 +81,6 @@ class CarSpecificEvents:
 
     elif self.CP.brand == 'toyota':
       # TODO: when we check for unexpected disengagement, check gear not S1, S2, S3
-      events = self.create_common_events(CS, CS_prev, extra_gears=extra_gears)
-
       if self.CP.openpilotLongitudinalControl:
         # Only can leave standstill when planner wants to move
         if CS.cruiseState.standstill and not CS.brakePressed and CC.cruiseControl.resume:
@@ -100,8 +95,6 @@ class CarSpecificEvents:
             events.add(EventName.manualRestart)
 
     elif self.CP.brand == 'gm':
-      events = self.create_common_events(CS, CS_prev, extra_gears=extra_gears, pcm_enable=self.CP.pcmCruise)
-
       # Enabling at a standstill with brake is allowed
       # TODO: verify 17 Volt can enable for the first time at a stop and allow for all GMs
       if CS.vEgo < self.CP.minEnableSpeed and not (CS.standstill and CS.brake >= 20 and
@@ -111,8 +104,6 @@ class CarSpecificEvents:
         events.add(EventName.resumeRequired)
 
     elif self.CP.brand == 'volkswagen':
-      events = self.create_common_events(CS, CS_prev, extra_gears=extra_gears, pcm_enable=self.CP.pcmCruise)
-
       if self.CP.openpilotLongitudinalControl:
         if CS.vEgo < self.CP.minEnableSpeed + 0.5:
           events.add(EventName.belowEngageSpeed)
@@ -124,33 +115,30 @@ class CarSpecificEvents:
       #   events.add(EventName.steerTimeLimit)
 
     elif self.CP.brand == 'hyundai':
-      self.cruise_buttons.append(any(ev.type in HYUNDAI_ENABLE_BUTTONS for ev in CS.buttonEvents))
-
-      events = self.create_common_events(CS, CS_prev, extra_gears=extra_gears,
-                                         #pcm_enable=self.CP.pcmCruise, allow_enable=any(self.cruise_buttons), allow_button_cancel=False)
-                                         pcm_enable=self.CP.pcmCruise, allow_enable=True, allow_button_cancel=False)
-
       if CC.e2eStandstill:
         events.add(EventName.chimeAtResume)
 
-    else:
-      events = self.create_common_events(CS, CS_prev, extra_gears=extra_gears)
+      if CC.enabled:
+        if self.vCruise_prev == 0 and CS.vCruise > 0:
+          events.add(EventName.audioPrompt)
 
-    if CC.enabled:
-      if self.vCruise_prev == 0 and CS.vCruise > 0:
+      if self.carrotCruise_prev != CS.carrotCruise:
         events.add(EventName.audioPrompt)
 
-    if self.carrotCruise_prev != CS.carrotCruise:
-      events.add(EventName.audioPrompt)
-
-    self.carrotCruise_prev = CS.carrotCruise
-    self.vCruise_prev = CS.vCruise
+      self.carrotCruise_prev = CS.carrotCruise
+      self.vCruise_prev = CS.vCruise
 
     return events
 
-  def create_common_events(self, CS: structs.CarState, CS_prev: car.CarState, extra_gears: tuple = (), pcm_enable=True,
-                           allow_enable=True, allow_button_cancel=True):
+  def create_common_events(self, CS: structs.CarState, CS_prev: car.CarState):
     events = Events()
+
+    CI = interfaces[self.CP.carFingerprint]
+    # TODO: cleanup the honda-specific logic
+    pcm_enable = self.CP.pcmCruise and self.CP.brand != 'honda'
+    # TODO: on some hyundai cars, the cancel button is also the pause/resume button,
+    # so only use it for cancel when running openpilot longitudinal
+    allow_button_cancel = self.CP.brand != 'hyundai'
 
     if CS.doorOpen and not self.mute_door:
       events.add(EventName.doorOpen)
@@ -231,11 +219,10 @@ class CarSpecificEvents:
     # we engage when pcm is active (rising edge)
     # enabling can optionally be blocked by the car interface
     if pcm_enable:
-      if CS.cruiseState.enabled and not CS_prev.cruiseState.enabled and allow_enable:
+      if CS.cruiseState.enabled and not CS_prev.cruiseState.enabled and not CS.blockPcmEnable:
         events.add(EventName.pcmEnable)
       elif not CS.cruiseState.enabled:
         events.add(EventName.pcmDisable)
-
 
     if not self.CP.pcmCruise:
       if CS.activateCruise > 0 and CS_prev.activateCruise <= 0:

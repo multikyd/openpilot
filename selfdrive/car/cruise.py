@@ -4,6 +4,7 @@ import numpy as np
 from cereal import car
 from openpilot.common.constants import CV
 
+from openpilot.common.params import Params
 from opendbc.car import structs
 GearShifter = structs.CarState.GearShifter
 
@@ -141,11 +142,6 @@ class VCruiseHelper:
     self.v_cruise_cluster_kph = self.v_cruise_kph
 
 
-
-from openpilot.common.params import Params
-#from openpilot.selfdrive.selfdrived.events import Events
-#EventName = log.OnroadEvent.EventName
-
 class VCruiseCarrot:
   def __init__(self, CP):
     self.CP = CP
@@ -177,7 +173,7 @@ class VCruiseCarrot:
     self._gas_pressed_count_last = 0
     self._gas_pressed_value = 0
     self._gas_tok_timer = int(0.4 / 0.01) # 0.4 sec
-    self._gas_tok = False
+    self.gas_tok = False
     self._brake_pressed_count = 0
     self._soft_hold_count = 0
     self._soft_hold_active = 0
@@ -710,7 +706,7 @@ class VCruiseCarrot:
       #self._cruise_cancel_state = False
       pass
 
-    if self._gas_tok and self.v_ego_kph_set >= self.autoGasTokSpeed:
+    if self.gas_tok and self.v_ego_kph_set >= self.autoGasTokSpeed:
       if not CC.enabled:
         #self._cruise_cancel_state = False
         self._cruise_control(1, -1, "Cruise on (gas tok)")
@@ -795,16 +791,16 @@ class VCruiseCarrot:
       self._gas_pressed_count = max(1, self._gas_pressed_count + 1)
       self._gas_pressed_count_last = self._gas_pressed_count
       self._gas_pressed_value = max(CS.gas, self._gas_pressed_value) if self._gas_pressed_count > 1 else CS.gas
-      self._gas_tok = False
+      self.gas_tok = False
       #if self._cruise_cancel_state and self._soft_hold_active == 2:
       #  self._cruise_control(-1, -1, "Cruise off,softhold mode (gasPressed)")
       self._soft_hold_active = 0
     else:
-      self._gas_tok = True if 0 < self._gas_pressed_count < self._gas_tok_timer else False
+      self.gas_tok = True if 0 < self._gas_pressed_count < self._gas_tok_timer else False
       self._gas_pressed_count = min(-1, self._gas_pressed_count - 1)
       if self._gas_pressed_count < -1:
         self._gas_pressed_count_last = 0
-        self._gas_tok = False
+        self.gas_tok = False
 
     if CS.brakePressed:
       self._cruise_ready = False

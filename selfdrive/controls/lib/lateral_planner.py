@@ -12,7 +12,6 @@ from cereal import log
 from openpilot.common.params import Params
 #from openpilot.selfdrive.controls.lib.lane_planner import LanePlanner
 from openpilot.selfdrive.controls.lib.lane_planner_2 import LanePlanner
-from collections import deque
 
 TRAJECTORY_SIZE = 33
 CAMERA_OFFSET = 0.04

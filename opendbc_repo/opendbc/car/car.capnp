@@ -256,6 +256,8 @@ struct CarState {
   radarVRel @84 :Float32;
   vSetDis @85 :Float32;
   cruiseGap @86 :Int8;
+  cruiseButtons @87 :Float32;
+  gasTok @88 :Bool;
 
   struct TPMS {
     unit @0 :Int8;

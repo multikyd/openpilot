@@ -1,25 +1,16 @@
-import fcntl
-import json
 import math
 import os
-import socket
-import struct
 import subprocess
 import threading
 import time
 import numpy as np
 from datetime import datetime
 
-from ftplib import FTP
-from cereal import log
 import cereal.messaging as messaging
-from openpilot.common.realtime import Ratekeeper
 from openpilot.common.params import Params
-from openpilot.common.filter_simple import MyMovingAverage
-from openpilot.system.hardware import PC, TICI
-from openpilot.selfdrive.navd.helpers import Coordinate
+from openpilot.system.hardware import PC
 from opendbc.car.common.conversions import Conversions as CV
-from openpilot.common.gps import get_gps_location_service
+from opendbc.car.hyundai.values import Buttons
 
 nav_type_mapping = {
   12: ("turn", "left", 1),
@@ -190,6 +181,8 @@ class CarrotServ:
     self.gas_pressed_state = False
     self.source_last = "none"
 
+    self.desired_speed_vcruise = 0
+
     self.debugText = ""
 
     # 默认语言，稍后在 update_params 中从 Params 读取覆盖，
@@ -217,6 +210,7 @@ class CarrotServ:
     self.autoCurveSpeedLowerLimit = int(self.params.get("AutoCurveSpeedLowerLimit"))
     self.is_metric = self.params.get_bool("IsMetric")
     self.autoRoadSpeedLimitOffset = self.params.get("AutoRoadSpeedLimitOffset")
+    self.autoGasSync = self.params.get_bool("AutoGasSyncSpeed")
 
     # 读取语言设置：优先使用 LanguageSetting，与 UI 保持一致；回退读取可能存在的 "lang"
     try:
@@ -1003,18 +997,31 @@ class CarrotServ:
       if source != self.source_last:
         self.gas_override_speed = 0
         self.gas_pressed_state = CS.gasPressed
-      if CS.vEgo < 0.1 or desired_speed > 150 or source in ["cam", "section", "police"] or CS.brakePressed or road_speed_limit_changed:
+      if desired_speed > 150 or source in ["cam", "section", "police"] or CS.brakePressed or road_speed_limit_changed:
         self.gas_override_speed = 0
-      elif CS.gasPressed and not self.gas_pressed_state:
+        self.desired_speed_vcruise = 0
+      elif CS.gasPressed and not self.gas_pressed_state and self.autoGasSync:
         #self.gas_override_speed = max(v_ego_kph, self.gas_override_speed)
         self.gas_override_speed = max(CS.vEgoCluster*CV.MS_TO_KPH, self.gas_override_speed)
+      elif CS.cruiseButtons == Buttons.SET_DECEL:
+        if self.gas_override_speed != 0:
+          self.gas_override_speed = 0
+        if self.desired_speed_vcruise != 0:
+          self.desired_speed_vcruise = 0
+      elif CS.cruiseButtons == Buttons.RES_ACCEL or CS.gasTok:
+        if source == "road":
+          self.desired_speed_vcruise = CS.vCruiseCluster
+          self.gas_override_speed = 0
       else:
         self.gas_pressed_state = False
       self.source_last = source
 
       if desired_speed < self.gas_override_speed:
         source = "gas"
-        desired_speed = self.gas_override_speed + self.autoRoadSpeedLimitOffset
+        desired_speed = self.gas_override_speed
+      elif desired_speed < self.desired_speed_vcruise:
+        source = "road++"
+        desired_speed = self.desired_speed_vcruise
 
       self.debugText += f"route={route_speed:.1f}"#f"desired={desired_speed:.1f},{source},g={self.gas_override_speed:.0f}"
 

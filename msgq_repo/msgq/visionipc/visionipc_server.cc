@@ -84,7 +84,7 @@ void VisionIpcServer::start_listener(){
 
 
 void VisionIpcServer::listener(){
-  std::cout << "Starting listener for: " << name << std::endl;
+  LOGD("Starting listener for: %s", name.c_str());
 
   const std::string ipc_path = get_ipc_path(name);
   int sock = ipc_bind(ipc_path.c_str());
@@ -134,9 +134,9 @@ void VisionIpcServer::listener(){
       continue;
     }
 
-    int fds[VISIONIPC_MAX_FDS];
+    int fds[VISIONIPC_MAX_FDS] = {};
     int num_fds = buffers[type].size();
-    VisionBuf bufs[VISIONIPC_MAX_FDS];
+    VisionBuf bufs[VISIONIPC_MAX_FDS] = {};
 
     for (int i = 0; i < num_fds; i++){
       fds[i] = buffers[type][i]->fd;
@@ -155,7 +155,7 @@ void VisionIpcServer::listener(){
     close(fd);
   }
 
-  std::cout << "Stopping listener for: " << name << std::endl;
+  LOGD("Stopping listener for: %s", name.c_str());
   close(sock);
   unlink(ipc_path.c_str());
 }

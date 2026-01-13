@@ -404,11 +404,14 @@
       "en": "Lateral Smoothing Time"
     },
     "param": "LatSmoothSec",
-    "min_value": 0.01,
+    "min_value": -0.01,
     "max_value": 3,
     "step": 0.01,
     "decimal_places": 2,
     "value_type": "FLOAT",
+    "special_texts": {
+      "-0.01": { "ko": "기본값", "en": "Default" }
+    },
     "description": {
       "ko": "조향 입력을 부드럽게 만드는 시간을 설정합니다.",
       "en": "Sets the smoothing duration for steering input."

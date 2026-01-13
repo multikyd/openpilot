@@ -8,7 +8,7 @@ from opendbc.can import CANDefine, CANParser
 from opendbc.car import Bus, create_button_events, structs, DT_CTRL
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.hyundai.hyundaicanfd import CanBus
-from opendbc.car.hyundai.values import HyundaiFlags, CAR, DBC, Buttons, CarControllerParams, CAMERA_SCC_CAR, HyundaiExtFlags
+from opendbc.car.hyundai.values import HyundaiFlags, CAR, DBC, Buttons, CarControllerParams, HyundaiExtFlags
 from opendbc.car.interfaces import CarStateBase
 
 from cereal import car
@@ -329,6 +329,7 @@ class CarState(CarStateBase):
     self.clu11 = copy.copy(cp.vl["CLU11"])
     self.steer_state = cp.vl["MDPS12"]["CF_Mdps_ToiActive"]  # 0 NOT ACTIVE, 1 ACTIVE
     prev_cruise_buttons = self.cruise_buttons[-1]
+    ret.cruiseButtons = self.cruise_buttons[-1]
     #self.cruise_buttons.extend(cp.vl_all["CLU11"]["CF_Clu_CruiseSwState"])
     #carrot {{
     #if self.CRUISE_BUTTON_ALT and cp.vl["CRUISE_BUTTON_ALT"]["SET_ME_1"] == 1:
@@ -512,7 +513,6 @@ class CarState(CarStateBase):
         ret.pcmCruiseGap = int(np.clip(cp_cruise_info.vl["SCC_CONTROL"]["DISTANCE_SETTING"], 1, 4))
       ret.cruiseState.standstill = cp_cruise_info.vl["SCC_CONTROL"]["InfoDisplay"] >= 4
       ret.cruiseState.speed = cp_cruise_info.vl["SCC_CONTROL"]["VSetDis"] * speed_factor
-      
       self.cruise_info = copy.copy(cp_cruise_info.vl["SCC_CONTROL"])
       ret.brakeHoldActive = cp.vl["ESP_STATUS"]["AUTO_HOLD"] == 1 and cp_cruise_info.vl["SCC_CONTROL"]["ACCMode"] not in (1, 2)
 
@@ -543,8 +543,19 @@ class CarState(CarStateBase):
         if not corner:
           ret.leftLongDist = self.adrv_info_1ea["LF_DETECT_DISTANCE"]
           ret.rightLongDist = self.adrv_info_1ea["RF_DETECT_DISTANCE"]
+          self.lr_distance = self.adrv_info_1ea["LR_DETECT_DISTANCE"]
+          self.rr_distance = self.adrv_info_1ea["RR_DETECT_DISTANCE"]
           ret.leftLatDist = self.adrv_info_1ea["LF_DETECT_LATERAL"]
           ret.rightLatDist = self.adrv_info_1ea["RF_DETECT_LATERAL"]
+          corner = True
+      if corner:
+        left_block = True if 0 < ret.leftLongDist < 7.0 or 0 < self.lr_distance < 7.0 else False
+        right_block = True if 0 < ret.rightLongDist < 7.0 or 0 < self.rr_distance < 7.0 else False
+        if left_block:
+          ret.leftBlindspot = True
+        if right_block:
+          ret.rightBlindspot = True
+
       self.adrv_info_160 = cp_cam.vl["ADRV_0x160"] if self.ADRV_0x160 else None
       self.adrv_info_345 = cp_cam.vl["ADRV_0x345"] if self.ADRV_0x345 else None
       self.adrv_info_1da = cp_cam.vl["ADRV_0x1da"] if self.ADRV_0x1DA else None
@@ -611,6 +622,7 @@ class CarState(CarStateBase):
         pass
 
     prev_cruise_buttons = self.cruise_buttons[-1]
+    ret.cruiseButtons = self.cruise_buttons[-1]
     #self.cruise_buttons.extend(cp.vl_all[self.cruise_btns_msg_canfd]["CRUISE_BUTTONS"])
     #carrot {{
 
@@ -621,7 +633,6 @@ class CarState(CarStateBase):
 
     self.cruise_buttons.extend(cruise_button)
     # }} carrot
-
 
     if self.cruise_btns_msg_canfd in cp.vl:
       self.cruise_buttons_msg = copy.copy(cp.vl[self.cruise_btns_msg_canfd])

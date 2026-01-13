@@ -22,10 +22,6 @@ from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 
 import numpy as np
 
-from collections import deque
-from openpilot.selfdrive.modeld.constants import ModelConstants
-from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N
-
 State = log.SelfdriveState.OpenpilotState
 LaneChangeState = log.LaneChangeState
 LaneChangeDirection = log.LaneChangeDirection
@@ -73,6 +69,13 @@ class Controls:
       self.LaC = LatControlTorque(self.CP, self.CI, DT_CTRL)
     self.standstill_elapsed_timer = 0.0
 
+    self.timer = 0
+    self.sr_rate = self.params.get("SteerRatioRate", return_default=True)
+    self.custom_sr = self.params.get("CustomSR", return_default=True)
+    self.use_lane_line_curve_speed = self.params.get("UseLaneLineCurveSpeed", return_default=True)
+    self.lat_smooth_seconds = LAT_SMOOTH_SECONDS if self.params.get("LatSmoothSec", return_default=True) < 0 else self.params.get("LatSmoothSec", return_default=True)
+    self.steer_actuator_delay = self.params.get("SteerActuatorDelay", return_default=True)
+
   def update(self):
     self.sm.update(15)
     if self.sm.updated["liveCalibration"]:
@@ -82,14 +85,23 @@ class Controls:
       self.calibrated_pose = self.pose_calibrator.build_calibrated_pose(device_pose)
 
   def state_control(self):
+    # user params
+    self.timer += 1
+    if self.timer >= 300: # 3sec
+      self.timer = 0
+      self.sr_rate = self.params.get("SteerRatioRate")
+      self.custom_sr = self.params.get("CustomSR")
+      self.use_lane_line_curve_speed = self.params.get("UseLaneLineCurveSpeed")
+      self.lat_smooth_seconds = self.params.get("LatSmoothSec")
+      self.steer_actuator_delay = self.params.get("SteerActuatorDelay")
+
     CS = self.sm['carState']
 
     # Update VehicleModel
     lp = self.sm['liveParameters']
     x = max(lp.stiffnessFactor, 0.1)
-    sr = max(lp.steerRatio, 0.1) * (self.params.get("SteerRatioRate")/100)
-    custom_sr = self.params.get("CustomSR")
-    sr = max(custom_sr if custom_sr > 1.0 else sr, 0.1)
+    sr = max(lp.steerRatio, 0.1) * (self.sr_rate/100)
+    sr = max(self.custom_sr if self.custom_sr > 1.0 else sr, 0.1)
     self.VM.update_params(x, sr)
 
     steer_angle_without_offset = math.radians(CS.steeringAngleDeg - lp.angleOffsetDeg)
@@ -143,12 +155,8 @@ class Controls:
 
     # Steering PID loop and lateral MPC
     lat_plan = self.sm['lateralPlan']
-    curve_speed_abs = abs(self.sm['carrotMan'].vTurnSpeed)
-    self.lanefull_mode_enabled = (lat_plan.useLaneLines and curve_speed_abs > self.params.get("UseLaneLineCurveSpeed"))
-    lat_smooth_seconds = self.params.get("LatSmoothSec")
-    steer_actuator_delay = self.params.get("SteerActuatorDelay")
-    if steer_actuator_delay == 0.0:
-      steer_actuator_delay = self.sm['liveDelay'].lateralDelay
+    self.lanefull_mode_enabled = (lat_plan.useLaneLines and abs(self.sm['carrotMan'].vTurnSpeed) > self.use_lane_line_curve_speed)
+    steer_actuator_delay = self.sm['liveDelay'].lateralDelay if self.steer_actuator_delay == 0.0 else self.steer_actuator_delay
     
     def smooth_value(val, prev_val, tau):
       alpha = 1 - np.exp(-DT_CTRL / tau) if tau > 0 else 1
@@ -160,14 +168,13 @@ class Controls:
       if len(lat_plan.curvatures) == 0:
         new_desired_curvature = self.curvature
       else:
-        curvature = get_lag_adjusted_curvature(self.CP, CS.vEgo, lat_plan.psis, lat_plan.curvatures, steer_actuator_delay + lat_smooth_seconds, lat_plan.distances)
-
-        new_desired_curvature = smooth_value(curvature, self.desired_curvature, lat_smooth_seconds)
+        curvature = get_lag_adjusted_curvature(self.CP, CS.vEgo, lat_plan.psis, lat_plan.curvatures, steer_actuator_delay + self.lat_smooth_seconds, lat_plan.distances)
+        new_desired_curvature = smooth_value(curvature, self.desired_curvature, self.lat_smooth_seconds)
     else:
       new_desired_curvature = smooth_value(model_v2.action.desiredCurvature, self.desired_curvature, 0.1)
 
     self.desired_curvature, curvature_limited = clip_curvature(CS.vEgo, self.desired_curvature, new_desired_curvature, lp.roll)
-    lat_delay = self.sm["liveDelay"].lateralDelay + LAT_SMOOTH_SECONDS
+    lat_delay = self.sm["liveDelay"].lateralDelay + self.lat_smooth_seconds
     actuators.curvature = float(self.desired_curvature)
     steer, steeringAngleDeg, lac_log = self.LaC.update(CC.latActive, CS, self.VM, lp,
                                                        self.steer_limited_by_safety, self.desired_curvature,

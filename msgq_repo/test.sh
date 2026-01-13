@@ -1,19 +1,18 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -e
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null && pwd)"
 cd $DIR
 
-# *** env setup ***
 source ./setup.sh
 
 # *** build ***
 scons -j8
 
-# *** lint ***
-#ruff check .
-#mypy python/
-pre-commit run --all-files
+# *** lint + test ***
+lefthook run test
 
-# *** test ***
-pytest
+# *** all done ***
+GREEN='\033[0;32m'
+NC='\033[0m'
+printf "\n${GREEN}All good!${NC} Finished build, lint, and test in ${SECONDS}s\n"

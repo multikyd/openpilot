@@ -1,8 +1,8 @@
 import ctypes, platform, sys, subprocess
 from tinygrad.device import Compiler
-from tinygrad.helpers import OSX, getenv, capstone_flatdump, DEBUG
+from tinygrad.helpers import OSX, getenv, capstone_flatdump, DEBUG, unwrap
 from tinygrad.runtime.support.elf import jit_loader
-try: import tinygrad.runtime.autogen.llvm as llvm
+try: from tinygrad.runtime.autogen import llvm
 except (ImportError, FileNotFoundError): llvm = None #type:ignore[assignment]
 
 class ClangJITCompiler(Compiler):
@@ -24,7 +24,7 @@ class ClangJITCompiler(Compiler):
 def cerr(): return ctypes.pointer(ctypes.pointer(ctypes.c_char()))
 
 def expect(x, err, ret=None):
-  if x: raise RuntimeError(llvm.string_cast(err.contents) if not isinstance(err, str) else err)
+  if x: raise RuntimeError(unwrap(ctypes.cast(err.contents, ctypes.c_char_p).value).decode() if not isinstance(err, str) else err)
   return ret
 
 class LLVMCompiler(Compiler):
@@ -49,28 +49,32 @@ class LLVMCompiler(Compiler):
     else:
       self.passes = b'default<O0>'
 
+    # Create a per-instance context instead of using the global context to avoid shared state between parallel test processes
+    self.context = llvm.LLVMContextCreate()
     self.diag_msgs: list[str] = []
-    @ctypes.CFUNCTYPE(None, llvm.LLVMDiagnosticInfoRef, ctypes.c_void_p)
+    @llvm.LLVMDiagnosticHandler
     def handle_diag(diag_ref, _arg):
       severity = llvm.LLVMGetDiagInfoSeverity(diag_ref)
       msg = ctypes.string_at(llvm.LLVMGetDiagInfoDescription(diag_ref)).decode()
       if severity == llvm.LLVMDSError:
         self.diag_msgs.append(msg)
     self.handle_diag = handle_diag
-    llvm.LLVMContextSetDiagnosticHandler(llvm.LLVMGetGlobalContext(), handle_diag, None)
+    llvm.LLVMContextSetDiagnosticHandler(self.context, handle_diag, None)
     super().__init__(f"compile_llvm_{processor}_{feats}{'_jit' if self.jit else ''}{'_opt' if opt else ''}")
 
-  def __del__(self): llvm.LLVMDisposePassBuilderOptions(self.pbo)
+  def __del__(self):
+    llvm.LLVMDisposePassBuilderOptions(self.pbo)
+    llvm.LLVMContextDispose(self.context)
 
   def compile(self, src:str) -> bytes:
     self.diag_msgs.clear()
     src_buf = llvm.LLVMCreateMemoryBufferWithMemoryRangeCopy(ctypes.create_string_buffer(src_bytes:=src.encode()), len(src_bytes), b'src')
-    mod = expect(llvm.LLVMParseIRInContext(llvm.LLVMGetGlobalContext(), src_buf, ctypes.pointer(m:=llvm.LLVMModuleRef()), err:=cerr()), err, m)
+    mod = expect(llvm.LLVMParseIRInContext(self.context, src_buf, ctypes.pointer(m:=llvm.LLVMModuleRef()), err:=cerr()), err, m)
     expect(llvm.LLVMVerifyModule(mod, llvm.LLVMReturnStatusAction, err:=cerr()), err)
     expect(llvm.LLVMRunPasses(mod, self.passes, self.target_machine, self.pbo), 'failed to run passes')
     if DEBUG >= 7: print(ctypes.string_at(llvm.LLVMPrintModuleToString(mod)).decode())
     obj_buf = expect(llvm.LLVMTargetMachineEmitToMemoryBuffer(self.target_machine, mod, llvm.LLVMObjectFile, err:=cerr(),
-                                                              ctypes.pointer(buf:=llvm.LLVMMemoryBufferRef())), err, buf)
+                                                              buf:=llvm.LLVMMemoryBufferRef()), err, buf)
     llvm.LLVMDisposeModule(mod)
     obj = ctypes.string_at(llvm.LLVMGetBufferStart(obj_buf), llvm.LLVMGetBufferSize(obj_buf))
     llvm.LLVMDisposeMemoryBuffer(obj_buf)

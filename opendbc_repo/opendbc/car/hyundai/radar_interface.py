@@ -6,7 +6,6 @@ from opendbc.car.interfaces import RadarInterfaceBase
 from opendbc.car.hyundai.values import DBC, HyundaiFlags, HyundaiExtFlags
 from openpilot.common.params import Params
 from opendbc.car.hyundai.hyundaicanfd import CanBus
-from openpilot.common.filter_simple import MyMovingAverage
 
 SCC_TID = 0
 RADAR_START_ADDR = 0x500

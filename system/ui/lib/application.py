@@ -198,6 +198,8 @@ class MouseState:
 
 class GuiApplication:
   def __init__(self, width: int | None = None, height: int | None = None):
+    self._set_log_callback()
+
     self._fonts: dict[FontWeight, rl.Font] = {}
     self._width = width if width is not None else GuiApplication._default_width()
     self._height = height if height is not None else GuiApplication._default_height()
@@ -212,13 +214,11 @@ class GuiApplication:
 
     self._render_texture: rl.RenderTexture | None = None
     self._burn_in_shader: rl.Shader | None = None
-
     self._textures: dict[str, rl.Texture] = {}
     self._target_fps: int = _DEFAULT_FPS
     self._last_fps_log_time: float = time.monotonic()
     self._frame = 0
     self._window_close_requested = False
-    self._trace_log_callback = None
     self._modal_overlay = ModalOverlay()
     self._modal_overlay_shown = False
     self._modal_overlay_tick: Callable[[], None] | None = None
@@ -480,15 +480,13 @@ class GuiApplication:
       signal.signal(signal.SIGINT, _close)
       atexit.register(self.close)
 
-      self._set_log_callback()
-      rl.set_trace_log_level(rl.TraceLogLevel.LOG_WARNING)
-
       flags = rl.ConfigFlags.FLAG_MSAA_4X_HINT
       if ENABLE_VSYNC:
         flags |= rl.ConfigFlags.FLAG_VSYNC_HINT
       rl.set_config_flags(flags)
 
       rl.init_window(self._scaled_width, self._scaled_height, title)
+
       needs_render_texture = self._scale != 1.0 or BURN_IN_MODE or UI_REC
       if self._scale != 1.0:
         rl.set_mouse_scale(1 / self._scale, 1 / self._scale)
@@ -876,6 +874,9 @@ class GuiApplication:
         cloudlog.debug(f"raylib: {text_str}")
       else:
         cloudlog.error(f"raylib: Unknown level {log_level}: {text_str}")
+
+    # ensure we get all the logs forwarded to us
+    rl.set_trace_log_level(rl.TraceLogLevel.LOG_DEBUG)
 
     # Store callback reference
     self._trace_log_callback = trace_log_callback

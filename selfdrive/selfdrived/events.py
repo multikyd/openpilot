@@ -453,8 +453,7 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
   },
 
   EventName.invalidLkasSetting: {
-    ET.PERMANENT: NormalPermanentAlert("Invalid LKAS setting",
-                                       "Toggle stock LKAS on or off to engage"),
+    ET.PERMANENT: invalid_lkas_setting_alert,
     ET.NO_ENTRY: NoEntryAlert("Invalid LKAS setting"),
   },
 
@@ -487,6 +486,15 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
       AlertStatus.critical, AlertSize.full,
       Priority.HIGHEST, VisualAlert.fcw, AudibleAlert.stopStop, 2.),
     ET.NO_ENTRY: NoEntryAlert("Stock AEB: Risk of Collision"),
+  },
+
+  EventName.stockLkas: {
+    ET.PERMANENT: Alert(
+      "TAKE CONTROL",
+      "Stock LKAS: Lane Departure Detected",
+      AlertStatus.critical, AlertSize.full,
+      Priority.HIGH, VisualAlert.fcw, AudibleAlert.none, 2.),
+    ET.NO_ENTRY: NoEntryAlert("Stock LKAS: Lane Departure Detected"),
   },
 
   EventName.fcw: {
@@ -600,7 +608,7 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
   },
 
   EventName.laneChangeBlocked: {
-    ET.WARNING: Alert(
+    ET.PERMANENT: Alert(
       "Car Detected in Blindspot",
       "",
       AlertStatus.userPrompt, AlertSize.none,

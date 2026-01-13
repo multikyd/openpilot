@@ -212,6 +212,7 @@ class Car:
     CS.useLaneLineSpeed = self.v_cruise_helper.useLaneLineSpeedApply
     CS.carrotCruise = 1 if self.v_cruise_helper.carrot_cruise_active else 0
     CS.cruiseGap = self.v_cruise_helper.cruiseGap
+    CS.gasTok = self.v_cruise_helper.gas_tok
 
     self.CI.CS.softHoldActive = CS.softHoldActive
     return CS, RD
@@ -259,7 +260,8 @@ class Car:
     if self.sm.all_alive(['carControl']):
       # send car controls over can
       now_nanos = self.can_log_mono_time if REPLAY else int(time.monotonic() * 1e9)
-      self.last_actuators_output, can_sends = self.CI.apply(CC, now_nanos)
+      MD = self.sm['modelV2'] if self.sm.valid['modelV2'] else None
+      self.last_actuators_output, can_sends = self.CI.apply(CC, now_nanos, MD)
       self.pm.send('sendcan', can_list_to_can_capnp(can_sends, msgtype='sendcan', valid=CS.canValid))
 
       self.CC_prev = CC
@@ -289,18 +291,15 @@ class Car:
     try:
       t.start()
       while True:
-        #start = time.monotonic()
         self.step()
-        #if self.sm.frame % 100 == 0:
-        #  print(f"elapsed time = {(self.t1 - start)*1000.:.2f}, {(self.t2 - self.t1)*1000.:.2f}, {(self.t3 - self.t1)*1000.:.2f}, {(time.monotonic() - self.t1)*1000.:.2f}")
         self.rk.monitor_time()
     finally:
       e.set()
       t.join()
-    
+
+
 def main():
-  #config_realtime_process(4, Priority.CTRL_HIGH)
-  config_realtime_process(6, Priority.CTRL_HIGH)
+  config_realtime_process(4, Priority.CTRL_HIGH)
   car = Car()
   car.card_thread()
 

@@ -87,6 +87,7 @@ struct OnroadEvent @0xc4fa6047f024e718 {
     laneChange @50;
     lowMemory @51;
     stockAeb @52;
+    stockLkas @98;
     ldw @53;
     carUnrecognized @54;
     invalidLkasSetting @55;
@@ -131,33 +132,33 @@ struct OnroadEvent @0xc4fa6047f024e718 {
     excessiveActuation @96;
     audioFeedback @97;
 
-    softHold @117;
-    trafficStopping @118;
-    audioPrompt @119;
-    audioRefuse @98;
-    stopStop @99;
-    audioLaneChange @100;
-    audioTurn @101;
-    trafficSignGreen @102;
-    trafficSignChanged @103;
-    turningLeft @104;
-    turningRight @105;
-    audio1 @106;
-    audio2 @107;
-    audio3 @108;
-    audio4 @109;
-    audio5 @110;
-    audio6 @111;
-    audio7 @112;
-    audio8 @113;
-    audio9 @114;
-    audio10 @115;
-    audio0 @116;
+    softHold @99;
+    trafficStopping @100;
+    audioPrompt @101;
+    audioRefuse @102;
+    stopStop @103;
+    audioLaneChange @104;
+    audioTurn @105;
+    trafficSignGreen @106;
+    trafficSignChanged @107;
+    turningLeft @108;
+    turningRight @109;
+    audio1 @110;
+    audio2 @111;
+    audio3 @112;
+    audio4 @113;
+    audio5 @114;
+    audio6 @115;
+    audio7 @116;
+    audio8 @117;
+    audio9 @118;
+    audio10 @119;
+    audio0 @120;
 
-    torqueNNLoad @120;
-    chimeAtResume @121;
-    laneChangeMerging @122;
-    laneChangeFinish @123;
+    torqueNNLoad @121;
+    chimeAtResume @122;
+    laneChangeMerging @123;
+    laneChangeFinish @124;
 
     soundsUnavailableDEPRECATED @47;
   }
