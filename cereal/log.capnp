@@ -921,6 +921,10 @@ struct ControlsState @0x97ff69c53601abf1 {
   standStillTimer @68 :Float32;
   accel @69 :Float32;
 
+  debugMsg1  @70 :Text;
+  debugMsg2  @71 :Text;
+  debugMsg3  @72 :Text;
+
   lateralControlState :union {
     pidState @53 :LateralPIDState;
     angleState @58 :LateralAngleState;
@@ -1334,6 +1338,9 @@ struct LongitudinalPlan @0xe00b5b3eba12876c {
   e2eX @49 :List(Float64);
   lead0Obstacle @50 :List(Float64);
   lead1Obstacle @51 :List(Float64);
+  personality @52: UInt8;
+  enableSpeedTF @53: Int8;
+
   enum LongitudinalPlanSource {
     cruise @0;
     lead0 @1;

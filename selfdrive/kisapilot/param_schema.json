@@ -938,6 +938,26 @@
   },
   {
     "group": "Button/Gap/Stop",
+    "title": { "ko": "속도별 차간거리 설정", "en": "Speed Based TFollow" },
+    "param": "EnableSpeedTF",
+    "min_value": -3,
+    "max_value": 50,
+    "step": 1,
+    "decimal_places": 0,
+    "value_type": "INT",
+    "special_texts": {
+      "-3": { "ko": "자동조절3", "en": "AutoTF3" },
+      "-2": { "ko": "자동조절2", "en": "AutoTF2" },
+      "-1": { "ko": "자동조절1", "en": "AutoTF1" },
+      "0": { "ko": "기본값", "en": "Default" }
+    },
+    "description": {
+      "ko": "-1 이하: 자동단계선택(-1: [0, 30, 60, 90], -2: [0, 40, 80, 120], -3: [0, 50, 100, 150]), >0: 저속 차간거리 비율 감소, 0: 기본값",
+      "en": "Below -1: Auto selection(-1: [0, 30, 60, 90], -2: [0, 40, 80, 120], -3: [0, 50, 100, 150]), >0: Decrease following distance ratio at low speed, 0: Default value"
+    }
+  },
+  {
+    "group": "Button/Gap/Stop",
     "title": { "ko": "동적 차간 거리 제어", "en": "Dynamic Gap Control" },
     "param": "DynamicTFollow",
     "min_value": 0,

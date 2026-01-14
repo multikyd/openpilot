@@ -170,7 +170,7 @@ class LongitudinalPlanner:
       accel_limits = [A_CRUISE_MIN, carrot.get_carrot_accel(v_ego)]
       steer_angle_without_offset = sm['carState'].steeringAngleDeg - sm['liveParameters'].angleOffsetDeg
       #accel_limits_turns = limit_accel_in_turns(v_ego, steer_angle_without_offset, accel_limits, self.CP)
-      a_lat_max = 4.0
+      a_lat_max = 3.0
       accel_limits_turns = limit_accel_in_turns(v_ego, sm['controlsState'].desiredCurvature, accel_limits, a_lat_max)
     else:
       accel_limits = [ACCEL_MIN, ACCEL_MAX]
@@ -284,5 +284,7 @@ class LongitudinalPlanner:
     longitudinalPlan.myDrivingMode = carrot.myDrivingMode.value
 
     longitudinalPlan.e2eX = self.mpc.e2e_x.tolist()
+    longitudinalPlan.personality = int(self.mpc.personality)
+    longitudinalPlan.enableSpeedTF = int(self.mpc.enableSpeedTF)
 
     pm.send('longitudinalPlan', plan_send)

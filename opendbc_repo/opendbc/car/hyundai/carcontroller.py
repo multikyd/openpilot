@@ -139,7 +139,9 @@ class CarController(CarControllerBase):
 
     self.apply_angle_last = 0
     self.lkas_max_torque = 0
-    self.angle_max_torque = 250
+    self.angle_max_torque = CarControllerParams.ANGLE_MAX_TORQUE
+    self.driver_steering_torque_above_timer = 150
+    self.driver_steering_angle_above_timer = 150
 
     self.canfd_debug = 0
     self.MainMode_ACC_trigger = 0
@@ -158,6 +160,9 @@ class CarController(CarControllerBase):
     self.e2e_standstill_timer2 = 0
     self.e2e_standstill_timer_buf = 0
     self.e2e_x = 0
+    self.vturn_speed = 250
+    self.curvature = 0
+    self.kisa_log1 = ""
 
     self.steerDeltaUpOrg = self.steerDeltaUp = self.steerDeltaUpLC = self.params.STEER_DELTA_UP
     self.steerDeltaDownOrg = self.steerDeltaDown = self.steerDeltaDownLC = self.params.STEER_DELTA_DOWN
@@ -212,6 +217,14 @@ class CarController(CarControllerBase):
       self.e2e_x = hud_control.e2eX[12]
     except:
       self.e2e_x = 0
+    try:
+      self.vturn_speed = hud_control.vTurnSpeed
+    except:
+      self.vturn_speed = 250
+    try:
+      self.curvature = hud_control.curvature
+    except:
+      self.curvature = 0
 
     if hud_control.modelDesire in [3,4]:
       self.params.STEER_DELTA_UP = self.steerDeltaUpLC
@@ -248,21 +261,32 @@ class CarController(CarControllerBase):
     if angle_control:
       apply_steer_req = CC.latActive
 
-    if CS.out.steeringPressed:
-      self.apply_angle_last = actuators.steeringAngleDeg
-      self.lkas_max_torque = max(self.lkas_max_torque - 20, 25)
+    if abs(CS.out.steeringTorque) > 200:
+      angle_above_timer_step = int(np.interp(self.lkas_max_torque, [150, self.angle_max_torque], [1, 30]))
+      self.driver_steering_angle_above_timer -= angle_above_timer_step
+      if self.driver_steering_angle_above_timer <= 10:
+        self.driver_steering_angle_above_timer = 10
     else:
-      target_torque = self.angle_max_torque
+      angle_above_timer_step2 = int(np.interp(self.lkas_max_torque, [30, self.angle_max_torque], [10, 1]))
+      self.driver_steering_angle_above_timer += angle_above_timer_step2 if not CS.wheel_touched else +1
+      if self.driver_steering_angle_above_timer >= 150:
+        self.driver_steering_angle_above_timer = 150
 
-      max_steering_tq = self.params.STEER_DRIVER_ALLOWANCE * 0.7
-      rate_ratio = max(20, max_steering_tq - abs(CS.out.steeringTorque)) / max_steering_tq
-      rate_up = self.params.ANGLE_TORQUE_UP_RATE * rate_ratio
-      rate_down = self.params.ANGLE_TORQUE_DOWN_RATE * rate_ratio
+    curv_weight = 1.0 if (CS.out.vEgo * CV.MS_TO_KPH < 40 or CS.out.leftBlinker or CS.out.rightBlinker) else np.interp(abs(self.vturn_speed), [15, 50, 100, 250], [3.5, 2.0, 1.0, 0.5])
+    ego_weight = min(1.0, np.interp(CS.out.vEgo * CV.MS_TO_KPH, [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100], [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.0, 1.0]))
+    ego_weight = min(1.0, ego_weight * curv_weight)
 
-      if self.lkas_max_torque > target_torque:
-        self.lkas_max_torque = max(self.lkas_max_torque - rate_down, target_torque)
-      else:
-        self.lkas_max_torque = min(self.lkas_max_torque + rate_up, target_torque)
+    steer_angle_diff = abs(actuators.steeringAngleDeg - CS.out.steeringAngleDeg)
+    steer_angle_factor = np.interp(steer_angle_diff, [0.0, 1.0, 3.0, 6.0, 10.0], [1.0, 1.05, 1.15, 1.3, 1.5])
+    steer_angle_factor = np.clip(steer_angle_factor, 1.0, 1.6)
+    steer_angle_factor = np.interp(CS.out.vEgo * CV.MS_TO_KPH, [10, 80], [steer_angle_factor, 1.0])
+
+    if 0 <= self.driver_steering_angle_above_timer < 150:
+      self.lkas_max_torque = int(round(self.angle_max_torque * (self.driver_steering_angle_above_timer / 150) * ego_weight * steer_angle_factor))
+    else:
+      self.lkas_max_torque = self.angle_max_torque * ego_weight * steer_angle_factor
+
+    self.lkas_max_torque = np.clip(self.lkas_max_torque, 10, self.angle_max_torque)
 
 
     if not CC.latActive:
@@ -460,12 +484,16 @@ class CarController(CarControllerBase):
         self.e2e_standstill_timer = 0
         self.e2e_standstill_timer_buf = 0
 
+    self.kisa_log1 = 'VT={:03.0f}  CV={:0.4f}  TQ/MAX={:03.0f}/{:03.0f}  ANG={:0.1f}/{:0.1f}  E2E={:0.1f}  ACC={:0.1f}  ST={}'.format(
+      abs(self.vturn_speed), abs(self.curvature), abs(CS.out.steeringTorque), self.lkas_max_torque, CS.out.steeringAngleDeg, self.apply_angle_last, self.e2e_x, self.accel_last, int(stopping))
+
     new_actuators = actuators.as_builder()
     new_actuators.torque = apply_torque / self.params.STEER_MAX
     new_actuators.torqueOutputCan = apply_torque
     new_actuators.steeringAngleDeg = float(apply_angle)
     new_actuators.accel = accel
     new_actuators.e2eStandstill = self.e2e_standstill
+    new_actuators.kisaLog1 = self.kisa_log1
 
     self.frame += 1
     return new_actuators, can_sends

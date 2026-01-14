@@ -127,6 +127,9 @@ class UIState:
     self.steerRatio: float = 0.0
 
     self.accel: float = 0.0
+    self.debugMsg1: str = ""
+    self.debugMsg2: str = ""
+    self.debugMsg3: str = ""
     self.standstillElapsedTimer: int = 0
     self.activeLaneLine: bool = False
     self.pandaSafetyModel: str = ""
@@ -167,6 +170,7 @@ class UIState:
     self.show_radar_info: int = self.params.get("ShowRadarInfo")
     self.radar_lat_factor: float = self.params.get("RadarLatFactor")
     self.show_plot_mode: int = self.params.get("ShowPlotMode")
+    self.driving_model: str = self.params.get("DrivingModel")
 
     # Carrot
     self.active_carrot: int = 0
@@ -303,6 +307,9 @@ class UIState:
       self.accel = controls_state.accel
       self.standstillElapsedTimer = controls_state.standStillTimer
       self.activeLaneLine = controls_state.activeLaneLine
+      self.debugMsg1 = controls_state.debugMsg1
+      #self.debugMsg2 = controls_state.debugMsg2
+      #self.debugMsg3 = controls_state.debugMsg3
 
     if self.sm.updated["carState"]:
       car_state = self.sm["carState"]

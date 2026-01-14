@@ -182,6 +182,7 @@ class CarrotServ:
     self.source_last = "none"
 
     self.desired_speed_vcruise = 0
+    self.desired_speed_vcruise_prev = 0
 
     self.debugText = ""
 
@@ -997,7 +998,7 @@ class CarrotServ:
       if source != self.source_last:
         self.gas_override_speed = 0
         self.gas_pressed_state = CS.gasPressed
-      if desired_speed > 150 or source in ["cam", "section", "police"] or CS.brakePressed or road_speed_limit_changed:
+      if road_speed_limit_changed:
         self.gas_override_speed = 0
         self.desired_speed_vcruise = 0
       elif CS.gasPressed and not self.gas_pressed_state and self.autoGasSync:
@@ -1015,6 +1016,13 @@ class CarrotServ:
       else:
         self.gas_pressed_state = False
       self.source_last = source
+
+      if self.desired_speed_vcruise != 0 and desired_speed < self.desired_speed_vcruise and source in ["cam", "section", "police", "bump", "hda"]:
+        self.desired_speed_vcruise_prev = self.desired_speed_vcruise
+        self.desired_speed_vcruise = 0
+      elif self.desired_speed_vcruise_prev != 0 and not road_speed_limit_changed and source in ["road"]:
+        self.desired_speed_vcruise = self.desired_speed_vcruise_prev
+        self.desired_speed_vcruise_prev = 0
 
       if desired_speed < self.gas_override_speed:
         source = "gas"

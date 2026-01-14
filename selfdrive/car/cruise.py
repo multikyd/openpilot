@@ -151,6 +151,7 @@ class VCruiseCarrot:
     self.v_cruise_kph = 20 #V_CRUISE_UNSET
     self.v_cruise_cluster_kph = 20 #V_CRUISE_UNSET
     self.v_cruise_kph_last = 20
+    self.v_cruise_kph_prev = 0
 
     self.enabled_last = False
 
@@ -219,6 +220,9 @@ class VCruiseCarrot:
     self.useLaneLineSpeed = self.params.get("UseLaneLineSpeed")
     self.useLaneLineSpeedApply = self.useLaneLineSpeed
     self.cruiseGap = self.params.get('LongitudinalPersonality') + 1
+
+    self.nRoadLimitSpeed = 200
+    self.autoRoadSpeedLimitOffset = self.params.get("AutoRoadSpeedLimitOffset")
 
 
   @property
@@ -387,7 +391,7 @@ class VCruiseCarrot:
       if b.pressed and self.button_cnt == 0 and bt in [
         ButtonType.accelCruise, ButtonType.decelCruise,
         ButtonType.gapAdjustCruise, ButtonType.cancel,
-        ButtonType.lfaButton
+        ButtonType.lfaButton, ButtonType.mainCruise
       ]:
         self.button_cnt = 1
         self.button_prev = bt
@@ -395,6 +399,8 @@ class VCruiseCarrot:
 
       elif not b.pressed and self.button_cnt > 0 and bt == self.button_prev:
         if bt == ButtonType.cancel:
+          button_type = bt
+        elif bt == ButtonType.mainCruise:
           button_type = bt
         elif not self.long_pressed:          
           if bt == ButtonType.accelCruise:
@@ -510,6 +516,9 @@ class VCruiseCarrot:
         elif self._v_cruise_kph_at_brake > 0 and v_cruise_kph <= self._v_cruise_kph_at_brake:
           v_cruise_kph = self._v_cruise_kph_at_brake
           self._v_cruise_kph_at_brake = 0
+        elif self.v_cruise_kph_prev != 0:
+          v_cruise_kph = self.v_cruise_kph_prev
+          self.v_cruise_kph_prev = 0
         elif self._cruise_button_mode == 0:
           v_cruise_kph = button_kph
         else:
@@ -521,6 +530,11 @@ class VCruiseCarrot:
         self._pause_auto_speed_up = True
         #self.carrot_cruise_active = False
 
+        if 0 < self.nRoadLimitSpeed < 150:
+          set_speed_kph = self.nRoadLimitSpeed + self.autoRoadSpeedLimitOffset
+        else:
+          set_speed_kph = button_kph
+
         if self._soft_hold_active > 0:
           self._cruise_control(-1, -1, "Cruise off,softhold mode (decelCruise)")
         elif self._cruise_ready:
@@ -531,7 +545,7 @@ class VCruiseCarrot:
         elif self.v_ego_kph_set > v_cruise_kph + 2 and self._cruise_button_mode in [2, 3]:
           v_cruise_kph = max(self.v_ego_kph_set, self._cruise_speed_min)
         elif self._cruise_button_mode in [0, 1]:
-          v_cruise_kph = button_kph
+          v_cruise_kph = set_speed_kph
         elif self.v_ego_kph_set < 1.0:
           self.carrot_cruise_active = True
         elif self.v_ego_kph_set > self._cruise_speed_min and v_cruise_kph > self.v_ego_kph_set:
@@ -563,6 +577,8 @@ class VCruiseCarrot:
           else:          
             self._paddle_decel_active = True
         print("lfaButton")
+      elif button_type == ButtonType.mainCruise:
+        self.v_cruise_kph_prev = v_cruise_kph
       elif button_type == ButtonType.cancel:
         self._paddle_decel_active = False
         if self._cancel_button_mode in [1]:

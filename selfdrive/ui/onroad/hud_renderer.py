@@ -535,12 +535,14 @@ class HudRenderer(Widget):
     kisa_debug_lines = []
     if ui_state.debug_msg > 2:
       kisa_debug_lines = [
+        ("1", s.debugMsg1),
         ("panda", f"{s.pandaSafetyModel}"),
         ("interface", f"{s.interfaceSafetyModel}"),
         ("rxCheck", "Pass" if s.rxChecks else "Fail"),
         ("mismatch", "Pass" if s.mismatchCounter else "Fail"),
         ("control", f"{s.controlAllowed}"),
         ("enabled", f"{s.enabled}"),
+        ("Model", f"{s.driving_model}"),        
       ]
 
     small_font_size = 30

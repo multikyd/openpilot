@@ -425,6 +425,7 @@ struct CarControl {
     aTarget @10: Float32;  # m/s^2
 
     e2eStandstill @11: Bool;
+    kisaLog1 @12: Text;
 
     enum LongControlState @0xe40f3a917d908282{
       off @0;
@@ -472,6 +473,8 @@ struct CarControl {
     leadRightLat2 @25: Float32;
 
     e2eX @26 :List(Float64);
+    vTurnSpeed @27: Float32;
+    curvature @28: Float32;
 
     # not used with the dash, TODO: separate structs for dash UI and device UI
     audibleAlert @5: AudibleAlert;

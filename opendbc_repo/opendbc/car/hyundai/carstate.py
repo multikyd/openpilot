@@ -98,6 +98,7 @@ class CarState(CarStateBase):
     self.cruise_buttons_msg = None
     self.msg_0x362 = None
     self.msg_0x2a4 = None
+    self.wheel_touched = False
 
     # On some cars, CLU15->CF_Clu_VehicleSpeed can oscillate faster than the dash updates. Sample at 5 Hz
     self.cluster_speed = 0
@@ -472,6 +473,7 @@ class CarState(CarStateBase):
     self.mdps_info = copy.copy(cp.vl["MDPS"])
     if self.STEER_TOUCH_2AF:
       self.steer_touch_info = cp.vl["STEER_TOUCH_2AF"]
+      self.wheel_touched = self.steer_touch_info["TOUCH_STAT"] > 0
       ret.steerTouch = self.steer_touch_info["TOUCH_DETECT"] > 0
 
     blinkers_info = cp.vl["BLINKERS"]  

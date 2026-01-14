@@ -3,8 +3,8 @@ from typing import Callable, cast, TYPE_CHECKING
 import functools
 from dataclasses import dataclass, field
 from tinygrad.helpers import to_function_name, dedup, prod, DEBUG
-from tinygrad.uop.ops import Ops, UOp, sym_infer, sint, Variable, ssimplify, GroupOp, PatternMatcher, print_uops
-from tinygrad.dtype import AddrSpace, PtrDType
+from tinygrad.uop.ops import Ops, UOp, sym_infer, sint, Variable, ssimplify, GroupOp, PatternMatcher, print_uops, KernelInfo
+from tinygrad.dtype import AddrSpace, DType, PtrDType
 from tinygrad.codegen.opt.tc import TensorCore
 from tinygrad.codegen.opt import Opt
 if TYPE_CHECKING: from tinygrad.device import Compiler
@@ -38,6 +38,7 @@ class Estimates:
         elif u.op is Ops.IF:
           dont_count = dont_count.union(u.src[0].toposort())
     for u in uops:
+      if u.op is Ops.SINK and isinstance(u.arg, KernelInfo) and u.arg.estimates is not None: return u.arg.estimates
       if u.op in {Ops.LOAD, Ops.STORE}:
         buf = u
         while len(buf.src): buf = buf.src[0]
@@ -66,6 +67,7 @@ class ProgramSpec:
   ast:UOp  # save the base ast (this is method cache key)
   uops:list[UOp]|None=None
   lib:bytes|None=None
+  aux:list=field(default_factory=list)
 
   # filled in from uops (via from_uop)
   global_size:list[int]=field(default_factory=lambda: [1,1,1])
@@ -123,7 +125,7 @@ class ProgramSpec:
         # TODO: this cast is wrong, u.src[0].ssimplify() can be sint
         if special_size is not None: special_size[int(u.arg[-1])] = cast(int, u.src[0].ssimplify())
 
-    return ProgramSpec(sink.arg.name, source.arg, device.arg, sink, uops, lib, global_size, local_size,
+    return ProgramSpec(sink.arg.name, source.arg, device.arg, sink, uops, lib, list(prg.arg) if prg.arg else [], global_size, local_size,
                        sorted(_vars, key=lambda v: v.arg), sorted(dedup(_globals)), sorted(dedup(outs)), sorted(dedup(ins)))
 
 class Renderer:
@@ -134,6 +136,7 @@ class Renderer:
   has_local: bool = True
   has_threads: bool = False
   has_shared: bool = True
+  has_aux: bool = False # additional program info, eg. image shapes
   # NOTE: these two should be in (x,y,z) order to match the max_sizes argument in get_grouped_dims
   global_max: tuple[int, ...]|None = (0x8FFFFFFF,) * (3) # TODO: Ops.SPECIAL int32 indexes right now
   local_max: tuple[int, ...]|None = (0x8FFFFFFF,) * (3) # TODO: Ops.SPECIAL int32 indexes right now
@@ -146,3 +149,6 @@ class Renderer:
 
   def __reduce__(self): return self.__class__, ()
   def render(self, uops:list[UOp]) -> str: raise NotImplementedError("needs a renderer")
+  def aux(self, uops:list[UOp]) -> dict: raise NotImplementedError("needs aux")
+
+  def is_dtype_supported(self, dtype:DType) -> bool: return True

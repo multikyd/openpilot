@@ -273,7 +273,6 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"SteerActuatorDelay", {PERSISTENT, FLOAT, "0.0"}},
     {"LatSmoothSec", {PERSISTENT, FLOAT, "0.13"}},
     {"MaxTimeOffroadMin", {PERSISTENT, INT, "60"}},
-    {"DisableDM", {PERSISTENT, INT, "0"}},
     {"EnableConnect", {PERSISTENT, INT, "0"}},
     {"MuteDoor", {PERSISTENT, BOOL, "0"}},
     {"MuteSeatbelt", {PERSISTENT, BOOL, "0"}},
@@ -315,4 +314,5 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"GitCommits", {CLEAR_ON_MANAGER_START, STRING}},
     {"KisaPilotCurrentDescription", {PERSISTENT, STRING}},
     {"DrivingModel", {PERSISTENT, STRING, "DrivingModel"}},
+    {"EnableSpeedTF", {PERSISTENT, INT, "0"}},
 };

@@ -250,6 +250,9 @@ class LongitudinalMpc:
 
     self.e2e_x = np.zeros(13, dtype=np.float64)
 
+    self.personality = 1
+    self.enableSpeedTF = 0
+
   def reset(self):
     # self.solver = AcadosOcpSolverCython(MODEL_NAME, ACADOS_SOLVER_TYPE, N)
     self.solver.reset()
@@ -363,9 +366,9 @@ class LongitudinalMpc:
     self.max_a = max_a
 
   def update(self, carrot, reset_state, radarstate, v_cruise, x, v, a, j, personality=log.LongitudinalPersonality.standard):
-    t_follow = carrot.get_T_FOLLOW(personality)
     v_ego = self.x0[1]
     a_ego = self.x0[2]
+    t_follow, self.personality, self.enableSpeedTF = carrot.get_T_FOLLOW(personality, v_ego)
     self.status = radarstate.leadOne.status or radarstate.leadTwo.status
 
     if radarstate.leadOne.status:

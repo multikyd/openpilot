@@ -38,8 +38,6 @@ class Controls:
 
     self.CI = interfaces[self.CP.carFingerprint](self.CP)
 
-    self.disable_dm = False
-
     self.sm = messaging.SubMaster(['liveDelay', 'liveParameters', 'liveTorqueParameters', 'modelV2', 'selfdriveState',
                                    'liveCalibration', 'livePose', 'longitudinalPlan', 'carState', 'carOutput',
                                    'driverMonitoringState', 'onroadEvents', 'driverAssistance',
@@ -266,6 +264,8 @@ class Controls:
       hudControl.rightLaneDepart = self.sm['driverAssistance'].rightLaneDeparture
     
     hudControl.e2eX = self.sm['longitudinalPlan'].e2eX
+    hudControl.vTurnSpeed = self.sm['carrotMan'].vTurnSpeed
+    hudControl.curvature = self.curvature
 
     CO = self.sm['carOutput']
     if self.sm['selfdriveState'].active:
@@ -291,9 +291,12 @@ class Controls:
     cs.upAccelCmd = float(self.LoC.pid.p)
     cs.uiAccelCmd = float(self.LoC.pid.i)
     cs.ufAccelCmd = float(self.LoC.pid.f)
-    cs.forceDecel = bool((self.sm['driverMonitoringState'].awarenessStatus < 0. and self.params.get("DisableDM") == 0) or
+    cs.forceDecel = bool((self.sm['driverMonitoringState'].awarenessStatus < 0.) or
                          (self.sm['selfdriveState'].state == State.softDisabling))
 
+    cs.debugMsg1 = str(CO.actuatorsOutput.kisaLog1)
+    #cs.debugMsg2 = str(CO.actuatorsOutput.kisaLog2)
+    #cs.debugMsg3 = str(CO.actuatorsOutput.kisaLog3)
     CC.e2eStandstill = bool(CO.actuatorsOutput.e2eStandstill)
     lat_tuning = self.CP.lateralTuning.which()
     if self.CP.steerControlType == car.CarParams.SteerControlType.angle:

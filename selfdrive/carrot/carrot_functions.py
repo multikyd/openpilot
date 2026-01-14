@@ -102,6 +102,8 @@ class CarrotPlanner:
 
     self.dynamicTFollow = 0.0
     self.dynamicTFollowLC = 0.0
+    self.enableSpeedTF = 0
+    self.personality = self.params.get("LongitudinalPersonality")
 
     self.cruiseMaxVals0 = 1.6
     self.cruiseMaxVals1 = 1.6
@@ -162,6 +164,7 @@ class CarrotPlanner:
       self.tFollowGap4 = self.params.get("TFollowGap4")
       self.dynamicTFollow = self.params.get("DynamicTFollow")
       self.dynamicTFollowLC = self.params.get("DynamicTFollowLC")
+      self.enableSpeedTF = self.params.get("EnableSpeedTF")
     elif self.params_count == 130:
       self.cruiseMaxVals0 = self.params.get("CruiseMaxVals0")
       self.cruiseMaxVals1 = self.params.get("CruiseMaxVals1")
@@ -187,21 +190,87 @@ class CarrotPlanner:
     factor = self.myHighModeFactor if self.myDrivingMode == DrivingMode.High else self.mySafeFactor
     return np.interp(v_ego, A_CRUISE_MAX_BP_CARROT, cruiseMaxVals) * factor
 
-  def get_T_FOLLOW(self, personality=log.LongitudinalPersonality.standard):
-    if personality==log.LongitudinalPersonality.moreRelaxed:
-      self.jerk_factor = 1.0
-      return self.tFollowGap4
-    elif personality==log.LongitudinalPersonality.relaxed:
-      self.jerk_factor = 1.0
-      return self.tFollowGap3
-    elif personality==log.LongitudinalPersonality.standard:
-      self.jerk_factor = 1.0 if self.myDrivingMode == DrivingMode.Safe else 0.7
-      return self.tFollowGap2
-    elif personality==log.LongitudinalPersonality.aggressive:
-      self.jerk_factor = 1.0 if self.myDrivingMode == DrivingMode.Safe else 0.5
-      return self.tFollowGap1
+  def get_T_FOLLOW(self, personality=log.LongitudinalPersonality.standard, v_ego=0.0):
+    # ------------------------------------------------------------
+    # 1) Compute tf_target (your existing logic, unchanged behavior)
+    # ------------------------------------------------------------
+    if self.enableSpeedTF < 0:
+      TF_SPEED_BPS = {
+        -1: [0, 30, 60, 90],
+        -2: [0, 40, 80, 120],
+        -3: [0, 50, 100, 150],
+      }
+      v_kph = v_ego * CV.MS_TO_KPH
+      bp = TF_SPEED_BPS.get(self.enableSpeedTF, [0, 30, 60, 90])
+
+      tf_target = float(np.interp(v_kph,bp,
+                                  [self.tFollowGap1, self.tFollowGap2, self.tFollowGap3, self.tFollowGap4]))
+
+      self.jerk_factor = float(np.interp(v_kph, bp, [1.0, 0.7, 0.5, 0.5]))
+
+      personality = int(np.clip(np.digitize(v_kph, bp[1:], right=False), 0, 3))
+
+      if self.params_count % 100 == 0 and personality != self.personality:
+        self.params.put_nonblocking("LongitudinalPersonality", personality)
+        self.personality = personality
+
     else:
-      raise NotImplementedError("Longitudinal personality not supported")
+      tf_target = 1.0
+      if personality == log.LongitudinalPersonality.moreRelaxed:
+        self.jerk_factor = 1.0
+        tf_target = self.tFollowGap4
+      elif personality == log.LongitudinalPersonality.relaxed:
+        self.jerk_factor = 1.0
+        tf_target = self.tFollowGap3
+      elif personality == log.LongitudinalPersonality.standard:
+        self.jerk_factor = 1.0 if self.myDrivingMode == DrivingMode.Safe else 0.7
+        tf_target = self.tFollowGap2
+      elif personality == log.LongitudinalPersonality.aggressive:
+        self.jerk_factor = 1.0 if self.myDrivingMode == DrivingMode.Safe else 0.5
+        tf_target = self.tFollowGap1
+      else:
+        raise NotImplementedError("Longitudinal personality not supported")
+
+      if self.enableSpeedTF > 0:
+        reduce = self.enableSpeedTF * 0.01
+        s = float(np.clip(v_ego * CV.MS_TO_KPH / 100.0, 0.0, 1.0))
+        scale = (1.0 - reduce) + reduce * s
+        tf_target *= scale
+
+    # ------------------------------------------------------------
+    # 2) Apply "slow decrease / fast increase" smoothing to TF
+    #    + optional rate-limit (prevents sudden drops)
+    # ------------------------------------------------------------
+    # lazy-init so you don't have to touch __init__
+    if not hasattr(self, "_tf_applied") or self._tf_applied <= 0.0:
+      self._tf_applied = float(tf_target)
+
+    dt = float(DT_MDL)  # openpilot control loop dt
+
+    # Tune here
+    TF_DEC_TAU = 20.0     # seconds (smaller TF: go SLOW)
+    TF_INC_TAU = 1.0     # seconds (bigger TF: go FAST)
+    MAX_DOWN_PER_S = 0.05  # TF can shrink at most 0.05 per second
+    MAX_UP_PER_S   = 0.20  # TF can grow at most 0.20 per second
+
+    # asymmetric 1st-order filter
+    tau = TF_DEC_TAU if tf_target < self._tf_applied else TF_INC_TAU
+    alpha = dt / (tau + dt)
+    tf_filt = self._tf_applied + alpha * (float(tf_target) - self._tf_applied)
+
+    # rate limit (extra safety against fast drops)
+    max_down = MAX_DOWN_PER_S * dt
+    max_up   = MAX_UP_PER_S * dt
+    delta = float(np.clip(tf_filt - self._tf_applied, -max_down, max_up))
+    tf_applied = self._tf_applied + delta
+
+    # clamp to sensible range (using your configured gaps)
+    tf_min = float(min(self.tFollowGap1, self.tFollowGap2, self.tFollowGap3, self.tFollowGap4))
+    tf_max = float(max(self.tFollowGap1, self.tFollowGap2, self.tFollowGap3, self.tFollowGap4))
+    tf_applied = float(np.clip(tf_applied, tf_min, tf_max))
+
+    self._tf_applied = tf_applied
+    return tf_applied, self.personality, self.enableSpeedTF
 
   def _update_model_desire(self, sm):
     meta = sm['modelV2'].meta
@@ -362,16 +431,8 @@ class CarrotPlanner:
     elif self.myDrivingMode == DrivingMode.Safe: #safe
       self.mySafeFactor = self.mySafeModeFactor
 
-    if self.frame % 20 == 0: # every 1 sec
-      vLead = 0
-      aLead = 0
-      dRel = 200
-      if leadOne.status:
-        vLead = leadOne.vLead * CV.MS_TO_KPH
-        aLead = leadOne.aLead
-        dRel = leadOne.dRel
 
-      self.drivingModeDetector.update_data(v_ego_kph, vLead, carstate.aEgo, aLead, dRel)
+    self.drivingModeDetector.update_data(carstate, leadOne)
 
     v_cruise_kph = self.cruise_eco_control(v_ego_cluster_kph, v_cruise_kph)
     v_cruise_kph, atc_active = self._update_carrot_man(sm, v_ego_kph, v_cruise_kph)
@@ -528,22 +589,30 @@ class CarrotPlanner:
 
     return v_cruise_kph
 
-
 class DrivingModeDetector:
     def __init__(self):
         self.congested = False
 
-        self.enter_count = 0
-        self.exit_count = 0
-        self.enter_needed = 3
-        self.exit_needed = 3
+        self.counter = 0
+        self.enter_needed = 5
+        self.exit_needed = 5
 
         self.distance_threshold = 12
         self.speed_threshold = 2
         self.accel_threshold = 1.5
         self.lead_speed_exit_threshold = 35
 
-    def update_data(self, my_speed, lead_speed, my_accel, lead_accel, distance):
+    def update_data(self, carstate, leadOne):
+      my_speed = carstate.vEgo * CV.MS_TO_KPH
+      my_accel = carstate.aEgo
+      lead_speed = 0
+      lead_accel = 0
+      distance = 200
+      if leadOne.status:
+        lead_speed = leadOne.vLead * CV.MS_TO_KPH
+        lead_accel = leadOne.aLead
+        distance = leadOne.dRel
+
         # ---- 진입 조건(OR로 묶기) ----
         enter = (
             (distance <= self.distance_threshold and lead_speed <= self.speed_threshold) or
@@ -559,22 +628,16 @@ class DrivingModeDetector:
 
         # ---- 디바운스 로직 ----
         if enter:
-            self.enter_count += 1
-        else:
-            self.enter_count = 0
+          self.counter += 1  
+        elif exit_:
+          self.counter -= 1
 
-        if exit_:
-            self.exit_count += 1
-        else:
-            self.exit_count = 0
-
-        if not self.congested and self.enter_count >= self.enter_needed:
-            self.congested = True
-            self.exit_count = 0  # 진입 시 반대 카운터 리셋
-
-        if self.congested and self.exit_count >= self.exit_needed:
-            self.congested = False
-            self.enter_count = 0
+        if self.counter >= self.enter_needed:
+          self.congested = True
+          self.counter = self.enter_needed
+        elif self.counter <= - self.exit_needed:
+          self.congested = False
+          self.counter = - self.exit_needed
 
     def get_mode(self):
         return DrivingMode.Safe if self.congested else DrivingMode.Normal

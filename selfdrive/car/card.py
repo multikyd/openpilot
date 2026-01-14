@@ -211,7 +211,7 @@ class Car:
     CS.latEnabled = self.v_cruise_helper._lat_enabled
     CS.useLaneLineSpeed = self.v_cruise_helper.useLaneLineSpeedApply
     CS.carrotCruise = 1 if self.v_cruise_helper.carrot_cruise_active else 0
-    CS.cruiseGap = self.v_cruise_helper.cruiseGap
+    CS.cruiseGap = self.v_cruise_helper.cruiseGap if self.sm['longitudinalPlan'].enableSpeedTF >= 0 else int(self.sm['longitudinalPlan'].personality + 1)
     CS.gasTok = self.v_cruise_helper.gas_tok
 
     self.CI.CS.softHoldActive = CS.softHoldActive

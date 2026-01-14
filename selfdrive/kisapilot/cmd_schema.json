@@ -35,7 +35,7 @@
     "exec": [
       "sh",
       "-c",
-      "cd /data/openpilot && git pull && touch /data/ks && rm -f /data/openpilot/prebuilt && sleep 1 && sudo reboot"
+      "cd /data/openpilot && git pull && touch /data/ks && rm -f /data/openpilot/prebuilt && echo -en 1 > /data/params/d/DoReboot && sleep 5 && sudo reboot"
     ],
     "description": {
       "ko": "깃 풀 수행 후 강제로 재부팅 합니다., 재부팅 후 자동으로 컴파일을 진행합니다.",
@@ -95,11 +95,11 @@
     "exec": [
       "sh",
       "-c",
-      "sleep 1 && sudo reboot"
+      "echo -en 1 > /data/params/d/DoReboot && sleep 3 && sudo reboot"
     ],
     "description": {
-      "ko": "sudo reboot 명령으로 강제 리부팅합니다. 리부팅 직전 클러스터 에러가 발생할 수 있으나 정상적인 동작입니다.",
-      "en": "Forces a reboot using sudo reboot. Cluster errors may appear just before reboot, which is normal."
+      "ko": "sudo reboot 명령으로 강제 리부팅합니다.",
+      "en": "Forces a reboot using sudo reboot."
     },
     "confirm": true,
     "onroad": true

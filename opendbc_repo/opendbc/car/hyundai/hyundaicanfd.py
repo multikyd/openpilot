@@ -489,13 +489,13 @@ def _make_ccnc_values(values, CS, lat_active, frame, hud_control, lane_line = Tr
         values['LANE_CHANGING'] = 4 # 오른쪽 화살표 + 바닥
 
   if corner_radar:
-    if values['LF_DETECT'] == 4 and values['LF_DETECT_DISTANCE'] != 0:  values['LF_DETECT'] = 2
-    if values['RF_DETECT'] == 4 and values['RF_DETECT_DISTANCE'] != 0:  values['RF_DETECT'] = 2
-    if values['LR_DETECT'] == 4 and values['LR_DETECT_DISTANCE'] != 0:  values['LR_DETECT'] = 2
-    if values['RR_DETECT'] == 4 and values['RR_DETECT_DISTANCE'] != 0:  values['RR_DETECT'] = 2
+    if values['LF_DETECT'] >= 4 and values['LF_DETECT_DISTANCE'] != 0:  values['LF_DETECT'] = 1
+    if values['RF_DETECT'] >= 4 and values['RF_DETECT_DISTANCE'] != 0:  values['RF_DETECT'] = 1
+    if values['LR_DETECT'] >= 4 and values['LR_DETECT_DISTANCE'] != 0:  values['LR_DETECT'] = 1
+    if values['RR_DETECT'] >= 4 and values['RR_DETECT_DISTANCE'] != 0:  values['RR_DETECT'] = 1
 
     disp_dist = 30.0
-    min_dist = 12.0
+    min_dist = 10.0
     max_interval = 100
     t = 1.0   # 이 값만 바꾸면 전체 깜빡임 속도 조절됨 (0.6 빠름, 1.0 기본, 1.5 느림)
     def apply_one(detect_key, dist_key):
@@ -515,6 +515,17 @@ def _make_ccnc_values(values, CS, lat_active, frame, hud_control, lane_line = Tr
 def create_ccnc_messages(CP, packer, CAN, frame, CC, CS, hud_control, disp_angle, left_lane_warning, right_lane_warning, enable_corner_radar):
   ret = []
   md = CS.MD
+  desire = 0
+  lane_changing = 0
+  if md is not None:
+    desire = md.meta.desire.raw
+    desire_state = md.meta.desireState
+    if len(desire_state) > 4:
+      if desire_state[1] > 0.3 : lane_changing = 1
+      if desire_state[2] > 0.3 : lane_changing = 2
+      if desire_state[3] > 0.3 : lane_changing = 3
+      if desire_state[4] > 0.3 : lane_changing = 4
+
   if CP.flags & HyundaiFlags.CAMERA_SCC.value:
     HDA_CntrlModSta = 0
     if CS.lfahda_cluster_info is not None:
@@ -637,16 +648,8 @@ def create_ccnc_messages(CP, packer, CAN, frame, CC, CS, hud_control, disp_angle
         values["LCA_LEFT_ICON"] = 1 if CS.out.leftBlindspot else 2
         values["LCA_RIGHT_ICON"] = 1 if CS.out.rightBlindspot else 2
 
-        if md is not None:
-          desire = md.meta.desire.raw
-          lane_left = desire in (1, 3)
-          lane_right = desire in (2, 4)
-          #lane_left = md.meta.desireStat[1] > 0.1 or md.meta.desireStat[3] > 0.1
-          #lane_right = md.meta.desireStat[2] > 0.1 or md.meta.desireStat[4] > 0.1
-          values["LANE_LEFT"] = 1 if lane_left else 0
-          values["LANE_RIGHT"] = 1 if lane_right else 0
-          #values["LANE_LEFT"] = 1 if hud_control.modelDesire in [1,3] else 0
-          #values["LANE_RIGHT"] = 1 if hud_control.modelDesire in [2,4] else 0
+        values["LANE_LEFT"] = 1 if desire in (1, 3) else 0
+        values["LANE_RIGHT"] = 1 if desire in (2, 4) else 0
 
         ret.append(packer.make_can_msg("ADRV_0x161", CAN.ECAN, values))
 
@@ -657,14 +660,13 @@ def create_ccnc_messages(CP, packer, CAN, frame, CC, CS, hud_control, disp_angle
 
       if CS.adrv_info_1ea is not None:
         values = copy.copy(CS.adrv_info_1ea)
-        # values["HDA_MODE1"] = 8
-        # values["HDA_MODE2"] = 2
-        if CC.leftBlinker:
-          #values['LEFT_BLINK_HOLD'] = 1
-          pass
-        if CC.rightBlinker:
-          #values['RIGHT_BLINK_HOLD'] = 1
-          pass
+        #values["HDA_MODE1"] = 8
+        #values["HDA_MODE2"] = 1
+        if lane_changing == 3:
+          values['LEFT_BLINK_HOLD'] = 1
+        elif lane_changing == 4:
+          values['RIGHT_BLINK_HOLD'] = 1
+
         _make_ccnc_values(values, CS, lat_active, frame, hud_control)
 	    # values['AUTOLANECHANGE_MSG'] =  1 # 주변 상황을 확인하세요
 	    # values['AUTOLANECHANGE_MSG'] =  2 # 작동 조건이 아닙니다

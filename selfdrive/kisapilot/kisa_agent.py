@@ -1125,8 +1125,9 @@ def run_cmd():
                 time.sleep(1)
                 
                 if reboot_after_complete:
-                    running_cmds[cmd_uuid]["output"] += "\nTask complete. Rebooting the system in 3 seconds."
-                    time.sleep(2)
+                    running_cmds[cmd_uuid]["output"] += "\nTask complete. Rebooting the system in 3~5 seconds."
+                    params.put_bool("DoReboot", True)
+                    time.sleep(5)
                     os.system("sudo reboot")
 
             except Exception as e:
