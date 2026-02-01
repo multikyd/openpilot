@@ -998,6 +998,9 @@ class CarrotServ:
       if source != self.source_last:
         self.gas_override_speed = 0
         self.gas_pressed_state = CS.gasPressed
+        if self.desired_speed_vcruise != 0:
+          self.desired_speed_vcruise_prev = self.desired_speed_vcruise
+          self.desired_speed_vcruise = 0
       if road_speed_limit_changed:
         self.gas_override_speed = 0
         self.desired_speed_vcruise = 0
@@ -1011,7 +1014,7 @@ class CarrotServ:
           self.desired_speed_vcruise = 0
       elif CS.cruiseButtons == Buttons.RES_ACCEL or CS.gasTok:
         if source == "road":
-          self.desired_speed_vcruise = CS.vCruiseCluster
+          self.desired_speed_vcruise = CS.vCruiseCluster + self.autoRoadSpeedLimitOffset
           self.gas_override_speed = 0
       else:
         self.gas_pressed_state = False
@@ -1020,14 +1023,14 @@ class CarrotServ:
       if self.desired_speed_vcruise != 0 and desired_speed < self.desired_speed_vcruise and source in ["cam", "section", "police", "bump", "hda"]:
         self.desired_speed_vcruise_prev = self.desired_speed_vcruise
         self.desired_speed_vcruise = 0
-      elif self.desired_speed_vcruise_prev != 0 and not road_speed_limit_changed and source in ["road"]:
+      elif self.desired_speed_vcruise_prev != 0 and not road_speed_limit_changed and source == "road":
         self.desired_speed_vcruise = self.desired_speed_vcruise_prev
         self.desired_speed_vcruise_prev = 0
 
       if desired_speed < self.gas_override_speed:
         source = "gas"
         desired_speed = self.gas_override_speed
-      elif desired_speed < self.desired_speed_vcruise:
+      elif source == "road" and desired_speed < self.desired_speed_vcruise:
         source = "road++"
         desired_speed = self.desired_speed_vcruise
 

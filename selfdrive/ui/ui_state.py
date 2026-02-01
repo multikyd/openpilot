@@ -359,7 +359,7 @@ class UIState:
       if state in (log.SelfdriveState.OpenpilotState.preEnabled, log.SelfdriveState.OpenpilotState.overriding):
         self.status = UIStatus.OVERRIDE
       else:
-        self.status = UIStatus.ENGAGED if ss.enabled else UIStatus.DISENGAGED
+        self.status = UIStatus.ENGAGED if ss.enabled or self.latEnabled else UIStatus.DISENGAGED
 
       self.enabled = ss.enabled
       self.pandaSafetyModel = ss.pandaSafetyModel

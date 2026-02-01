@@ -618,7 +618,7 @@ class VCruiseCarrot:
       if not CC.enabled:
         self._cruise_control(1, -1, "Cruise on (paddle decel)")
 
-    v_cruise_kph = self._update_cruise_state(CS, CC, v_cruise_kph)
+    #v_cruise_kph = self._update_cruise_state(CS, CC, v_cruise_kph)
     return v_cruise_kph
 
   ## desiredSpeed :

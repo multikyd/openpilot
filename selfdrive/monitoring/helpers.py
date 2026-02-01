@@ -539,6 +539,7 @@ class DriverMonitoring:
       wrong_gear = False
       standstill = False
       driver_engaged = False
+      steer_touch = False
       brake_disengage_prob = 1.0
       rpyCalib = [0., 0., 0.]
     else:
