@@ -4,7 +4,7 @@ import functools
 from dataclasses import dataclass, field
 from tinygrad.helpers import to_function_name, dedup, prod, DEBUG
 from tinygrad.uop.ops import Ops, UOp, sym_infer, sint, Variable, ssimplify, GroupOp, PatternMatcher, print_uops, KernelInfo
-from tinygrad.dtype import AddrSpace, DType, PtrDType
+from tinygrad.dtype import AddrSpace, PtrDType
 from tinygrad.codegen.opt.tc import TensorCore
 from tinygrad.codegen.opt import Opt
 if TYPE_CHECKING: from tinygrad.device import Compiler
@@ -42,7 +42,7 @@ class Estimates:
       if u.op in {Ops.LOAD, Ops.STORE}:
         buf = u
         while len(buf.src): buf = buf.src[0]
-        if buf.op is Ops.DEFINE_GLOBAL: # assume all DEFINE_GLOBAL memory is accessed
+        if buf.op is Ops.PARAM: # assume all DEFINE_GLOBAL memory is accessed
           mem[(buf, u.op)] = buf.ptrdtype.size * buf.dtype.itemsize
       if u.op is Ops.RANGE:
         mult_stack.append(mults)
@@ -51,6 +51,7 @@ class Estimates:
         mults = mults.substitute({x:x.const_like(0) for x in mults.toposort() if x.op is Ops.SPECIAL}) if isinstance(mults, UOp) else mults
       elif u.op is Ops.END: mults = mult_stack.pop(-1)
       elif u.op is Ops.SPECIAL: mults *= cast(sint, u.src[0].ssimplify()) # NOTE: we don't push to the mult_stack here, you can't end these
+      elif u.op is Ops.DEFINE_VAR and u.arg[0] == 'core_id': mults *= u.arg[2] + 1
       elif u.op is Ops.LOAD and (not isinstance(u.src[0].dtype, PtrDType) or u.src[0].dtype.addrspace != AddrSpace.REG):
         lds += u.dtype.itemsize * mults
       elif u.op is Ops.STORE and (not isinstance(u.src[0].dtype, PtrDType) or u.src[0].dtype.addrspace != AddrSpace.REG):
@@ -84,6 +85,9 @@ class ProgramSpec:
   @functools.cached_property
   def function_name(self) -> str: return to_function_name(self.name)
 
+  @functools.cached_property
+  def runtimevars(self) -> dict[str, int]: return {v.arg[0]: i for i, v in enumerate(self.vars) if v.arg[0] == 'core_id'}
+
   @property
   def applied_opts(self) -> tuple[Opt, ...]|None:
     if self.uops is None: return None
@@ -114,16 +118,17 @@ class ProgramSpec:
     local_size: list[int]|None = [1, 1, 1]
     for u in uops:
       if u.op is Ops.DEFINE_VAR: _vars.append(u)
-      if u.op is Ops.DEFINE_GLOBAL: _globals.append(u.arg)
+      if u.op is Ops.PARAM: _globals.append(u.arg)
       if u.op in (Ops.STORE, Ops.LOAD):
         if (idx:=u.src[0]).op is Ops.INDEX or (u.src[0].op is Ops.CAST and (idx:=u.src[0].src[0]).op is Ops.INDEX):
-          if (buf:=idx.src[0]).op is Ops.DEFINE_GLOBAL: (outs if u.op is Ops.STORE else ins).append(buf.arg)
+          if (buf:=idx.src[0]).op is Ops.PARAM: (outs if u.op is Ops.STORE else ins).append(buf.arg)
         # TODO: can else happen?
       if u.op is Ops.SPECIAL:
         if u.arg[0] == 'i': local_size = None
         special_size = local_size if u.arg[0] == 'l' else global_size
         # TODO: this cast is wrong, u.src[0].ssimplify() can be sint
         if special_size is not None: special_size[int(u.arg[-1])] = cast(int, u.src[0].ssimplify())
+      if u.op is Ops.DEFINE_VAR and u.arg[0] == 'core_id': global_size[0] = u.arg[2] + 1
 
     return ProgramSpec(sink.arg.name, source.arg, device.arg, sink, uops, lib, list(prg.arg) if prg.arg else [], global_size, local_size,
                        sorted(_vars, key=lambda v: v.arg), sorted(dedup(_globals)), sorted(dedup(outs)), sorted(dedup(ins)))
@@ -150,5 +155,3 @@ class Renderer:
   def __reduce__(self): return self.__class__, ()
   def render(self, uops:list[UOp]) -> str: raise NotImplementedError("needs a renderer")
   def aux(self, uops:list[UOp]) -> dict: raise NotImplementedError("needs aux")
-
-  def is_dtype_supported(self, dtype:DType) -> bool: return True

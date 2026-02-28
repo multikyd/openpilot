@@ -549,7 +549,7 @@ class RadarD:
       self.compute_leads(self.v_ego, alive_tracks, md)
       if self.leadTwo is not None:
         self.radar_state.leadTwo = self.leadTwo
-      if self.enable_radar_tracks == 3:
+      if self.enable_radar_tracks >= 3:
         self._pick_lead_one_from_state()
 
   def publish(self, pm: messaging.PubMaster):
@@ -757,7 +757,7 @@ class RadarD:
       return self._corner_state[side]
 
     delta = h[-1] - h[0]
-    th = 0.15 # 3 * (20 / n)
+    th = 0.02 # 3 * (20 / n)
 
     if delta < -th:
       self._corner_state[side] = +1   # approaching

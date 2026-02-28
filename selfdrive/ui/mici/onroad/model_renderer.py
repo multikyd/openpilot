@@ -30,15 +30,15 @@ NO_THROTTLE_COLORS = [
 
 # kisa
 LL_THROTTLE_COLORS = [
-  rl.Color(64, 200, 255, 102),
-  rl.Color(90, 220, 255, 89),
-  rl.Color(90, 220, 255, 0),
+  rl.Color(255, 170, 60, 102),
+  rl.Color(255, 200, 90, 89),
+  rl.Color(255, 200, 90, 0),
 ]
 
 LL_NO_THROTTLE_COLORS = [
-  rl.Color(200, 230, 255, 102),
-  rl.Color(200, 230, 255, 89),
-  rl.Color(200, 230, 255, 0),
+  rl.Color(255, 220, 180, 102),
+  rl.Color(255, 220, 180, 89),
+  rl.Color(255, 220, 180, 0),
 ]
 
 LANE_LINE_COLORS = {

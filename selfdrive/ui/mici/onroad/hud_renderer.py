@@ -17,7 +17,7 @@ SET_SPEED_NA = 255
 KM_TO_MILE = 0.621371
 CRUISE_DISABLED_CHAR = '–'
 
-SET_SPEED_PERSISTENCE = 3  # seconds
+SET_SPEED_PERSISTENCE = 2.5  # seconds
 
 
 @dataclass(frozen=True)
@@ -49,8 +49,8 @@ class TurnIntent(Widget):
     self._turn_intent_alpha_filter = FirstOrderFilter(0, 0.05, 1 / gui_app.target_fps)
     self._turn_intent_rotation_filter = FirstOrderFilter(0, 0.1, 1 / gui_app.target_fps)
 
-    self._txt_turn_intent_left: rl.Texture = gui_app.texture('icons_mici/turn_intent_left.png', 50, 19)
-    self._txt_turn_intent_right: rl.Texture = gui_app.texture('icons_mici/turn_intent_right.png', 50, 19)
+    self._txt_turn_intent_left: rl.Texture = gui_app.texture('icons_mici/turn_intent_left.png', 50, 20)
+    self._txt_turn_intent_right: rl.Texture = gui_app.texture('icons_mici/turn_intent_left.png', 50, 20, flip_x=True)
 
   def _render(self, _):
     if self._turn_intent_alpha_filter.x > 1e-2:
@@ -133,6 +133,7 @@ class HudRenderer(Widget):
     self._set_speed_alpha_filter = FirstOrderFilter(0.0, 0.1, 1 / gui_app.target_fps)
 
     self.setspeed_changed = False
+    self.source_text = ""
 
   def set_wheel_critical_icon(self, critical: bool):
     """Set the wheel icon to critical or normal state."""
@@ -163,8 +164,10 @@ class HudRenderer(Widget):
       controls_state.vCruiseDEPRECATED if v_cruise_cluster == 0.0 else v_cruise_cluster
     )
     engaged = sm['selfdriveState'].enabled or ui_state.latEnabled
-    if (set_speed != self.set_speed and engaged) or (engaged and not self._engaged):
+    source_text = ui_state.desiredSource
+    if (set_speed != self.set_speed and engaged) or (engaged and not self._engaged) or (source_text != self.source_text):
       self._set_speed_changed_time = rl.get_time()
+      self.source_text = source_text
     self._engaged = engaged
     self.set_speed = set_speed
     self.is_cruise_set = 0 < self.set_speed < SET_SPEED_NA
@@ -179,8 +182,7 @@ class HudRenderer(Widget):
   def _render(self, rect: rl.Rectangle) -> None:
     """Render HUD elements to the screen."""
 
-    if ui_state.sm['controlsState'].lateralControlState.which() != 'angleState':
-      self._torque_bar.render(rect)
+    self._torque_bar.render(rect)
 
     if self.is_cruise_set:
       self._draw_set_speed(rect)
@@ -188,9 +190,9 @@ class HudRenderer(Widget):
     self._draw_steering_wheel(rect)
     self._draw_current_speed(rect)
     self._draw_standstill_timer(rect)
-    if not self.setspeed_changed or self._can_draw_top_icons:
-      self._draw_speed_limit_sign(rect)
+    if self._can_draw_top_icons and not self.setspeed_changed:
       self._draw_car_stat(rect)
+      self._draw_speed_limit_sign(rect)
 
   def _draw_steering_wheel(self, rect: rl.Rectangle) -> None:
     wheel_txt = self._txt_wheel_critical if self._show_wheel_critical else self._txt_wheel
@@ -263,8 +265,8 @@ class HudRenderer(Widget):
     rl.draw_text_ex(
       self._font_display,
       set_speed_text,
-      rl.Vector2(x + 13 + 4, y + 3 - 8 - 3 + 4),
-      FONT_SIZES.set_speed - 20,
+      rl.Vector2(x + 7, y - 10),
+      FONT_SIZES.set_speed - 30,
       0,
       set_speed_color,
     )
@@ -277,11 +279,23 @@ class HudRenderer(Widget):
     rl.draw_text_ex(
       self._font_semi_bold,
       max_text,
-      rl.Vector2(x + 25, y + FONT_SIZES.set_speed - 7 + 4 - 10),
-      FONT_SIZES.max_speed + 55,
+      rl.Vector2(x + 7, y + FONT_SIZES.set_speed - 55),
+      FONT_SIZES.max_speed + 35,
       0,
       max_color,
     )
+
+    # source text
+    if ui_state.desiredSpeed <= self.set_speed:
+      source_color = rl.Color(255, 255, 0, int(255 * alpha))
+      rl.draw_text_ex(
+        self._font_semi_bold,
+        ui_state.desiredSource,
+        rl.Vector2(x + 7, y + FONT_SIZES.set_speed),
+        FONT_SIZES.max_speed + 20,
+        0,
+        source_color,
+      )
 
   # def _draw_current_speed(self, rect: rl.Rectangle) -> None:
   #   """Draw the current vehicle speed and unit."""
@@ -428,7 +442,7 @@ class HudRenderer(Widget):
     rr = s.tpmsPressureRr
     unit = s.tpmsUnit  # 0: psi, 1: kpa, 2: bar
 
-    font_size = 18 if unit == 2 else (16 if unit != 0 else 19)
+    font_size = 20 if unit == 2 else (18 if unit != 0 else 21)
 
     def fmt_val(v):
       if v is None or v == 0 or v == 255:

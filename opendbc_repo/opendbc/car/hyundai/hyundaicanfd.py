@@ -521,10 +521,10 @@ def create_ccnc_messages(CP, packer, CAN, frame, CC, CS, hud_control, disp_angle
     desire = md.meta.desire.raw
     desire_state = md.meta.desireState
     if len(desire_state) > 4:
-      if desire_state[1] > 0.3 : lane_changing = 1
-      if desire_state[2] > 0.3 : lane_changing = 2
-      if desire_state[3] > 0.3 : lane_changing = 3
-      if desire_state[4] > 0.3 : lane_changing = 4
+      if desire_state[1] > 0.8: lane_changing = 1
+      if desire_state[2] > 0.8: lane_changing = 2
+      if desire_state[3] > 0.8: lane_changing = 3
+      if desire_state[4] > 0.8: lane_changing = 4
 
   if CP.flags & HyundaiFlags.CAMERA_SCC.value:
     HDA_CntrlModSta = 0
@@ -616,7 +616,7 @@ def create_ccnc_messages(CP, packer, CAN, frame, CC, CS, hud_control, disp_angle
           values["ALERTS_3"] = 0
           values["SOUNDS_3"] = 0
 
-        if values["ALERTS_5"] in [1, 2, 4, 5]:
+        if values["ALERTS_5"] in [1, 2, 3, 4, 5]:
           values["ALERTS_5"] = 0
 
         if values["ALERTS_5"] in [11] and CS.softHoldActive == 0:

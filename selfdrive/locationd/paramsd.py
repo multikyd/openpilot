@@ -3,9 +3,6 @@ import os
 import numpy as np
 import capnp
 
-import json
-import math
-
 import cereal.messaging as messaging
 from cereal import car, log
 from openpilot.common.params import Params
@@ -14,8 +11,6 @@ from openpilot.selfdrive.locationd.models.car_kf import CarKalman, ObservationKi
 from openpilot.selfdrive.locationd.models.constants import GENERATED_DIR
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 from openpilot.common.swaglog import cloudlog
-
-from openpilot.common.gps import get_gps_location_service
 
 MAX_ANGLE_OFFSET_DELTA = 20 * DT_MDL  # Max 20 deg/s
 ROLL_MAX_DELTA = np.radians(20.0) * DT_MDL  # 20deg in 1 second is well within curvature limits
@@ -132,8 +127,8 @@ class VehicleParamsLearner:
 
     if not self.active:
       # Reset time when stopped so uncertainty doesn't grow
-      self.kf.filter.set_filter_time(t)  # type: ignore
-      self.kf.filter.reset_rewind()      # type: ignore
+      self.kf.filter.set_filter_time(t)
+      self.kf.filter.reset_rewind()
 
   def get_msg(self, valid: bool, debug: bool = False) -> capnp._DynamicStructBuilder:
     x = self.kf.x
@@ -271,8 +266,7 @@ def main():
   REPLAY = bool(int(os.getenv("REPLAY", "0")))
 
   pm = messaging.PubMaster(['liveParameters'])
-  gps_location_service = get_gps_location_service(Params())
-  sm = messaging.SubMaster(['livePose', 'liveCalibration', 'carState', gps_location_service], poll='livePose', ignore_alive=[gps_location_service], ignore_valid=[gps_location_service])
+  sm = messaging.SubMaster(['livePose', 'liveCalibration', 'carState'], poll='livePose')
 
   params = Params()
   CP = messaging.log_from_bytes(params.get("CarParams", block=True), car.CarParams)
@@ -282,8 +276,6 @@ def main():
   steer_ratio, stiffness_factor, angle_offset_deg, pInitial = retrieve_initial_vehicle_params(params, CP, REPLAY, DEBUG)
   learner = VehicleParamsLearner(CP, steer_ratio, stiffness_factor, np.radians(angle_offset_deg), pInitial)
 
-  params_memory = Params("/dev/shm/params")
-  params_memory.remove("LastGPSPosition")
   while True:
     sm.update()
     if sm.all_checks():
@@ -291,14 +283,6 @@ def main():
         if sm.updated[which]:
           t = sm.logMonoTime[which] * 1e-9
           learner.handle_log(t, which, sm[which])
-
-    if sm.updated[gps_location_service]:
-      gps = sm[gps_location_service]
-      if gps.hasFix:
-        bearing = gps.bearingDeg
-        lat = gps.latitude
-        lon = gps.longitude
-        params_memory.put_nonblocking("LastGPSPosition", json.dumps({"latitude": lat, "longitude": lon, "bearing": bearing}))
 
     if sm.updated['livePose']:
       msg = learner.get_msg(sm.all_checks(), debug=DEBUG)

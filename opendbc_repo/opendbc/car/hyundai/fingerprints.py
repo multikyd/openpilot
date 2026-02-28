@@ -725,6 +725,7 @@ FW_VERSIONS = {
       b'\xf1\x00OSP MDPS C 1.00 1.02 56310-K4271 4OEPC102',
       b'\xf1\x00OSP MDPS C 1.00 1.02 56310/K4271 4OEPC102',
       b'\xf1\x00OSP MDPS C 1.00 1.02 56310/K4970 4OEPC102',
+      b'\xf1\x00OSP MDPS C 1.00 1.02 56310/K4971 4OEPC102',
       b'\xf1\x00OSP MDPS C 1.00 1.02 56310K4260\x00 4OEPC102',
       b'\xf1\x00OSP MDPS C 1.00 1.02 56310K4261\x00 4OEPC102',
       b'\xf1\x00OSP MDPS C 1.00 1.02 56310K4971\x00 4OEPC102',
@@ -895,9 +896,11 @@ FW_VERSIONS = {
   CAR.KIA_OPTIMA_H_G4_FL: {
     (Ecu.fwdRadar, 0x7d0, None): [
       b'\xf1\x00JFhe SCC FHCUP      1.00 1.01 99110-A8500         ',
+      b'\xf1\x00JFhe SCC FHCUP      1.00 1.03 99110-A8500         ',
     ],
     (Ecu.fwdCamera, 0x7c4, None): [
       b'\xf1\x00JFH MFC  AT KOR LHD 1.00 1.01 95895-A8200 180323',
+      b'\xf1\x00JFH MFC  AT KOR LHD 1.00 1.04 95895-A8200 181217',
     ],
   },
   CAR.HYUNDAI_ELANTRA: {
@@ -1150,12 +1153,14 @@ FW_VERSIONS = {
       b'\xf1\x00NX4 FR_CMR AT USA LHD 1.00 1.00 99211-N9260 14Y',
       b'\xf1\x00NX4 FR_CMR AT USA LHD 1.00 1.01 99211-N9100 14A',
       b'\xf1\x00NX4 FR_CMR AT USA LHD 1.00 1.01 99211-N9240 14T',
+      b'\xf1\x00NX4 FR_CMR AT EUR LHD 1.00 1.00 99211-N9240 14Q',
     ],
     (Ecu.fwdRadar, 0x7d0, None): [
       b'\xf1\x00NX4__               1.00 1.00 99110-N9100         ',
       b'\xf1\x00NX4__               1.00 1.01 99110-N9000         ',
       b'\xf1\x00NX4__               1.00 1.02 99110-N9000         ',
       b'\xf1\x00NX4__               1.01 1.00 99110-N9100         ',
+      b'\xf1\x00NX4__               1.01 1.02 99110-N9000         ',
     ],
   },
   CAR.HYUNDAI_SANTA_CRUZ_1ST_GEN: {
@@ -1216,24 +1221,6 @@ FW_VERSIONS = {
       b'\xf1\x00JKev SCC -----      1.00 1.01 99110-DS000         ',
     ],
   },
-  
-  CAR.HYUNDAI_NEXO_1ST_GEN: {
-    (Ecu.abs, 0x7d1, None): [
-      b'\xf1\x00FE IEB \x01 312 \x11\x13 58520-M5000',
-    ],
-    (Ecu.fwdCamera, 0x7c4, None): [
-      b'\xf1\x00FE  MFC  AT KOR LHD 1.00 1.00 99211-M5100 201218',
-      b'\xf1\x00FE  MFC  AT KOR LHD 1.00 1.02 99211-M5100 220405',
-    ],
-    (Ecu.eps, 0x7d4, None): [
-      b'\xf1\x00FE  MDPS C 1.00 1.05 56340-M5000 9903',
-      b'\xf1\x00FE  MDPS C 1.00 1.06 56340-M5000 1625',
-    ],
-    (Ecu.fwdRadar, 0x7d0, None): [
-      b'\xf1\x00FE__ SCC FHCUP      1.00 1.05 99110-M5000         ',
-    ],
-  },
-  
   CAR.GENESIS_GV60_EV_1ST_GEN: {
     (Ecu.fwdCamera, 0x7c4, None): [
       b'\xf1\x00JW1 MFC  AT AUS RHD 1.00 1.03 99211-CU100 221118',
@@ -1324,6 +1311,42 @@ FW_VERSIONS = {
     ],
     (Ecu.fwdRadar, 0x7d0, None): [
       b'\xf1\x00US4_ RDR -----      1.00 1.00 99110-CG000         ',
+    ],
+  },
+  CAR.HYUNDAI_NEXO_1ST_GEN: {
+    (Ecu.abs, 0x7d1, None): [
+      b'\xf1\x00FE IEB \x01 312 \x11\x13 58520-M5000',
+    ],
+    (Ecu.fwdCamera, 0x7c4, None): [
+      b'\xf1\x00FE  MFC  AT KOR LHD 1.00 1.00 99211-M5100 201218',
+      b'\xf1\x00FE  MFC  AT KOR LHD 1.00 1.02 99211-M5100 220405',
+    ],
+    (Ecu.eps, 0x7d4, None): [
+      b'\xf1\x00FE  MDPS C 1.00 1.05 56340-M5000 9903',
+      b'\xf1\x00FE  MDPS C 1.00 1.06 56340-M5000 1625',
+    ],
+    (Ecu.fwdRadar, 0x7d0, None): [
+      b'\xf1\x00FE__ SCC FHCUP      1.00 1.05 99110-M5000         ',
+    ],
+  },
+  CAR.HYUNDAI_KONA_2022: {
+    (Ecu.fwdCamera, 0x7c4, None): [
+      b'\xf1\x00OSP LKA  AT CND LHD 1.00 1.04 99211-J9200 904',
+      b'\xf1\x00OSP LKA  AT USA LHD 1.00 1.04 99211-J9200 904',
+    ],
+    (Ecu.eps, 0x7d4, None): [
+      b'\xf1\x00OSP MDPS C 1.00 1.04 56310/J9290 4OPCC104',
+      b'\xf1\x00OSP MDPS C 1.00 1.04 56310/J9291 4OPCC104',
+      b'\xf1\x00OSP MDPS C 1.00 1.04 56310J9291\x00 4OPCC104',
+    ],
+    (Ecu.fwdRadar, 0x7d0, None): [
+      b'\xf1\x00YB__ FCA -----      1.00 1.01 99110-J9000      \x00\x00\x00',
+    ],
+    (Ecu.transmission, 0x7e1, None): [
+      b'\xf1\x00HT6WA280BLHT6VA650A1COS4N20NS1\x00\x00\x00\x00\x00\x00\x15\xf5\x87~',
+      b'\xf1\x00T01960BL  T01E60A1  DOS2T16X4XE60NS4N\x90\xe6\xcb',
+      b'\xf1\x00T01G00BL  T01I00A1  DOS2T16X2XI00NS0\x8c`\xff\xe7',
+      b'\xf1\x00T01G00BL  T01I00A1  DOS2T16X4XI00NS0\x99L\xeeq',
     ],
   },
   CAR.KIA_EV9: {  # (MV)

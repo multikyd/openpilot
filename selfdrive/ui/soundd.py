@@ -23,11 +23,12 @@ MIN_VOLUME = 0.1
 SELFDRIVE_STATE_TIMEOUT = 5 # 5 seconds
 FILTER_DT = 1. / (micd.SAMPLE_RATE / micd.FFT_SAMPLES)
 
-AMBIENT_DB = 30 # DB where MIN_VOLUME is applied
+AMBIENT_DB = 24 # DB where MIN_VOLUME is applied
 DB_SCALE = 30 # AMBIENT_DB + DB_SCALE is where MAX_VOLUME is applied
 
 VOLUME_BASE = 20
 if HARDWARE.get_device_type() == "tizi":
+  AMBIENT_DB = 30
   VOLUME_BASE = 10
 
 AudibleAlert = car.CarControl.HUDControl.AudibleAlert
@@ -225,7 +226,7 @@ class Soundd:
 
   def calculate_volume(self, weighted_db):
     volume = ((weighted_db - AMBIENT_DB) / DB_SCALE) * (MAX_VOLUME - MIN_VOLUME) + MIN_VOLUME
-    return math.pow(10, (np.clip(volume, MIN_VOLUME, MAX_VOLUME) - 1))
+    return math.pow(VOLUME_BASE, (np.clip(volume, MIN_VOLUME, MAX_VOLUME) - 1))
 
   @retry(attempts=10, delay=3)
   def get_stream(self, sd):

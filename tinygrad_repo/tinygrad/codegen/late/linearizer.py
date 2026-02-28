@@ -26,11 +26,10 @@ def linearize(sink:UOp) -> list[UOp]:
     extra = None
     match u.op:
       # the order and placement of these defines is important
-      case Ops.DEFINE_GLOBAL: priority, extra = -20, u.arg
+      case Ops.PARAM: priority, extra = -20, u.arg
       case Ops.DEFINE_VAR: priority, extra = -19, u.arg
       case Ops.DEFINE_LOCAL: priority = -18
       case Ops.DEFINE_REG: priority = -17
-      case Ops.CONST: priority = -10  # early consts
       case Ops.LOAD: priority = -1    # place loads early
       case Ops.STORE: priority = 1    # place stores late
       case Ops.RANGE: priority = 5    # placing RANGE is good

@@ -292,15 +292,13 @@
       "en": "Sets the maximum number of recording files. When storage is full, the oldest files are automatically deleted."
     }
   },
-
-
   {
     "group": "LAT",
     "title": {
-      "ko": "차선 오프셋 조정",
-      "en": "Lane Offset Adjustment"
+      "ko": "카메라 오프셋",
+      "en": "Camera Offset"
     },
-    "param": "AdjustLaneOffset",
+    "param": "CameraOffsetAdj",
     "min_value": -5,
     "max_value": 5,
     "step": 0.01,
@@ -313,8 +311,8 @@
       }
     },
     "description": {
-      "ko": "차로 중앙을 기준으로 좌우 오프셋을 조정합니다. 값이 커질수록 차선의 한쪽으로 더 치우쳐 주행합니다.",
-      "en": "Adjusts the lateral offset from the lane center. Higher values shift the vehicle further to one side."
+      "ko": "카메라 오프셋을 조정합니다. -값은 좌측으로 +값은 우측으로 치우쳐 주행하게 합니다.(기본값: 0.04)",
+      "en": "Adjust the camera offset. Negative values move the car left, positive values move the car right. (Default value: 0.04)"
     }
   },
   {
@@ -500,7 +498,40 @@
       "en": "Adjusts sensitivity to vehicles cutting in or exiting based on radar data. Higher values increase responsiveness."
     }
   },
-
+  {
+    "group": "LAT",
+    "title": {
+      "ko": "왼쪽 엣지 치우침 조정",
+      "en": "Left Edge Offset Adjust"
+    },
+    "param": "LeftEdgeOffset",
+    "min_value": -1,
+    "max_value": 1,
+    "step": 0.01,
+    "decimal_places": 2,
+    "value_type": "FLOAT",
+    "description": {
+      "ko": "차량의 왼쪽에 도로 엣지가 있을 경우 카메라 오프셋을 조절하여 차량 위치를 조정합니다.(-값: 차량을 왼쪽으로 이동, +값: 차량을 오른쪽으로 이동), 기본 카메라 오프셋과 값 조정 정도가 동일합니다.", 
+      "en": "Adjusts the camera offset to the left edge of the car if a road edge is present.(Negative value: moves the car to the left, Positive value: moves the car to the right), The default camera offset and value adjustment ratio are the same."
+    }
+  },
+  {
+    "group": "LAT",
+    "title": {
+      "ko": "오른쪽 엣지 치우침 조정",
+      "en": "Right Edge Offset Adjust"
+    },
+    "param": "RightEdgeOffset",
+    "min_value": -1,
+    "max_value": 1,
+    "step": 0.01,
+    "decimal_places": 2,
+    "value_type": "FLOAT",
+    "description": {
+      "ko": "차량의 오른쪽에 도로 엣지가 있을 경우 카메라 오프셋을 조절하여 차량 위치를 조정합니다.(-값: 차량을 왼쪽으로 이동, +값: 차량을 오른쪽으로 이동), 기본 카메라 오프셋과 값 조정 정도가 동일합니다.", 
+      "en": "Adjusts the camera offset to the right edge of the car if a road edge is present.(Negative value: moves the car to the left, Positive value: moves the car to the right), The default camera offset and value adjustment ratio are the same."
+    }
+  },
 
 
   {
@@ -1043,9 +1074,6 @@
       "en": "Adjusts the stopping distance at traffic lights. Decrease the value if stopping beyond the traffic light. Increase the value if stopping before it. (Unit: m)"
     }
   },
-
-
-
   {
     "group": "Curv/Safety/Nav",
     "title": {
@@ -1055,7 +1083,7 @@
     "param": "UseLaneLineSpeed",
     "min_value": 0,
     "max_value": 200,
-    "step": 5,
+    "step": 1,
     "decimal_places": 0,
     "value_type": "INT",
     "description": {
@@ -1343,10 +1371,14 @@
     "title": { "ko": "모델 회전 속도 계수", "en": "Model Turn Speed Factor" },
     "param": "ModelTurnSpeedFactor",
     "min_value": 0,
-    "max_value": 80,
-    "step": 10,
-    "decimal_places": 0,
-    "value_type": "INT"
+    "max_value": 8,
+    "step": 0.1,
+    "decimal_places": 1,
+    "value_type": "FLOAT",
+    "description": {
+      "ko": "클수록 모델의 미래속도가 반영됩니다.(단위:초)",
+      "en": "Higher values place more weight on the model future speed prediction.(unit:sec)"
+    }
   },
   {
     "group": "Curv/Safety/Nav",

@@ -9,7 +9,9 @@ from openpilot.common.params import Params
 
 TRAJECTORY_SIZE = 33
 # positive numbers go right
-CAMERA_OFFSET = 0 #0.08
+CAMERA_OFFSET = 0.04 #0.08
+PATH_OFFSET = CAMERA_OFFSET - 0.04
+
 MIN_LANE_DISTANCE = 2.6
 MAX_LANE_DISTANCE = 3.7
 MAX_LANE_CENTERING_AWAY = 1.85
@@ -39,6 +41,8 @@ def max_abs(a, b):
 
 class LanePlanner:
   def __init__(self):
+    self.params = Params()
+
     self.ll_t = np.zeros((TRAJECTORY_SIZE,))
     self.ll_x = np.zeros((TRAJECTORY_SIZE,))
     self.lll_y = np.zeros((TRAJECTORY_SIZE,))
@@ -71,10 +75,89 @@ class LanePlanner:
 
     self.lanefull_mode = False
     self.d_prob_count = 0
+    self.second = 0.0
 
-    self.params = Params()
+    self.camera_offset = CAMERA_OFFSET
+    self.path_offset = self.camera_offset - 0.04
+    self.path_offset2 = 0.0
+    self.road_edge_offset = 0.0
+    self.timer = 0
+    self.timer2 = 0
+    self.total_camera_offset = self.camera_offset
+    self.right_lane_to_right_edge_width = 0.0
+    self.left_lane_to_left_edge_width = 0.0
+    self.left_edge_offset = self.params.get("LeftEdgeOffset", return_default=True)
+    self.right_edge_offset = self.params.get("RightEdgeOffset", return_default=True)
 
   def parse_model(self, md):
+
+    self.timer += DT_MDL
+    if self.timer > 1.0:
+      self.timer = 0.0
+      self.camera_offset = self.params.get("CameraOffsetAdj", return_default=True)
+      self.path_offset = self.camera_offset - 0.04
+
+    if self.left_edge_offset != 0.0 or self.right_edge_offset != 0.0: # kisapilot
+      left_edge_prob = np.clip(1.0 - md.roadEdgeStds[0], 0.0, 1.0)
+      left_nearside_prob = md.laneLineProbs[0]
+      left_close_prob = md.laneLineProbs[1]
+      right_close_prob = md.laneLineProbs[2]
+      right_nearside_prob = md.laneLineProbs[3]
+      right_edge_prob = np.clip(1.0 - md.roadEdgeStds[1], 0.0, 1.0)
+
+      self.right_lane_to_right_edge_width = abs(self.rll_y[0] - md.roadEdges[1].y[0])
+      self.left_lane_to_left_edge_width = abs(self.lll_y[0] - md.roadEdges[0].y[0])
+      lane_to_edge_threshold = 2.6
+
+      self.timer2 += DT_MDL
+      if self.timer2 > 1.0:
+        self.timer2 = 0.0
+        if right_nearside_prob < 0.2 and left_nearside_prob < 0.2:
+          if self.road_edge_offset != 0.0:
+            if self.road_edge_offset > 0.0:
+              self.road_edge_offset -= max(0.01, round((self.road_edge_offset/5), 2))
+              if self.road_edge_offset < 0.0:
+                self.road_edge_offset = 0.0
+            elif self.road_edge_offset < 0.0:
+              self.road_edge_offset += max(0.01, round((self.road_edge_offset/5), 2))
+              if self.road_edge_offset > 0.0:
+                self.road_edge_offset = 0.0
+        elif right_edge_prob > 0.3 and right_nearside_prob < 0.3 and right_close_prob > 0.4 and left_nearside_prob >= right_nearside_prob and self.right_lane_to_right_edge_width < lane_to_edge_threshold:
+          if self.right_edge_offset != 0.0 and self.road_edge_offset != self.right_edge_offset:
+            if self.road_edge_offset < self.right_edge_offset:
+              self.road_edge_offset += max(0.01, round((self.right_edge_offset/5), 2))
+              if self.road_edge_offset > self.right_edge_offset:
+                self.road_edge_offset = self.right_edge_offset
+            elif self.road_edge_offset > self.right_edge_offset:
+              self.road_edge_offset -= max(0.01, round((self.right_edge_offset/5), 2))
+              if self.road_edge_offset < self.right_edge_offset:
+                self.road_edge_offset = self.right_edge_offset
+        elif left_edge_prob > 0.3 and left_nearside_prob < 0.3 and left_close_prob > 0.4 and right_nearside_prob >= left_nearside_prob and self.left_lane_to_left_edge_width < lane_to_edge_threshold:
+          if self.left_edge_offset != 0.0 and self.road_edge_offset != self.left_edge_offset:
+            if self.road_edge_offset < self.left_edge_offset:
+              self.road_edge_offset += max(0.01, round((self.left_edge_offset/5), 2))
+              if self.road_edge_offset > self.left_edge_offset:
+                self.road_edge_offset = self.left_edge_offset
+            elif self.road_edge_offset > self.left_edge_offset:
+              self.road_edge_offset -= max(0.01, round((self.left_edge_offset/5), 2))
+              if self.road_edge_offset < self.left_edge_offset:
+                self.road_edge_offset = self.left_edge_offset
+        else:
+          if self.road_edge_offset != 0.0:
+            if self.road_edge_offset > 0.0:
+              self.road_edge_offset -= max(0.01, round((self.road_edge_offset/5), 2))
+              if self.road_edge_offset < 0.0:
+                self.road_edge_offset = 0.0
+            elif self.road_edge_offset < 0.0:
+              self.road_edge_offset += max(0.01, round((self.road_edge_offset/5), 2))
+              if self.road_edge_offset > 0.0:
+                self.road_edge_offset = 0.0
+        self.path_offset2 = self.road_edge_offset
+    else:
+      self.road_edge_offset = 0.0
+      self.path_offset2 = self.road_edge_offset
+
+    self.total_camera_offset = self.camera_offset + self.road_edge_offset
 
     lane_lines = md.laneLines
     edges = md.roadEdges
@@ -83,8 +166,8 @@ class LanePlanner:
       self.ll_t = (np.array(lane_lines[1].t) + np.array(lane_lines[2].t))/2
       # left and right ll x is the same
       self.ll_x = lane_lines[1].x
-      self.lll_y = np.array(lane_lines[1].y)
-      self.rll_y = np.array(lane_lines[2].y)
+      self.lll_y = np.array(lane_lines[1].y) + self.total_camera_offset
+      self.rll_y = np.array(lane_lines[2].y) + self.total_camera_offset
       self.lll_prob = md.laneLineProbs[1]
       self.rll_prob = md.laneLineProbs[2]
       self.lll_std = md.laneLineStds[1]
@@ -129,7 +212,6 @@ class LanePlanner:
     # Find current lanewidth
     current_lane_width = abs(self.rll_y[0] - self.lll_y[0])
 
-    max_updated_count = 10.0 * DT_MDL
     both_lane_available = False
     #speed_lane_width = np.interp(v_ego*3.6, [0., 60.], [2.8, 3.5])
     if l_prob > 0.5 and r_prob > 0.5 and self.lane_change_multiplier > 0.5:
@@ -176,24 +258,7 @@ class LanePlanner:
       offset_lane = np.interp(self.lane_width, [2.5, 2.9], [0.0, -self.adjustLaneOffset]) # 차선이 좁으면 안함..
 
     #select lane path
-    # 차선이 좁아지면, 도로경계쪽에 있는 차선 위주로 따라가도록함.
-    if self.lane_width < 2.5:
-      if r_prob > 0.5 and self.lane_width_right_filtered.x < self.lane_width_left_filtered.x:
-        lane_path_y = path_from_right_lane
-      elif l_prob > 0.5 and self.lane_width_left_filtered.x < 2.0:
-        lane_path_y = path_from_left_lane
-      else:
-        lane_path_y = path_from_left_lane if l_prob > 0.5 or l_prob > r_prob else path_from_right_lane
-    elif l_prob > 0.7 and r_prob > 0.7:
-      lane_path_y = (path_from_left_lane + path_from_right_lane) / 2.
-      # lane_width filtering에 의해서, 점점 줄어들때, 중앙선으로 붙어가는 현상이 생김.. 
-      #if self.lane_width > 3.2:
-      #  lane_path_y = path_from_right_lane
-      #else:
-      #  lane_path_y = (path_from_left_lane + path_from_right_lane) / 2.
-    # 그외 진한차선을 따라가도록함.
-    else:
-      lane_path_y = (l_prob * path_from_left_lane + r_prob * path_from_right_lane) / (l_prob + r_prob + 0.0001)
+    lane_path_y = (path_from_left_lane + path_from_right_lane) / 2.
 
     use_laneless_center_adjust = False
     if use_laneless_center_adjust:
@@ -246,7 +311,7 @@ class LanePlanner:
           path_xyz[:,1] = self.d_prob * lane_path_y_interp + (1.0 - self.d_prob) * path_xyz[:,1]
 
 
-    path_xyz[:, 1] += (CAMERA_OFFSET + self.lane_offset_filtered.x)
+    path_xyz[:, 1] += (self.lane_offset_filtered.x + self.path_offset + self.path_offset2)
 
     self.offset_total = self.lane_offset_filtered.x
 

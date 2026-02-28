@@ -1,9 +1,8 @@
 from __future__ import annotations
 import os, functools, platform, time, re, contextlib, operator, hashlib, pickle, sqlite3, tempfile, pathlib, string, ctypes, sys, gzip, getpass, gc
-import urllib.request, subprocess, shutil, math, types, copyreg, inspect, importlib, decimal, itertools, socketserver, json
+import subprocess, shutil, math, types, copyreg, inspect, importlib, decimal, itertools
 from dataclasses import dataclass, field
 from typing import ClassVar, Iterable, Any, TypeVar, Callable, Sequence, TypeGuard, Iterator, Generic, Generator, cast, overload
-from http.server import BaseHTTPRequestHandler
 
 T = TypeVar("T")
 U = TypeVar("U")
@@ -26,7 +25,7 @@ def argfix(*x):
   return x
 # https://stackoverflow.com/questions/3382352/equivalent-of-numpy-argsort-in-basic-python
 def argsort(x): return type(x)(sorted(range(len(x)), key=x.__getitem__))
-def all_same(items:tuple[T, ...]|list[T]): return all(x == items[0] for x in items)
+def all_same(items:Sequence): return all(x == items[0] for x in items)  # works for empty input
 def all_int(t: Sequence[Any]) -> TypeGuard[tuple[int, ...]]: return all(isinstance(s, int) for s in t)
 def colored(st, color:str|None, background=False): # replace the termcolor library
   colors = ['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white']
@@ -148,16 +147,16 @@ def stderr_log(msg:str): print(msg, end='', file=sys.stderr, flush=True)
 class Context(contextlib.ContextDecorator):
   def __init__(self, **kwargs): self.kwargs = kwargs
   def __enter__(self):
-    self.old_context:dict[str, int] = {k: ContextVar._cache[k].value for k in self.kwargs}
+    self.old_context:dict[str, Any] = {k: ContextVar._cache[k].value for k in self.kwargs}
     for k,v in self.kwargs.items(): ContextVar._cache[k].value = v
   def __exit__(self, *args):
     for k,v in self.old_context.items(): ContextVar._cache[k].value = v
 
-class ContextVar:
+class ContextVar(Generic[T]):
   _cache: ClassVar[dict[str, ContextVar]] = {}
-  value: int
+  value: T
   key: str
-  def __init__(self, key, default_value):
+  def __init__(self, key: str, default_value: T):
     if key in ContextVar._cache: raise RuntimeError(f"attempt to recreate ContextVar {key}")
     ContextVar._cache[key] = self
     self.value, self.key = getenv(key, default_value), key
@@ -166,6 +165,9 @@ class ContextVar:
   def __ge__(self, x): return self.value >= x
   def __gt__(self, x): return self.value > x
   def __lt__(self, x): return self.value < x
+  def tolist(self, obj=None):
+    assert isinstance(self.value, str)
+    return [getattr(obj, x) if obj else x for x in self.value.split(',') if x]
 
 DEBUG, IMAGE, BEAM, NOOPT = ContextVar("DEBUG", 0), ContextVar("IMAGE", 0), ContextVar("BEAM", 0), ContextVar("NOOPT", 0)
 JIT, JIT_BATCH_SIZE = ContextVar("JIT", 2 if OSX and ARCH_X86 else 1), ContextVar("JIT_BATCH_SIZE", 32)
@@ -178,12 +180,12 @@ CACHELEVEL, IGNORE_BEAM_CACHE, DEVECTORIZE = ContextVar("CACHELEVEL", 2), Contex
 VALIDATE_WITH_CPU, DISABLE_FAST_IDIV = ContextVar("VALIDATE_WITH_CPU", 0), ContextVar("DISABLE_FAST_IDIV", 0)
 CORRECT_DIVMOD_FOLDING, FUSE_OPTIM = ContextVar("CORRECT_DIVMOD_FOLDING", 0), ContextVar("FUSE_OPTIM", 0)
 ALLOW_DEVICE_USAGE, MAX_BUFFER_SIZE = ContextVar("ALLOW_DEVICE_USAGE", 1), ContextVar("MAX_BUFFER_SIZE", 0)
-EMULATE = ContextVar("EMULATE", "")
+EMULATE, EMULATED_DTYPES = ContextVar("EMULATE", ""), ContextVar("EMULATED_DTYPES", "")
 CPU_COUNT = ContextVar("CPU_COUNT", max(1, len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else (os.cpu_count() or 1)))
 # Compilers
 CPU_LLVM, CPU_LVP, AMD_LLVM = ContextVar("CPU_LLVM", 0), ContextVar("CPU_LVP", 0), ContextVar("AMD_LLVM", 0)
 NV_PTX, CUDA_PTX, NV_NAK, QCOM_IR3 = ContextVar("NV_PTX", 0), ContextVar("CUDA_PTX", 0), ContextVar("NV_NAK", 0), ContextVar("QCOM_IR3", 0)
-NULL_IR3, NULL_NAK = ContextVar("NULL_IR3", 0), ContextVar("NULL_NAK", 0)
+NULL_IR3, NULL_NAK, NULL_ALLOW_COPYOUT = ContextVar("NULL_IR3", 0), ContextVar("NULL_NAK", 0), ContextVar("NULL_ALLOW_COPYOUT", 0)
 AMD_CC, CPU_CC, NV_CC, CUDA_CC = ContextVar("AMD_CC", ""), ContextVar("CPU_CC", ""), ContextVar("NV_CC", ""), ContextVar("CUDA_CC", "")
 QCOM_CC = ContextVar("QCOM_CC", "")
 # VIZ implies PROFILE, but you can run PROFILE without VIZ
@@ -191,7 +193,7 @@ VIZ = ContextVar("VIZ", 0)
 PROFILE = ContextVar("PROFILE", abs(VIZ.value))
 SPEC = ContextVar("SPEC", 1)
 # TODO: disable by default due to speed
-IGNORE_OOB = ContextVar("IGNORE_OOB", 1)
+CHECK_OOB = ContextVar("CHECK_OOB", 0)
 PCONTIG = ContextVar("PCONTIG", 0)  # partial contiguous in rangeify
 DEBUG_RANGEIFY = ContextVar("DEBUG_RANGEIFY", 0)
 # set to 1, this uses tuplize in the linearizer sort order
@@ -200,6 +202,12 @@ TUPLE_ORDER = ContextVar("TUPLE_ORDER", 1)
 CCACHE = ContextVar("CCACHE", 1)
 # allow tf32 to be used on NVIDIA GPUs
 ALLOW_TF32 = ContextVar("ALLOW_TF32", 0)
+# set to 0 to disable the scheduler cache
+SCACHE = ContextVar("SCACHE", 1)
+# allow use of atomics for embedding backward
+USE_ATOMICS = ContextVar("USE_ATOMICS", 0)
+# allow use of assembly for gemm
+ASM_GEMM = ContextVar("ASM_GEMM", 0)
 
 @dataclass(frozen=True)
 class Metadata:
@@ -380,6 +388,7 @@ def _ensure_downloads_dir() -> pathlib.Path:
 
 def fetch(url:str, name:pathlib.Path|str|None=None, subdir:str|None=None, gunzip:bool=False,
           allow_caching=not getenv("DISABLE_HTTP_CACHE"), headers:dict[str, str]={}) -> pathlib.Path:
+  import urllib.request
   if url.startswith(("/", ".")): return pathlib.Path(url)
   if name is not None and (isinstance(name, pathlib.Path) or '/' in name): fp = pathlib.Path(name)
   else:
@@ -399,33 +408,6 @@ def fetch(url:str, name:pathlib.Path|str|None=None, subdir:str|None=None, gunzip
       progress_bar.update(close=True)
       if length and (file_size:=os.stat(fp).st_size) < length: raise RuntimeError(f"fetch size incomplete, {file_size} < {length}")
   return fp
-
-# NOTE: using HTTPServer forces a potentially slow socket.getfqdn
-class TCPServerWithReuse(socketserver.TCPServer):
-  allow_reuse_address = True
-  def __init__(self, server_address, RequestHandlerClass):
-    print(f"*** started server on http://127.0.0.1:{server_address[1]}")
-    super().__init__(server_address, RequestHandlerClass)
-
-class HTTPRequestHandler(BaseHTTPRequestHandler):
-  def send_data(self, data:bytes, content_type:str="application/json", status_code:int=200):
-    self.send_response(status_code)
-    self.send_header("Content-Type", content_type)
-    self.send_header("Content-Length", str(len(data)))
-    self.end_headers()
-    return self.wfile.write(data)
-  def stream_json(self, source:Generator):
-    try:
-      self.send_response(200)
-      self.send_header("Content-Type", "text/event-stream")
-      self.send_header("Cache-Control", "no-cache")
-      self.end_headers()
-      for r in source:
-        self.wfile.write(f"data: {json.dumps(r)}\n\n".encode("utf-8"))
-        self.wfile.flush()
-      self.wfile.write("data: [DONE]\n\n".encode("utf-8"))
-    # pass if client closed connection
-    except (BrokenPipeError, ConnectionResetError): return
 
 # *** Exec helpers
 

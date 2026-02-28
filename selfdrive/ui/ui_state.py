@@ -114,7 +114,6 @@ class UIState:
     self.pmicTemp: float = 0.0
     self.intakeTemp: float = 0.0
     self.exhaustTemp: float = 0.0
-    self.caseTemp: float = 0.0
     self.maxTemp: float = 0.0
     self.fanSpeedRpm: int = 0
 
@@ -279,7 +278,6 @@ class UIState:
         self.pmicTemp = 0.0
       self.intakeTemp = device_state.intakeTempC
       self.exhaustTemp = device_state.exhaustTempC
-      self.caseTemp = device_state.caseTempC
       self.maxTemp = device_state.maxTempC
 
       self.fanSpeedPercentDesired = device_state.fanSpeedPercentDesired

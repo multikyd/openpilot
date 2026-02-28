@@ -282,14 +282,14 @@ class CarrotPlanner:
       self.desireState = 0.0
       self.desireStateCount = 0
 
-  def dynamic_t_follow(self, t_follow, lead, desired_follow_distance, prev_a):
+  def dynamic_t_follow(self, t_follow, lead, desired_follow_distance, a_prev):
 
     self.jerk_factor_apply = self.jerk_factor
     if self.desireState > 0.9 and self.desireStateCount < int(1.5 / DT_MDL):  # lane change state, 1.5초동안만.
       t_follow *= self.dynamicTFollowLC   # 차선변경시 t_follow를 줄임.
       self.jerk_factor_apply = self.jerk_factor * self.dynamicTFollowLC   # 차선변경시 jerk factor를 줄여 aggresive하게
     elif lead.status:
-      t_follow += np.interp(prev_a[0], [-2.0, -0.5], [0.1, 0.0])
+      t_follow += np.interp(a_prev[0], [-2.0, -0.5], [0.1, 0.0])
       if self.dynamicTFollow > 0.0:
         gap_dist_adjust = np.clip((desired_follow_distance - lead.dRel) * self.dynamicTFollow, - 0.1, 1.0) * 0.1
         t_follow += gap_dist_adjust

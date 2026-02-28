@@ -14,7 +14,7 @@ from openpilot.common.params import Params
 from openpilot.selfdrive.controls.lib.lane_planner_2 import LanePlanner
 
 TRAJECTORY_SIZE = 33
-CAMERA_OFFSET = 0.04
+CAMERA_OFFSET = Params().get("CameraOffsetAdj", return_default=True) if Params().get("CameraOffsetAdj", return_default=True) is not None else 0.04 # default 0.04
 
 
 PATH_COST = 1.0
@@ -113,7 +113,7 @@ class LateralPlanner:
       self.v_plan = np.clip(car_speed, MIN_SPEED, np.inf)
       self.v_ego = self.v_plan[0]
       self.plan_a = np.array(md.acceleration.x)
-      if md.velocity.x[-1] < md.velocity.x[0] * 0.7:  # TODO: 모델이 감속을 요청하는 경우 속도테이블이 레인모드를 할수 없음. 속도테이블을 새로 만들어야함..
+      if md.velocity.x[-1] < md.velocity.x[0] * 0.1:  # TODO: 모델이 감속을 요청하는 경우 속도테이블이 레인모드를 할수 없음. 속도테이블을 새로 만들어야함..
         self.lanemode_possible_count = 0
         self.laneless_only = True
       else:
@@ -159,7 +159,7 @@ class LateralPlanner:
     self.latDebugText = self.LP.debugText
     #self.lanelines_active = True if self.LP.d_prob > 0.3 and self.LP.lanefull_mode else False
 
-    self.path_xyz[:, 1] += self.pathOffset
+    self.path_xyz[:, 1] += (self.LP.path_offset + self.LP.path_offset2)
 
     self.lat_mpc.set_weights(self.lateralPathCost, self.lateralMotionCost,
                              LATERAL_ACCEL_COST, LATERAL_JERK_COST,

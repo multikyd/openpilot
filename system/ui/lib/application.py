@@ -1,32 +1,25 @@
 import atexit
 import cffi
 import os
+import queue
 import time
 import signal
 import sys
 import pyray as rl
 import threading
 import platform
+import subprocess
 from contextlib import contextmanager
 from collections.abc import Callable
 from collections import deque
-from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 from typing import NamedTuple
 from importlib.resources import as_file, files
 from openpilot.common.swaglog import cloudlog
 from openpilot.system.hardware import HARDWARE, PC
 from openpilot.system.ui.lib.multilang import multilang
 from openpilot.common.realtime import Ratekeeper
-
-try:
-    from openpilot.common.params import Params
-except ImportError:
-    Params = None
-import subprocess
-from pathlib import Path
-from datetime import datetime, timedelta
-from queue import Queue, Full, Empty
 
 _DEFAULT_FPS = int(os.getenv("FPS", {'tizi': 20}.get(HARDWARE.get_device_type(), 60)))
 FPS_LOG_INTERVAL = 5  # Seconds between logging FPS drops
@@ -45,6 +38,12 @@ SCALE = float(os.getenv("SCALE", "1.0"))
 GRID_SIZE = int(os.getenv("GRID", "0"))
 PROFILE_RENDER = int(os.getenv("PROFILE_RENDER", "0"))
 PROFILE_STATS = int(os.getenv("PROFILE_STATS", "100"))  # Number of functions to show in profile output
+RECORD = os.getenv("RECORD") == "1"
+RECORD_OUTPUT = str(Path(os.getenv("RECORD_OUTPUT", "output")).with_suffix(".mp4"))
+RECORD_QUALITY = int(os.getenv("RECORD_QUALITY", "23"))  # Dynamic bitrate quality level (CRF); 0 is lossless (bigger size), max is 51, default is 23 for x264
+RECORD_BITRATE = os.getenv("RECORD_BITRATE", "")  # Target bitrate e.g. "2000k" (overrides RECORD_QUALITY when set)
+RECORD_SPEED = int(os.getenv("RECORD_SPEED", "1"))  # Speed multiplier
+OFFSCREEN = os.getenv("OFFSCREEN") == "1"  # Disable FPS limiting for fast offline rendering
 
 GL_VERSION = """
 #version 300 es
@@ -93,7 +92,6 @@ FONT_SCALE = 1.242 if BIG_UI else 1.16
 ASSETS_DIR = files("openpilot.selfdrive").joinpath("assets")
 FONT_DIR = ASSETS_DIR.joinpath("fonts")
 
-UI_REC = True
 
 class FontWeight(StrEnum):
   LIGHT = "Inter-Light.fnt"
@@ -114,12 +112,6 @@ def font_fallback(font: rl.Font) -> rl.Font:
   if multilang.requires_unifont():
     return gui_app.font(FontWeight.UNIFONT)
   return font
-
-
-@dataclass
-class ModalOverlay:
-  overlay: object = None
-  callback: Callable | None = None
 
 
 class MousePos(NamedTuple):
@@ -210,19 +202,26 @@ class GuiApplication:
     else:
       self._scale = SCALE
 
+    # Scale, then ensure dimensions are even
     self._scaled_width = int(self._width * self._scale)
     self._scaled_height = int(self._height * self._scale)
+    self._scaled_width += self._scaled_width % 2
+    self._scaled_height += self._scaled_height % 2
 
     self._render_texture: rl.RenderTexture | None = None
     self._burn_in_shader: rl.Shader | None = None
+    self._ffmpeg_proc: subprocess.Popen | None = None
+    self._ffmpeg_queue: queue.Queue | None = None
+    self._ffmpeg_thread: threading.Thread | None = None
+    self._ffmpeg_stop_event: threading.Event | None = None
     self._textures: dict[str, rl.Texture] = {}
     self._target_fps: int = _DEFAULT_FPS
     self._last_fps_log_time: float = time.monotonic()
     self._frame = 0
     self._window_close_requested = False
-    self._modal_overlay = ModalOverlay()
-    self._modal_overlay_shown = False
-    self._modal_overlay_tick: Callable[[], None] | None = None
+    self._nav_stack: list[object] = []
+    self._nav_stack_ticks: list[Callable[[], None]] = []
+    self._nav_stack_widgets_to_render = 1 if self.big_ui() else 2
 
     self._mouse = MouseState(self._scale)
     self._mouse_events: list[MouseEvent] = []
@@ -239,223 +238,6 @@ class GuiApplication:
     self._render_profiler = None
     self._render_profile_start_time = None
 
-    # Kisa Rec
-    self._params = Params() if Params else None
-    self._scaled_width += self._scaled_width % 2
-    self._scaled_height += self._scaled_height % 2
-    self._kisa_recorder: subprocess.Popen | None = None
-    self._kisa_record_start_time: datetime | None = None
-    self._kisa_record_file: Path | None = None
-    self._kisa_record_interval = timedelta(minutes=self._params.get("RecordingTimePerVideo", return_default=True)) if Params else None
-    self._kisa_max_record_files = self._params.get("RecordingMaxFiles", return_default=True) if Params else None
-    self._video_dir = Path("/data/media/0/videos")
-    self._video_dir.mkdir(parents=True, exist_ok=True)
-    self.RecordingRunning: bool = False
-    self._last_recording_check = 0.0
-    self._input_fps = 10 # input fps
-    queue_max_frames = self._input_fps * 5
-    self._kisa_record_queue: Queue[bytes] = Queue(maxsize=queue_max_frames)
-    self._writer_thread: threading.Thread | None = None
-    self._kisa_record_fail_count: int = 0
-    self._kisa_record_fail_threshold: int = 10
-    self._kisa_record_texture: rl.RenderTexture | None = None
-    self._target_width = int(800)
-    self._target_height = int(self._target_width / 2)
-
-  def _start_recording(self):
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    self._kisa_record_file = self._video_dir / f"{timestamp}.mp4"
-    self._kisa_record_start_time = datetime.now()
-
-    try:
-      if self._kisa_max_record_files > 0:
-        self._enforce_record_file_limit()
-    except Exception as e:
-      cloudlog.warning(f"_start_recording: enforce file limit failed: {e}")
-
-    ffmpeg_cmd = [
-        'ffmpeg', '-v', 'warning',
-        '-f', 'rawvideo', '-pix_fmt', 'rgba',
-        '-s', f'{self._target_width}x{self._target_height}',
-        '-framerate', str(self._input_fps),
-        '-r', str(self._input_fps),
-        '-i', 'pipe:0',
-        '-vf', 'vflip,format=yuv420p',
-        '-c:v', 'libx264',
-        '-preset', 'ultrafast',
-        '-crf', '31',
-        '-y',
-        '-f', 'mp4',
-        str(self._kisa_record_file)
-    ]
-    # ffmpeg_cmd = [
-    #     "ffmpeg", "-v", "warning",
-    #     "-f", "rawvideo",
-    #     "-pix_fmt", "rgba",
-    #     "-s", f"{self._target_width}x{self._target_height}",
-    #     "-framerate", str(self._input_fps),
-    #     "-thread_queue_size", "512",
-    #     "-r", str(self._input_fps),
-    #     "-i", "pipe:0",
-    #     "-vf", "format=nv12",
-    #     "-c:v", "hevc_v4l2m2m",
-    #     "-b:v", "5000k",
-    #     "-maxrate", "5000k",
-    #     "-bufsize", "10000k",
-    #     "-g", str(self._input_fps*2),
-    #     "-bf", "0",
-    #     "-vsync", "2",
-    #     "-y",
-    #     "-f", "mp4",
-    #     str(self._kisa_record_file)
-    # ]
-
-    print(f"Start recording → {self._kisa_record_file}")
-    self._kisa_recorder = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE)
-    self._kisa_record_fail_count = 0
-
-    with self._kisa_record_queue.mutex:
-      self._kisa_record_queue.queue.clear()
-
-    # writer worker - consumes frames from the queue and writes to ffmpeg
-    def writer_worker():
-      cloudlog.info("record writer thread started")
-      while True:
-        if self._kisa_recorder is None:
-          break
-        if self._kisa_recorder.poll() is not None and self._kisa_record_queue.empty():
-          break
-        try:
-          frame = self._kisa_record_queue.get(timeout=0.5)
-        except Empty:
-          continue
-        try:
-          if self._kisa_recorder and self._kisa_recorder.stdin:
-            try:
-              self._kisa_recorder.stdin.write(frame)
-            except Exception as e:
-              cloudlog.error(f"writer_worker: ffmpeg write error: {e}")
-              try:
-                self._stop_recording()
-              except Exception:
-                pass
-              break
-        finally:
-          try:
-            self._kisa_record_queue.task_done()
-          except Exception:
-            pass
-
-      cloudlog.info("record writer thread exiting")
-
-    self._writer_thread = threading.Thread(target=writer_worker, daemon=True)
-    self._writer_thread.start()
-
-  def _stop_recording(self):
-    if self._kisa_recorder is not None:
-      try:
-        if self._kisa_recorder.stdin:
-          try:
-            self._kisa_recorder.stdin.flush()
-            self._kisa_recorder.stdin.close()
-          except Exception:
-            pass
-
-        self._kisa_recorder.wait(timeout=5)
-      except subprocess.TimeoutExpired:
-        try:
-          self._kisa_recorder.terminate()
-          self._kisa_recorder.wait()
-        except Exception:
-          pass
-      finally:
-        self._kisa_recorder = None
-
-    if self._writer_thread is not None and self._writer_thread.is_alive():
-      self._writer_thread.join(timeout=2)
-    self._writer_thread = None
-
-    with self._kisa_record_queue.mutex:
-      self._kisa_record_queue.queue.clear()
-    
-    if self._kisa_record_file and self._kisa_record_start_time:
-      duration = (datetime.now() - self._kisa_record_start_time).total_seconds()
-      print(f"Recording finished ({duration:.1f}s)")
-      print(f"Saved to: {self._kisa_record_file}")
-    else:
-      print("Recording finished")
-
-  def _update_recording(self):
-    running = self._params.get_bool("RecordingRunning") if Params else None
-
-    if running is not None:
-      if running:
-        if self._kisa_recorder is None:
-          self._start_recording()
-      else:
-        if self._kisa_recorder is not None:
-          self._stop_recording()
-
-  def _rollover_recording_if_needed(self):
-    if self._kisa_record_start_time and datetime.now() - self._kisa_record_start_time >= self._kisa_record_interval:
-      cloudlog.info("Rolling over recording to new file")
-      self._stop_recording()
-      self._start_recording()
-
-  def _write_frame(self, frame_bytes: bytes):
-    if self._kisa_recorder is None:
-      return
-
-    if self._writer_thread is not None and self._writer_thread.is_alive():
-      try:
-        self._kisa_record_queue.put_nowait(frame_bytes)
-      except Full:
-        try:
-          _ = self._kisa_record_queue.get_nowait()
-          self._kisa_record_queue.task_done()
-          self._kisa_record_queue.put_nowait(frame_bytes)
-        except Exception:
-          cloudlog.warning("record queue full - dropped frame in _write_frame")
-    else:
-      try:
-        if self._kisa_record_start_time and datetime.now() - self._kisa_record_start_time >= self._kisa_record_interval:
-          self._stop_recording()
-          self._start_recording()
-        self._kisa_recorder.stdin.write(frame_bytes)
-        self._kisa_recorder.stdin.flush()
-      except Exception:
-        self._stop_recording()
-
-  def _enforce_record_file_limit(self):
-    try:
-      if not self._video_dir.exists():
-        return
-
-      files = [p for p in self._video_dir.iterdir() if p.is_file() and p.suffix.lower() == ".mp4"]
-      files.sort(key=lambda p: p.stat().st_mtime)
-
-      cur = self._kisa_record_file
-      keep = max(0, int(self._kisa_max_record_files))
-
-      to_delete = len(files) - keep
-      if to_delete <= 0:
-        return
-
-      deleted = 0
-      for p in files:
-        if cur is not None and p.resolve() == cur.resolve():
-          continue
-        try:
-          p.unlink()
-          cloudlog.info(f"Removed old recording file: {p}")
-          deleted += 1
-        except Exception as e:
-          cloudlog.warning(f"Failed to remove old recording file {p}: {e}")
-        if deleted >= to_delete:
-          break
-    except Exception as e:
-      cloudlog.warning(f"_enforce_record_file_limit error: {e}")
-
   @property
   def frame(self):
     return self._frame
@@ -465,6 +247,10 @@ class GuiApplication:
 
   def set_show_fps(self, show: bool):
     self._show_fps = show
+
+  @property
+  def show_touches(self) -> bool:
+    return self._show_touches
 
   @property
   def target_fps(self):
@@ -488,16 +274,46 @@ class GuiApplication:
 
       rl.init_window(self._scaled_width, self._scaled_height, title)
 
-      needs_render_texture = self._scale != 1.0 or BURN_IN_MODE or UI_REC
+      needs_render_texture = self._scale != 1.0 or BURN_IN_MODE or RECORD
       if self._scale != 1.0:
         rl.set_mouse_scale(1 / self._scale, 1 / self._scale)
       if needs_render_texture:
         self._render_texture = rl.load_render_texture(self._width, self._height)
         rl.set_texture_filter(self._render_texture.texture, rl.TextureFilter.TEXTURE_FILTER_BILINEAR)
-        self._kisa_record_texture = rl.load_render_texture(self._target_width, self._target_height)
-        rl.set_texture_filter(self._kisa_record_texture.texture, rl.TextureFilter.TEXTURE_FILTER_BILINEAR)
 
-      rl.set_target_fps(fps)
+      if RECORD:
+        output_fps = fps * RECORD_SPEED
+        ffmpeg_args = [
+          'ffmpeg',
+          '-v', 'warning',          # Reduce ffmpeg log spam
+          '-nostats',               # Suppress encoding progress
+          '-f', 'rawvideo',         # Input format
+          '-pix_fmt', 'rgba',       # Input pixel format
+          '-s', f'{self._width}x{self._height}',  # Input resolution
+          '-r', str(fps),           # Input frame rate
+          '-i', 'pipe:0',           # Input from stdin
+          '-vf', 'vflip,format=yuv420p',  # Flip vertically and convert to yuv420p
+          '-r', str(output_fps),    # Output frame rate (for speed multiplier)
+          '-c:v', 'libx264',
+          '-preset', 'ultrafast',
+          '-crf', str(RECORD_QUALITY)
+        ]
+        if RECORD_BITRATE:
+          # NOTE: custom bitrate overrides crf setting
+          ffmpeg_args += ['-b:v', RECORD_BITRATE, '-maxrate', RECORD_BITRATE, '-bufsize', RECORD_BITRATE]
+        ffmpeg_args += [
+          '-y',                     # Overwrite existing file
+          '-f', 'mp4',              # Output format
+          RECORD_OUTPUT,            # Output file path
+        ]
+        self._ffmpeg_proc = subprocess.Popen(ffmpeg_args, stdin=subprocess.PIPE)
+        self._ffmpeg_queue = queue.Queue(maxsize=60)  # Buffer up to 60 frames
+        self._ffmpeg_stop_event = threading.Event()
+        self._ffmpeg_thread = threading.Thread(target=self._ffmpeg_writer_thread, daemon=True)
+        self._ffmpeg_thread.start()
+
+      # OFFSCREEN disables FPS limiting for fast offline rendering (e.g. clips)
+      rl.set_target_fps(0 if OFFSCREEN else fps)
 
       self._target_fps = fps
       self._set_styles()
@@ -539,36 +355,110 @@ class GuiApplication:
     print(f"{green}UI window ready in {elapsed_ms:.1f} ms{reset}")
     sys.exit(0)
 
-  def set_modal_overlay(self, overlay, callback: Callable | None = None):
-    if self._modal_overlay.overlay is not None:
-      if hasattr(self._modal_overlay.overlay, 'hide_event'):
-        self._modal_overlay.overlay.hide_event()
+  def _ffmpeg_writer_thread(self):
+    """Background thread that writes frames to ffmpeg."""
+    while True:
+      try:
+        data = self._ffmpeg_queue.get(timeout=1.0)
+        if data is None:  # Sentinel to stop
+          break
+        self._ffmpeg_proc.stdin.write(data)
+      except queue.Empty:
+        if self._ffmpeg_stop_event.is_set():
+          break
+        continue
+      except Exception:
+        break
 
-      if self._modal_overlay.callback is not None:
-        self._modal_overlay.callback(-1)
+  def push_widget(self, widget: object):
+    if widget in self._nav_stack:
+      cloudlog.warning("Widget already in stack, cannot push again!")
+      return
 
-    self._modal_overlay = ModalOverlay(overlay=overlay, callback=callback)
+    # disable previous widget to prevent input processing
+    if len(self._nav_stack) > 0:
+      prev_widget = self._nav_stack[-1]
+      # TODO: change these to touch_valid
+      prev_widget.set_enabled(False)
 
-  def set_modal_overlay_tick(self, tick_function: Callable | None):
-    self._modal_overlay_tick = tick_function
+    self._nav_stack.append(widget)
+    widget.show_event()
+    widget.set_enabled(True)
+
+  def pop_widget(self, idx: int | None = None):
+    # Pops widget instantly without animation
+    if len(self._nav_stack) < 2:
+      cloudlog.warning("At least one widget should remain on the stack, ignoring pop!")
+      return
+
+    idx_to_pop = len(self._nav_stack) - 1 if idx is None else idx
+    if idx_to_pop <= 0 or idx_to_pop >= len(self._nav_stack):
+      cloudlog.warning(f"Invalid index {idx_to_pop} to pop, ignoring!")
+      return
+
+    # only re-enable previous widget if popping top widget
+    if idx_to_pop == len(self._nav_stack) - 1:
+      prev_widget = self._nav_stack[idx_to_pop - 1]
+      prev_widget.set_enabled(True)
+
+    widget = self._nav_stack.pop(idx_to_pop)
+    widget.hide_event()
+
+  def pop_widgets_to(self, widget: object, callback: Callable[[], None] | None = None, instant: bool = False):
+    # Pops middle widgets instantly without animation then dismisses top, animated out if NavWidget
+    if widget not in self._nav_stack:
+      cloudlog.warning("Widget not in stack, cannot pop to it!")
+      return
+
+    # Nothing to pop, ensure we still run callback
+    top_widget = self._nav_stack[-1]
+    if top_widget == widget:
+      if callback:
+        callback()
+      return
+
+    # instantly pop widgets in between, then dismiss top widget for animation
+    while len(self._nav_stack) > 1 and self._nav_stack[-2] != widget:
+      self.pop_widget(len(self._nav_stack) - 2)
+
+    if not instant:
+      top_widget.dismiss(callback)
+    else:
+      self.pop_widget()
+
+  def get_active_widget(self):
+    if len(self._nav_stack) > 0:
+      return self._nav_stack[-1]
+    return None
+
+  def widget_in_stack(self, widget: object) -> bool:
+    return widget in self._nav_stack
+
+  def add_nav_stack_tick(self, tick_function: Callable[[], None]):
+    if tick_function not in self._nav_stack_ticks:
+      self._nav_stack_ticks.append(tick_function)
+
+  def remove_nav_stack_tick(self, tick_function: Callable[[], None]):
+    if tick_function in self._nav_stack_ticks:
+      self._nav_stack_ticks.remove(tick_function)
 
   def set_should_render(self, should_render: bool):
     self._should_render = should_render
 
   def texture(self, asset_path: str, width: int | None = None, height: int | None = None,
-              alpha_premultiply=False, keep_aspect_ratio=True):
-    cache_key = f"{asset_path}_{width}_{height}_{alpha_premultiply}{keep_aspect_ratio}"
+              alpha_premultiply=False, keep_aspect_ratio=True, flip_x: bool = False) -> rl.Texture:
+    cache_key = f"{asset_path}_{width}_{height}_{alpha_premultiply}_{keep_aspect_ratio}_{flip_x}"
     if cache_key in self._textures:
       return self._textures[cache_key]
 
     with as_file(ASSETS_DIR.joinpath(asset_path)) as fspath:
-      image_obj = self._load_image_from_path(fspath.as_posix(), width, height, alpha_premultiply, keep_aspect_ratio)
+      image_obj = self._load_image_from_path(fspath.as_posix(), width, height, alpha_premultiply, keep_aspect_ratio, flip_x)
       texture_obj = self._load_texture_from_image(image_obj)
     self._textures[cache_key] = texture_obj
     return texture_obj
 
   def _load_image_from_path(self, image_path: str, width: int | None = None, height: int | None = None,
-                            alpha_premultiply: bool = False, keep_aspect_ratio: bool = True) -> rl.Image:
+                            alpha_premultiply: bool = False, keep_aspect_ratio: bool = True, flip_x: bool = False) -> rl.Image:
     """Load and resize an image, storing it for later automatic unloading."""
     image = rl.load_image(image_path)
 
@@ -597,6 +487,10 @@ class GuiApplication:
           rl.image_resize(image, width, height)
     else:
       assert keep_aspect_ratio, "Cannot resize without specifying width and height"
+
+    if flip_x:
+      rl.image_flip_horizontal(image)
+
     return image
 
   def _load_texture_from_image(self, image: rl.Image) -> rl.Texture:
@@ -609,6 +503,22 @@ class GuiApplication:
 
     rl.unload_image(image)
     return texture
+
+  def close_ffmpeg(self):
+    if self._ffmpeg_thread is not None:
+      # Signal thread to stop, send sentinel, then wait for it to drain
+      self._ffmpeg_stop_event.set()
+      self._ffmpeg_queue.put(None)
+      self._ffmpeg_thread.join(timeout=30)
+
+    if self._ffmpeg_proc is not None:
+      self._ffmpeg_proc.stdin.flush()
+      self._ffmpeg_proc.stdin.close()
+      try:
+        self._ffmpeg_proc.wait(timeout=30)
+      except subprocess.TimeoutExpired:
+        self._ffmpeg_proc.terminate()
+        self._ffmpeg_proc.wait()
 
   def close(self):
     if not rl.is_window_ready():
@@ -626,10 +536,6 @@ class GuiApplication:
       rl.unload_render_texture(self._render_texture)
       self._render_texture = None
 
-    if self._kisa_record_texture is not None:
-      rl.unload_render_texture(self._kisa_record_texture)
-      self._kisa_record_texture = None
-
     if self._burn_in_shader:
       rl.unload_shader(self._burn_in_shader)
       self._burn_in_shader = None
@@ -637,7 +543,7 @@ class GuiApplication:
     if not PC:
       self._mouse.stop()
 
-    self._stop_recording()
+    self.close_ffmpeg()
 
     rl.close_window()
 
@@ -658,14 +564,6 @@ class GuiApplication:
         self._render_profiler.enable()
 
       while not (self._window_close_requested or rl.window_should_close()):
-        now = time.monotonic()
-        if now - self._last_recording_check >= 1.0:
-          try:
-            self._update_recording()
-          except Exception as e:
-            cloudlog.warning(f"record update error: {e}")
-            self._last_recording_check = now
-
         if PC:
           # Thread is not used on PC, need to manually add mouse events
           self._mouse._handle_mouse_event()
@@ -690,14 +588,15 @@ class GuiApplication:
           rl.begin_drawing()
           rl.clear_background(rl.BLACK)
 
-        # Handle modal overlay rendering and input processing
-        if self._handle_modal_overlay():
-          # Allow a Widget to still run a function while overlay is shown
-          if self._modal_overlay_tick is not None:
-            self._modal_overlay_tick()
-          yield False
-        else:
-          yield True
+        # Allow a Widget to still run a function regardless of the stack depth
+        for tick in self._nav_stack_ticks:
+          tick()
+
+        # Only render top widgets
+        for widget in self._nav_stack[-self._nav_stack_widgets_to_render:]:
+          widget.render(rl.Rectangle(0, 0, self.width, self.height))
+
+        yield True
 
         if self._render_texture:
           rl.end_texture_mode()
@@ -725,46 +624,12 @@ class GuiApplication:
 
         rl.end_drawing()
 
-        # kisapilot
-        if self._kisa_recorder is not None:
-          if self._frame % (20 // self._input_fps) == 0:
-            try:
-              rl.begin_texture_mode(self._kisa_record_texture)
-              src_rect = rl.Rectangle(0, 0, float(self._width), -float(self._height))
-              dst_rect = rl.Rectangle(0, 0, float(self._target_width), float(self._target_height))
-              rl.draw_texture_pro(self._render_texture.texture, src_rect, dst_rect, rl.Vector2(0, 0), 0.0, rl.WHITE)
-              rl.end_texture_mode()
-              image = rl.load_image_from_texture(self._kisa_record_texture.texture)
-
-              data_size = image.width * image.height * 4
-              data = bytes(rl.ffi.buffer(image.data, data_size))
-              rl.unload_image(image)
-
-              self._rollover_recording_if_needed()
-
-              if self._writer_thread is not None and self._writer_thread.is_alive():
-                try:
-                  self._kisa_record_queue.put_nowait(data)
-                except Full:
-                  try:
-                    _ = self._kisa_record_queue.get_nowait()
-                    self._kisa_record_queue.task_done()
-                    self._kisa_record_queue.put_nowait(data)
-                  except Exception:
-                    self._kisa_record_fail_count += 1
-                    cloudlog.warning("record queue full — dropped frame")
-                else:
-                  self._kisa_record_fail_count = 0
-              else:
-                self._write_frame(data)
-
-            except Exception as e:
-              cloudlog.warning(f"record capture error: {e}")
-              self._kisa_record_fail_count += 1
-              if self._kisa_record_fail_count >= self._kisa_record_fail_threshold:
-                cloudlog.error("Too many record capture failures, stopping recording.")
-                self._stop_recording()
-
+        if RECORD:
+          image = rl.load_image_from_texture(self._render_texture.texture)
+          data_size = image.width * image.height * 4
+          data = bytes(rl.ffi.buffer(image.data, data_size))
+          self._ffmpeg_queue.put(data)  # Async write via background thread
+          rl.unload_image(image)
 
         self._monitor_fps()
         self._frame += 1
@@ -784,33 +649,6 @@ class GuiApplication:
   @property
   def height(self):
     return self._height
-
-  def _handle_modal_overlay(self) -> bool:
-    if self._modal_overlay.overlay:
-      if hasattr(self._modal_overlay.overlay, 'render'):
-        result = self._modal_overlay.overlay.render(rl.Rectangle(0, 0, self.width, self.height))
-      elif callable(self._modal_overlay.overlay):
-        result = self._modal_overlay.overlay()
-      else:
-        raise Exception
-
-      # Send show event to Widget
-      if not self._modal_overlay_shown and hasattr(self._modal_overlay.overlay, 'show_event'):
-        self._modal_overlay.overlay.show_event()
-        self._modal_overlay_shown = True
-
-      if result >= 0:
-        # Clear the overlay and execute the callback
-        original_modal = self._modal_overlay
-        self._modal_overlay = ModalOverlay()
-        if hasattr(original_modal.overlay, 'hide_event'):
-          original_modal.overlay.hide_event()
-        if original_modal.callback is not None:
-          original_modal.callback(result)
-      return True
-    else:
-      self._modal_overlay_shown = False
-      return False
 
   def _load_fonts(self):
     for font_weight_file in FontWeight:
@@ -896,7 +734,7 @@ class GuiApplication:
     # Strict mode: terminate UI if FPS drops too much
     if STRICT_MODE and fps < self._target_fps * FPS_CRITICAL_THRESHOLD:
       cloudlog.error(f"FPS dropped critically below {fps}. Shutting down UI.")
-      self._stop_recording()
+      self.close_ffmpeg()
       os._exit(1)
 
   def _draw_touch_points(self):

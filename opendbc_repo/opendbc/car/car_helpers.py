@@ -16,6 +16,7 @@ from openpilot.common.params import Params
 
 FRAME_FINGERPRINT = 100  # 1s
 
+
 def load_interfaces(brand_names):
   ret = {}
   for brand_name in brand_names:

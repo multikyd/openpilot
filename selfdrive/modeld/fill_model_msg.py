@@ -96,9 +96,6 @@ def fill_model_msg(base_msg: capnp._DynamicStructBuilder, extended_msg: capnp._D
   # action
   modelV2.action = action
 
-  # times at X_IDXS of edges and lines aren't used
-  # LINE_T_IDXS: list[float] = []
-
   # times at X_IDXS according to model plan
   LINE_T_IDXS = [np.nan] * ModelConstants.IDX_N
   LINE_T_IDXS[0] = 0.0
@@ -132,7 +129,7 @@ def fill_model_msg(base_msg: capnp._DynamicStructBuilder, extended_msg: capnp._D
 
   LINE_T_IDXS = [float(Tmax if math.isnan(float(v)) else float(v)) for v in LINE_T_IDXS]
 
-  # ë¹„ë‚´ë¦¼(monotonic non-decreasing) ë³´ì • (ìˆœìˆ˜ íŒŒì´ì¬, numpy ë¶ˆì‚¬ìš©)
+  # ºñ³»¸²(monotonic non-decreasing) º¸Á¤ (¼ø¼ö ÆÄÀÌ½ã, numpy ºÒ»ç¿ë)
   running = LINE_T_IDXS[0]
   for i in range(1, len(LINE_T_IDXS)):
       if LINE_T_IDXS[i] < running:

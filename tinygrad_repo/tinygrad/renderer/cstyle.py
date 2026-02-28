@@ -1,9 +1,9 @@
 from typing import Literal, Callable, cast
-import os, math, platform, sys, struct
+import os, math, sys, struct
 from collections import defaultdict, Counter
 from tinygrad.codegen.opt import tc
 from tinygrad.uop.ops import GroupOp, Ops, UOp, PatternMatcher, UPat, range_str, axis_letters
-from tinygrad.helpers import strip_parens, getenv, prod, dedup, AMX, CI, CPU_COUNT, OSX
+from tinygrad.helpers import strip_parens, getenv, prod, dedup, AMX, CPU_COUNT
 from tinygrad.dtype import ImageDType, dtypes, DType, PtrDType, AddrSpace, truncate, float_to_bf16
 from tinygrad.renderer import Renderer
 from tinygrad.codegen.late.devectorizer import no_vectorized_alu
@@ -46,10 +46,10 @@ base_rewrite = PatternMatcher([
   # new load/store
   (UPat(Ops.INDEX, src=(UPat.var("buf"), UPat.var('idx')), allow_any_len=True),
    lambda ctx,buf,idx: f"({ctx[buf]}+{strip_parens(ctx[idx]) if idx.arg == Ops.ADD else ctx[idx]})"),
-  (UPat(Ops.LOAD, src=(UPat(Ops.INDEX, src=(UPat(), UPat(), UPat.var("gate"))).or_casted("bidx"), UPat.var("var")), allow_any_len=True),
+  (UPat(Ops.LOAD, src=(UPat(Ops.INDEX, src=(UPat(), UPat(), UPat.var("gate"))).or_casted("bidx"), UPat.var("var"))),
    lambda ctx,bidx,var,gate: f"({ctx[gate]}?*{ctx[bidx]}:{ctx[var]})"),
-  (UPat(Ops.LOAD, src=(UPat.var('bidx'),), allow_any_len=True), lambda ctx,bidx: f"(*{ctx[bidx]})"),
-  (UPat(Ops.STORE, src=(UPat.var('bidx'), UPat.var("var")), allow_any_len=True), lambda ctx,bidx,var: f"*{ctx[bidx]} = {ctx[var]};"),
+  (UPat(Ops.LOAD, src=(UPat.var('bidx'),)), lambda ctx,bidx: f"(*{ctx[bidx]})"),
+  (UPat(Ops.STORE, src=(UPat.var('bidx'), UPat.var("var"))), lambda ctx,bidx,var: f"*{ctx[bidx]} = {ctx[var]};"),
   # alu/gep
   # TODO: look for left-associative
   (UPat(GroupOp.ALU, name="x"), lambda ctx,x: ctx.code_for_op[x.op](
@@ -87,7 +87,8 @@ def create_non_native_float_pats(dts:tuple[DType, ...], casting:bool=True):
 def cast_float_to_bf16(x: UOp) -> UOp:
   assert x.dtype == dtypes.float, "cast float -> bf16 must start with float"
   x = x.bitcast(dtypes.uint)
-  x = ((-x & 0x7f800000) != 0).where(x + ((x >> 16) & 1) + 0x7fff, ((x & 0xffff) != 0).where((x | 0x10000), x))
+  # NOTE: != returns UOp, not bool, issue with mypy
+  x = ((-x & 0x7f800000) != 0).where(x + ((x >> 16) & 1) + 0x7fff, ((x & 0xffff) != 0).where((x | 0x10000), x))  # type: ignore[comparison-overlap]
   return (x >> 16).cast(dtypes.ushort).bitcast(dtypes.bfloat16)
 
 # manual bfloat16 casting patterns (shared between LLVM, Clang, and AMD renderers to avoid compiler intrinsics)
@@ -176,15 +177,15 @@ class CStyleLanguage(Renderer):
       if u.op is Ops.SINK:
         if u.arg is not None: name = u.arg.function_name
         continue
-      if u.op in (Ops.DEFINE_GLOBAL, Ops.DEFINE_VAR):
-        r[u] = (f"data{u.arg}_{sz}" if (sz:=u.ptrdtype.size) > 0 else f"data{u.arg}") if u.op is Ops.DEFINE_GLOBAL else u.arg[0]
+      if u.op in (Ops.PARAM, Ops.DEFINE_VAR):
+        r[u] = (f"data{u.arg}_{sz}" if (sz:=u.ptrdtype.size) > 0 else f"data{u.arg}") if u.op is Ops.PARAM else u.arg[0]
         bufs[u] = (r[u], (u.dtype, False))
         continue
 
       # mark buffers that we store to writable
       if u.op is Ops.STORE:
         for up in u.src[0].toposort():
-          if up.op is Ops.DEFINE_GLOBAL: bufs[up] = (bufs[up][0], (bufs[up][1][0], True))
+          if up.op is Ops.PARAM: bufs[up] = (bufs[up][0], (bufs[up][1][0], True))
 
       # naming
       prefix = None
@@ -224,12 +225,9 @@ class ClangRenderer(CStyleLanguage):
   gep_arr_threshold = 0
   has_local = False
   has_threads = bool(getenv("THREADS", 1))
-  @property
-  def global_max(self): return (CPU_COUNT.value, 0, 0) # type: ignore
+  global_max = (CPU_COUNT.value, 0, 0)
   infinity = "__builtin_inff()"
   nan = '__builtin_nanf("")'
-  code_for_workitem = {"g": lambda _: "core_id"}
-  extra_args = ['int core_id']
   if AMX: tensor_cores = tc.amx
 
   # language options
@@ -285,15 +283,9 @@ class ClangJITRenderer(ClangRenderer):
     from tinygrad.runtime.support.compiler_cpu import ClangJITCompiler
     self.compiler = ClangJITCompiler()
 
-  def is_dtype_supported(self, dtype:DType) -> bool:
-    return not CI and platform.machine() in {"arm", "arm64", "aarch64", "x86_64", "amd64"} if dtype == dtypes.bfloat16 else dtype not in dtypes.fp8s
-
 class OpenCLRenderer(CStyleLanguage):
   device = "CL"
   has_aux = True
-
-  # CI and OSX, cl_khr_fp16 is not supported
-  def is_dtype_supported(self, dtype:DType) -> bool: return dtype not in ((dtypes.half,) * (OSX or CI)) + ((dtypes.float64,) * OSX) + dtypes.fp8s
 
   # language options
   kernel_typedef = "__kernel void"
@@ -326,7 +318,7 @@ class OpenCLRenderer(CStyleLanguage):
     if any(uop.dtype.base == dtypes.half for uop in uops): prefix = (["#pragma OPENCL EXTENSION cl_khr_fp16 : enable"] + (prefix or []))
     return super().render_kernel(function_name, kernel, bufs, uops, prefix)
 
-  def aux(self, uops:list[UOp]): return (tuple(u.dtype for u in uops if u.op == Ops.DEFINE_GLOBAL),)
+  def aux(self, uops:list[UOp]): return (tuple(u.dtype for u in uops if u.op == Ops.PARAM),)
 
 class IntelRenderer(OpenCLRenderer):
   device, suffix, kernel_typedef = "CL", "INTEL", "__attribute__((intel_reqd_sub_group_size(8)))\n" + "__kernel void"
@@ -349,7 +341,6 @@ class MetalRenderer(CStyleLanguage):
   device = "METAL"
   shared_max = 32768
   def __init__(self): self.tensor_cores = tc.metal if hasattr(os, 'uname') and os.uname().machine == "arm64" else []
-  def is_dtype_supported(self, dtype:DType) -> bool: return not CI if dtype == dtypes.bfloat16 else dtype not in (dtypes.float64,) + dtypes.fp8s
 
   # language options
   kernel_typedef = "kernel void"
@@ -400,9 +391,6 @@ class CUDARenderer(CStyleLanguage):
     self.arch, arch_ver = arch, int(arch[3:])
     self.tensor_cores = tc.cuda_sm89 if arch_ver >= 89 else tc.cuda_sm80 if arch_ver >= 80 else tc.cuda_sm75 if arch_ver >= 75 else []
   def __reduce__(self): return self.__class__, (self.arch,)
-
-  # CI CUDA is sm_35, so no fp16 ALUs
-  def is_dtype_supported(self, dtype:DType) -> bool: return not CI or dtype not in (dtypes.bfloat16, dtypes.half) + dtypes.fp8s
 
   # language options
   # https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html
@@ -472,8 +460,6 @@ class AMDHIPRenderer(CStyleLanguage):
   shared_max = 65536
   # NOTE: this is only really needed on gfx12, even though gfx11 reports the same limitation
   global_max = (2147483647, 65535, 65535)
-
-  def is_dtype_supported(self, dtype:DType) -> bool: return dtype not in dtypes.fp8s or self.arch in {"gfx942", "gfx950"}
 
   @staticmethod
   def get_tensor_cores(arch):
@@ -569,8 +555,4 @@ class AMDHIPCCRenderer(AMDHIPRenderer):
     super().__init__(arch)
     self.compiler = HIPCCCompiler(arch)
 
-class QCOMRenderer(OpenCLRenderer):
-  device = "QCOM"
-
-  # QCOM compiler is flaky with half
-  def is_dtype_supported(self, dtype:DType) -> bool: return dtype not in (dtypes.bfloat16, dtypes.half, dtypes.float64) + dtypes.fp8s
+class QCOMRenderer(OpenCLRenderer): device = "QCOM"

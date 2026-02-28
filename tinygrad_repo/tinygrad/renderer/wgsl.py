@@ -1,4 +1,4 @@
-from tinygrad.dtype import DType, PtrDType, dtypes, AddrSpace
+from tinygrad.dtype import DType, PtrDType, dtypes, truncate, AddrSpace
 from tinygrad.uop.ops import UOp, Ops, PatternMatcher, UPat
 from tinygrad.renderer.cstyle import CStyleLanguage, base_rewrite, extra_pm
 from tinygrad.helpers import strip_parens
@@ -53,9 +53,6 @@ class WGSLRenderer(CStyleLanguage):
   code_for_workitem = {"g": lambda x: f"i32(gindex.{'xyz'[int(x)]})", "l": lambda x: f"i32(lindex.{'xyz'[int(x)]})"}
   extra_matcher = wgsl_matcher
   supports_float4 = False
-
-  def is_dtype_supported(self, dtype:DType) -> bool: return dtype in self.type_map
-
   barrier = "workgroupBarrier();"
   code_for_op = {**CStyleLanguage.code_for_op, Ops.WHERE: lambda a,b,c,dtype: f"select({c},{b},{a})"}
   nan = "nan()"
@@ -63,9 +60,11 @@ class WGSLRenderer(CStyleLanguage):
               dtypes.char: "i32", dtypes.int32: "i32", dtypes.uint32: "u32", dtypes.bool: "bool", dtypes.half: "f16" }
 
   string_rewrite = PatternMatcher([
+    (UPat(Ops.NEG, dtypes.uints, src=(UPat.var('x'))), lambda ctx,x: f"(0-{ctx[x]})"),
     (UPat.cvar("x", dtype=dtypes.bool), lambda x: "true" if x.arg else "false"),
     (UPat(Ops.CONST, dtype=(dtypes.uchar, dtypes.ushort, dtypes.uint32), name="x"),
      lambda x: f"bitcast<u32>({x.arg})" if x.arg < 0 else f"{x.arg&0xFFFFFFFF}u"),
+    (UPat(Ops.CONST, dtype=dtypes.int32, name="x"), lambda ctx,x: f"{truncate[x.dtype](x.arg)}"),
     (UPat(Ops.DEFINE_LOCAL, name="x"), lambda ctx,x: f"var<workgroup> {ctx[x]}: array<{ctx.buf_map(x.dtype.base)},{_packed_size(x.dtype)}>;"),
     (UPat(Ops.DEFINE_REG, name="x"), lambda ctx,x: f"var {ctx[x]}: array<{ctx.buf_map(x.dtype)},{_packed_size(x.dtype)}>;"),
     (UPat(Ops.BITCAST, dtype=dtypes.half, name="x", src=(UPat(dtype=(dtypes.short, dtypes.ushort, dtypes.uint32),),)),

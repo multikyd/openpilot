@@ -247,7 +247,7 @@ class AugmentedRoadView(CameraView):
     # Draw darkened background and text if not onroad
     if not ui_state.started:
       rl.draw_rectangle(int(self.rect.x), int(self.rect.y), int(self.rect.width), int(self.rect.height), rl.Color(0, 0, 0, 175))
-      self._offroad_label.render(self._content_rect)
+      self._offroad_label.render(self._rect)
 
     # publish uiDebug
     msg = messaging.new_message('uiDebug')
@@ -354,7 +354,7 @@ class AugmentedRoadView(CameraView):
 
 if __name__ == "__main__":
   gui_app.init_window("OnRoad Camera View")
-  road_camera_view = AugmentedRoadView(ROAD_CAM)
+  road_camera_view = AugmentedRoadView(lambda: None, stream_type=ROAD_CAM)
   print("***press space to switch camera view***")
   try:
     for _ in gui_app.render():

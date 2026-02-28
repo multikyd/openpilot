@@ -6,27 +6,6 @@ cd $DIR
 
 PLATFORM=$(uname -s)
 
-echo "installing dependencies"
-if [[ $PLATFORM == "Darwin" ]]; then
-  if ! command -v python3 &>/dev/null || ! pkg-config --exists libzmq 2>/dev/null; then
-    export HOMEBREW_NO_AUTO_UPDATE=1
-    brew install python3 zeromq
-  fi
-elif [[ $PLATFORM == "Linux" ]]; then
-  # for AGNOS since we clear the apt lists
-  if [[ ! -d /"var/lib/apt/" ]]; then
-    sudo apt update
-  fi
-
-  sudo apt-get install -y --no-install-recommends \
-    curl ca-certificates \
-    libzmq3-dev \
-    ocl-icd-opencl-dev opencl-headers \
-    python3-dev python3-pip python3-venv
-else
-  echo "WARNING: unsupported platform. skipping apt/brew install."
-fi
-
 # catch2
 if [ ! -d $DIR/msgq/catch2/ ]; then
   rm -rf /tmp/catch2/ $DIR/msgq/catch2/
