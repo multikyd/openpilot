@@ -220,6 +220,7 @@ class KisaPilotLayout(Widget):
     self._scroller.render(scroll_rect)
 
   def show_event(self):
+    super().show_event()
     self._scroller.show_event()
     self._update_items()
 

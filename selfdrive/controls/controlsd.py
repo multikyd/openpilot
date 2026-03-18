@@ -39,7 +39,7 @@ class Controls:
     self.CI = interfaces[self.CP.carFingerprint](self.CP)
 
     self.sm = messaging.SubMaster(['liveDelay', 'liveParameters', 'liveTorqueParameters', 'modelV2', 'selfdriveState',
-                                   'liveCalibration', 'livePose', 'longitudinalPlan', 'carState', 'carOutput',
+                                   'liveCalibration', 'livePose', 'longitudinalPlan', 'lateralManeuverPlan', 'carState', 'carOutput',
                                    'driverMonitoringState', 'onroadEvents', 'driverAssistance',
                                    'carrotMan', 'lateralPlan', 'radarState',], poll='selfdriveState')
     self.pm = messaging.PubMaster(['carControl', 'controlsState'])
@@ -162,6 +162,8 @@ class Controls:
 
     if not CC.latActive:
       new_desired_curvature = self.curvature
+    elif self.sm.valid['lateralManeuverPlan']:
+      new_desired_curvature = self.sm['lateralManeuverPlan'].desiredCurvature if CC.latActive else self.curvature
     elif self.lanefull_mode_enabled:
       if len(lat_plan.curvatures) == 0:
         new_desired_curvature = self.curvature

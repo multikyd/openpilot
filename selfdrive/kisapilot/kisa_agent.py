@@ -702,13 +702,19 @@ def change_model_task(model_prefix):
     
     subprocess.run(f"echo 'Removing old model files...' >> {log_path}", shell=True)
     # subprocess.run("rm -f /data/openpilot/selfdrive/modeld/models/driving_*", shell=True)
-    subprocess.run("rm -f /data/openpilot/selfdrive/modeld/models/driving_policy.onnx", shell=True)
+    subprocess.run("rm -f /data/openpilot/selfdrive/modeld/models/driving_off_policy.onnx", shell=True)
+    subprocess.run("rm -f /data/openpilot/selfdrive/modeld/models/driving_on_policy.onnx", shell=True)
     subprocess.run("rm -f /data/openpilot/selfdrive/modeld/models/driving_vision.onnx", shell=True)
 
-    subprocess.run(f"echo 'Downloading driving_policy...' >> {log_path}", shell=True)
-    policy_url = f"https://raw.githubusercontent.com/kisapilot/model/main/models/{model_prefix}_driving_policy.onnx"
-    policy_dest = f"/data/model/{model_prefix}_driving_policy.onnx"
-    subprocess.run(f"wget -O {policy_dest} {policy_url}", shell=True, stderr=subprocess.STDOUT, stdout=open(log_path, 'a'))
+    subprocess.run(f"echo 'Downloading driving_off_policy...' >> {log_path}", shell=True)
+    off_policy_url = f"https://raw.githubusercontent.com/kisapilot/model/main/models/{model_prefix}_driving_off_policy.onnx"
+    off_policy_dest = f"/data/model/{model_prefix}_driving_off_policy.onnx"
+    subprocess.run(f"wget -O {off_policy_dest} {off_policy_url}", shell=True, stderr=subprocess.STDOUT, stdout=open(log_path, 'a'))
+
+    subprocess.run(f"echo 'Downloading driving_on_policy...' >> {log_path}", shell=True)
+    on_policy_url = f"https://raw.githubusercontent.com/kisapilot/model/main/models/{model_prefix}_driving_on_policy.onnx"
+    on_policy_dest = f"/data/model/{model_prefix}_driving_on_policy.onnx"
+    subprocess.run(f"wget -O {on_policy_dest} {on_policy_url}", shell=True, stderr=subprocess.STDOUT, stdout=open(log_path, 'a'))
 
     subprocess.run(f"echo 'Downloading driving_vision...' >> {log_path}", shell=True)
     vision_url = f"https://raw.githubusercontent.com/kisapilot/model/main/models/{model_prefix}_driving_vision.onnx"
@@ -719,7 +725,8 @@ def change_model_task(model_prefix):
     subprocess.run("rm -f /data/openpilot/prebuilt", shell=True)
 
     subprocess.run(f"echo 'Applying model...' >> {log_path}", shell=True)
-    subprocess.run(f"cp -f {policy_dest} /data/openpilot/selfdrive/modeld/models/driving_policy.onnx", shell=True)
+    subprocess.run(f"cp -f {off_policy_dest} /data/openpilot/selfdrive/modeld/models/driving_off_policy.onnx", shell=True)
+    subprocess.run(f"cp -f {on_policy_dest} /data/openpilot/selfdrive/modeld/models/driving_on_policy.onnx", shell=True)
     subprocess.run(f"cp -f {vision_dest} /data/openpilot/selfdrive/modeld/models/driving_vision.onnx", shell=True)
 
     # subprocess.run(
@@ -773,13 +780,16 @@ def restore_original_model_task():
         log_message("Restoring to default driving model...")
 
         log_message("Removing custom model files from /data/model...")
-        subprocess.run("rm -f /data/model/*_driving_policy.onnx", shell=True)
+        subprocess.run("rm -f /data/model/*_driving_off_policy.onnx", shell=True)
+        subprocess.run("rm -f /data/model/*_driving_on_policy.onnx", shell=True)
         subprocess.run("rm -f /data/model/*_driving_vision.onnx", shell=True)
         
         log_message("Copying default model files...")
-        cmd = "rm -f /data/openpilot/selfdrive/modeld/models/driving_policy.onnx; " + \
+        cmd = "rm -f /data/openpilot/selfdrive/modeld/models/driving_off_policy.onnx; " + \
+            "rm -f /data/openpilot/selfdrive/modeld/models/driving_on_policy.onnx; " + \
             "rm -f /data/openpilot/selfdrive/modeld/models/driving_vision.onnx; " + \
-            "git -C /data/openpilot/selfdrive/modeld/models checkout driving_policy.onnx; " + \
+            "git -C /data/openpilot/selfdrive/modeld/models checkout driving_off_policy.onnx; " + \
+            "git -C /data/openpilot/selfdrive/modeld/models checkout driving_on_policy.onnx; " + \
             "git -C /data/openpilot/selfdrive/modeld/models checkout driving_vision.onnx; " + \
             "touch /data/ks; " + \
             "rm -f /data/openpilot/prebuilt"

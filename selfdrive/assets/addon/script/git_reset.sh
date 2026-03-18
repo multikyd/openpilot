@@ -20,7 +20,8 @@ if [ "$?" == "0" ]; then
 
   rm -f /data/params/d/DrivingModel
   rm -f /data/openpilot/selfdrive/modeld/models/driving_*
-  git -C /data/openpilot/selfdrive/modeld/models checkout driving_policy.onnx
+  git -C /data/openpilot/selfdrive/modeld/models checkout driving_off_policy.onnx
+  git -C /data/openpilot/selfdrive/modeld/models checkout driving_on_policy.onnx
   git -C /data/openpilot/selfdrive/modeld/models checkout driving_vision.onnx
   touch /data/ks
   sleep 1

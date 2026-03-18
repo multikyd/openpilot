@@ -1,4 +1,4 @@
-from math import atan2
+from math import atan2, radians
 import numpy as np
 
 from cereal import car, log
@@ -11,8 +11,6 @@ from openpilot.common.params import Params
 from openpilot.common.stat_live import RunningStatFilter
 from openpilot.common.transformations.camera import DEVICE_CAMERAS
 from openpilot.system.hardware import HARDWARE
-
-from collections import deque
 
 EventName = log.OnroadEvent.EventName
 
@@ -34,9 +32,8 @@ class DRIVER_MONITOR_SETTINGS:
     self._DISTRACTED_PROMPT_TIME_TILL_TERMINAL = 6.
 
     self._FACE_THRESHOLD = 0.7
-    self._EYE_THRESHOLD = 0.65
-    self._SG_THRESHOLD = 0.9
-    self._BLINK_THRESHOLD = 0.865
+    self._EYE_THRESHOLD = 0.5
+    self._BLINK_THRESHOLD = 0.5
     self._PHONE_THRESH = 0.5
 
     self._POSE_PITCH_THRESHOLD = 0.3133
@@ -45,6 +42,9 @@ class DRIVER_MONITOR_SETTINGS:
     self._POSE_YAW_THRESHOLD = 0.4020
     self._POSE_YAW_THRESHOLD_SLACK = 0.5042
     self._POSE_YAW_THRESHOLD_STRICT = self._POSE_YAW_THRESHOLD
+    self._POSE_YAW_MIN_STEER_DEG = 30
+    self._POSE_YAW_STEER_FACTOR = 0.15
+    self._POSE_YAW_STEER_MAX_OFFSET = 0.3927
     self._PITCH_NATURAL_OFFSET = 0.011 # initial value before offset is learned
     self._PITCH_NATURAL_THRESHOLD = 0.449
     self._YAW_NATURAL_OFFSET = 0.075 # initial value before offset is learned
@@ -61,7 +61,6 @@ class DRIVER_MONITOR_SETTINGS:
     self._POSESTD_THRESHOLD = 0.3
     self._HI_STD_FALLBACK_TIME = int(10  / self._DT_DMON)  # fall back to wheel touch if model is uncertain for 10s
     self._DISTRACTED_FILTER_TS = 0.25  # 0.6Hz
-    self._ALWAYS_ON_ALERT_MIN_SPEED = 11
 
     self._POSE_CALIB_MIN_SPEED = 13  # 30 mph
     self._POSE_OFFSET_MIN_COUNT = int(60 / self._DT_DMON)  # valid data counts before calibration completes, 1min cumulative
@@ -103,17 +102,13 @@ class DriverPose:
     self.low_std = True
     self.cfactor_pitch = 1.
     self.cfactor_yaw = 1.
+    self.steer_yaw_offset = 0.
 
 class DriverProb:
   def __init__(self, raw_priors, max_trackable):
     self.prob = 0.
     self.prob_offseter = RunningStatFilter(raw_priors=raw_priors, max_trackable=max_trackable)
     self.prob_calibrated = False
-
-class DriverBlink:
-  def __init__(self):
-    self.left = 0.
-    self.right = 0.
 
 
 # model output refers to center of undistorted+leveled image
@@ -149,7 +144,7 @@ class DriverMonitoring:
     wheelpos_filter_raw_priors = (self.settings._WHEELPOS_DATA_AVG, self.settings._WHEELPOS_DATA_VAR, 2)
     self.wheelpos = DriverProb(raw_priors=wheelpos_filter_raw_priors, max_trackable=self.settings._WHEELPOS_MAX_COUNT)
     self.pose = DriverPose(settings=self.settings)
-    self.blink = DriverBlink()
+    self.blink_prob = 0.
     self.phone_prob = 0.
 
     self.always_on = always_on
@@ -179,83 +174,10 @@ class DriverMonitoring:
     self._set_timers(active_monitoring=True)
     self._reset_events()
 
-    # Adaptive blink/eye tracking
-    self.blink_closed_filter = RunningStatFilter(max_trackable=200)
-    self.blink_open_filter = RunningStatFilter(max_trackable=200)
-    self.blink_peak_buffer = deque(maxlen=200)
-    self._capturing_peak = False
-    self._current_peak = 0.0
-
-    self.min_closed_peaks = 3
-    self.open_window_samples = 20 * 5
-    self.peak_capture_threshold = 0.15
-    self.min_delta_for_confidence = 0.10
-
-    self.min_eye_threshold = 0.35
-    self.eye_threshold_increment = 0.005
-
-    self.open_samples = deque(maxlen=self.open_window_samples)
-
     # Eyes-closed detection
     self.eyes_closed = False
     self.eyes_closed_duration = 0.0
     self.eyes_closed_required_sec = 2.5
-
-  def update_adaptive_thresholds(self, driver_data):
-    left_prob = driver_data.leftBlinkProb
-    right_prob = driver_data.rightBlinkProb
-    blink_mean = 0.5 * (left_prob + right_prob)
-
-    self.open_samples.append(blink_mean)
-    if len(self.open_samples) >= 5:
-      open_mean_est = float(np.percentile(np.array(self.open_samples), 50))
-    else:
-      open_mean_est = float(np.mean(self.open_samples)) if len(self.open_samples) > 0 else 0.0
-
-    if not self._capturing_peak:
-      if blink_mean > open_mean_est + self.peak_capture_threshold:
-        self._capturing_peak = True
-        self._current_peak = blink_mean
-    else:
-      if blink_mean > self._current_peak:
-        self._current_peak = blink_mean
-      if blink_mean < open_mean_est + (self.peak_capture_threshold * 0.5):
-        self.blink_peak_buffer.append(self._current_peak)
-        try:
-          self.blink_closed_filter.push_and_update(self._current_peak)
-        except Exception:
-          pass
-        self._capturing_peak = False
-        self._current_peak = 0.0
-
-    if blink_mean <= open_mean_est + self.peak_capture_threshold * 0.6:
-      try:
-        self.blink_open_filter.push_and_update(blink_mean)
-      except Exception:
-        pass
-
-    if len(self.blink_peak_buffer) >= 1:
-      closed_arr = np.array(self.blink_peak_buffer)
-      closed_mean = float(np.percentile(closed_arr, 90))
-    else:
-      closed_mean = float(self.blink_closed_filter.filtered_stat.mean())
-
-    if len(self.open_samples) >= 5:
-      open_mean = float(np.percentile(np.array(self.open_samples), 25))
-    else:
-      open_mean = float(np.mean(self.open_samples)) if len(self.open_samples) > 0 else 0.0
-
-    max_min_diff = closed_mean - open_mean
-
-    closed_peaks_n = len(self.blink_peak_buffer)
-    if closed_peaks_n < self.min_closed_peaks or max_min_diff < self.min_delta_for_confidence:
-      self.settings._EYE_THRESHOLD = np.clip(self.settings._EYE_THRESHOLD + self.eye_threshold_increment, self.min_eye_threshold, 0.65)
-      self.settings._BLINK_THRESHOLD = np.clip(self.settings._BLINK_THRESHOLD * 0.995 + (open_mean + closed_mean) * 0.005, 0.35, 0.865)
-    else:
-      self.settings._BLINK_THRESHOLD = (closed_mean + open_mean) * 0.5
-      eye_mean = 0.5 * (driver_data.leftEyeProb + driver_data.rightEyeProb)
-      if eye_mean < self.settings._EYE_THRESHOLD:
-        self.settings._EYE_THRESHOLD = np.clip(self.settings._EYE_THRESHOLD - self.eye_threshold_increment, self.min_eye_threshold, 0.65)
 
   def _reset_awareness(self):
     self.awareness = 1.
@@ -318,7 +240,11 @@ class DriverMonitoring:
       yaw_error = self.pose.yaw - min(max(self.pose.yaw_offseter.filtered_stat.mean(),
                                                     self.settings._YAW_MIN_OFFSET), self.settings._YAW_MAX_OFFSET)
     pitch_error = 0 if pitch_error > 0 else abs(pitch_error) # no positive pitch limit
-    yaw_error = abs(yaw_error)
+
+    if yaw_error * self.pose.steer_yaw_offset > 0: # unidirectional
+      yaw_error = max(abs(yaw_error) - min(abs(self.pose.steer_yaw_offset), self.settings._POSE_YAW_STEER_MAX_OFFSET), 0.)
+    else:
+      yaw_error = abs(yaw_error)
 
     pitch_threshold = self.settings._POSE_PITCH_THRESHOLD * self.pose.cfactor_pitch if self.pose.calibrated else self.settings._PITCH_NATURAL_THRESHOLD
     yaw_threshold = self.settings._POSE_YAW_THRESHOLD * self.pose.cfactor_yaw
@@ -326,7 +252,7 @@ class DriverMonitoring:
     if pitch_error > pitch_threshold or yaw_error > yaw_threshold:
       distracted_types.append(DistractedType.DISTRACTED_POSE)
 
-    if (self.blink.left + self.blink.right)*0.5 > self.settings._BLINK_THRESHOLD:
+    if self.blink_prob > self.settings._BLINK_THRESHOLD:
       distracted_types.append(DistractedType.DISTRACTED_BLINK)
 
     if self.phone_prob > self.settings._PHONE_THRESH:
@@ -334,7 +260,7 @@ class DriverMonitoring:
 
     return distracted_types
 
-  def _update_states(self, driver_state, cal_rpy, car_speed, op_engaged, standstill, demo_mode=False):
+  def _update_states(self, driver_state, cal_rpy, car_speed, op_engaged, standstill, demo_mode=False, steering_angle_deg=0.):
     rhd_pred = driver_state.wheelOnRightProb
     # calibrates only when there's movement and either face detected
     if car_speed > self.settings._WHEELPOS_CALIB_MIN_SPEED and (driver_state.leftDriverData.faceProb > self.settings._FACE_THRESHOLD or
@@ -357,22 +283,21 @@ class DriverMonitoring:
 
     self.face_detected = driver_data.faceProb > self.settings._FACE_THRESHOLD
     self.pose.roll, self.pose.pitch, self.pose.yaw = face_orientation_from_net(driver_data.faceOrientation, driver_data.facePosition, cal_rpy)
+    steer_d = max(abs(steering_angle_deg) - self.settings._POSE_YAW_MIN_STEER_DEG, 0.)
+    self.pose.steer_yaw_offset = radians(steer_d) * -np.sign(steering_angle_deg) * self.settings._POSE_YAW_STEER_FACTOR
     if self.wheel_on_right:
       self.pose.yaw *= -1
+      self.pose.steer_yaw_offset *= -1
     self.wheel_on_right_last = self.wheel_on_right
     self.pose.pitch_std = driver_data.faceOrientationStd[0]
     self.pose.yaw_std = driver_data.faceOrientationStd[1]
     model_std_max = max(self.pose.pitch_std, self.pose.yaw_std)
     self.pose.low_std = model_std_max < self.settings._POSESTD_THRESHOLD
-    self.blink.left = driver_data.leftBlinkProb * (driver_data.leftEyeProb > self.settings._EYE_THRESHOLD) \
-                      * (driver_data.sunglassesProb < self.settings._SG_THRESHOLD)
-    self.blink.right = driver_data.rightBlinkProb * (driver_data.rightEyeProb > self.settings._EYE_THRESHOLD) \
-                      * (driver_data.sunglassesProb < self.settings._SG_THRESHOLD)
+    self.blink_prob = driver_data.eyesClosedProb * (driver_data.eyesVisibleProb > self.settings._EYE_THRESHOLD)
     self.phone_prob = driver_data.phoneProb
 
-    # Eyes-closed detection (debounced)
-    blink_prob = 0.5 * (driver_data.leftBlinkProb + driver_data.rightBlinkProb)
-    closed_by_blink = blink_prob > self.settings._BLINK_THRESHOLD
+    # Eyes-closed detection
+    closed_by_blink = self.blink_prob > self.settings._BLINK_THRESHOLD
 
     if closed_by_blink:
       self.eyes_closed_duration += self.settings._DT_DMON
@@ -451,19 +376,19 @@ class DriverMonitoring:
       if self.awareness > self.threshold_prompt:
         return
 
+    _reaching_pre = self.awareness - self.step_change <= self.threshold_pre
     _reaching_audible = self.awareness - self.step_change <= self.threshold_prompt
     _reaching_terminal = self.awareness - self.step_change <= 0
-    standstill_orange_exemption = standstill and _reaching_audible
+    standstill_exemption = standstill and _reaching_pre
     always_on_red_exemption = always_on_valid and not op_engaged and _reaching_terminal
-    always_on_lowspeed_exemption = always_on_valid and not op_engaged and car_speed < self.settings._ALWAYS_ON_ALERT_MIN_SPEED
 
     certainly_distracted = self.driver_distraction_filter.x > 0.63 and self.driver_distracted and self.face_detected
     maybe_distracted = self.hi_stds > self.settings._HI_STD_FALLBACK_TIME or not self.face_detected
 
     if certainly_distracted or maybe_distracted:
-      # should always be counting if distracted unless at standstill (lowspeed for always-on) and reaching orange
+      # should always be counting if distracted unless at standstill and reaching green
       # also will not be reaching 0 if DM is active when not engaged
-      if not (standstill_orange_exemption or always_on_red_exemption or (always_on_lowspeed_exemption and _reaching_audible)):
+      if not (standstill_exemption or always_on_red_exemption):
         self.awareness = max(self.awareness - self.step_change, -0.1)
 
     alert = None
@@ -479,7 +404,7 @@ class DriverMonitoring:
     elif self.face_detected and self.eyes_closed and car_speed > 1. and not steer_touch:
       # prompt orange alert: eyes-closed early detection
       alert = EventName.promptDriverDistracted
-    elif self.awareness <= self.threshold_pre and not always_on_lowspeed_exemption:
+    elif self.awareness <= self.threshold_pre:
       # pre green alert
       alert = EventName.preDriverDistracted if self.active_monitoring_mode else EventName.preDriverUnresponsive
 
@@ -547,6 +472,7 @@ class DriverMonitoring:
       op_engaged=enabled,
       standstill=standstill,
       demo_mode=demo,
+      steering_angle_deg=sm['carState'].steeringAngleDeg,
     )
 
     # Update distraction events

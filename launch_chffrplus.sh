@@ -27,6 +27,7 @@ function agnos_init {
 
   # TODO: move this to agnos
   sudo rm -f /data/etc/NetworkManager/system-connections/*.nmmeta
+  rm -f /data/scons_cache/config.lock
 
   # set success flag for current boot slot
   sudo abctl --set_success
@@ -127,25 +128,26 @@ function launch {
   # KisaPilot Current Stat
   git log -n 1 --pretty=format:"/ %cd / %h" --date=short > /data/params/d/KisaPilotCurrentDescription
 
-# KisaPilot Model check
+  # KisaPilot Model check
 
-Model_P_Hash=$(sha256sum /data/openpilot/selfdrive/modeld/models/driving_policy.onnx | awk '{print $1}')
-Model_V_Hash=$(sha256sum /data/openpilot/selfdrive/modeld/models/driving_vision.onnx | awk '{print $1}')
+  Model_OFF_Hash=$(sha256sum /data/openpilot/selfdrive/modeld/models/driving_off_policy.onnx | awk '{print $1}')
+  Model_ON_Hash=$(sha256sum /data/openpilot/selfdrive/modeld/models/driving_on_policy.onnx | awk '{print $1}')
+  Model_V_Hash=$(sha256sum /data/openpilot/selfdrive/modeld/models/driving_vision.onnx | awk '{print $1}')
 
-MODEL_NAME=$(awk -v ph="$Model_P_Hash" -v vh="$Model_V_Hash" '
-  $2 == ph && $3 == vh {
-    print $1;
-  }
-' /data/openpilot/selfdrive/modeld/models/ModelList)
+  MODEL_NAME=$(awk -v offh="$Model_OFF_Hash" -v onh="$Model_ON_Hash" -v vh="$Model_V_Hash" '
+    $2 == offh && $3 == onh && $4 == vh {
+      print $1;
+    }
+  ' /data/openpilot/selfdrive/modeld/models/ModelList)
+  
+  if [ -z "$MODEL_NAME" ]; then
+    MODEL_NAME=$(head -n 1 /data/openpilot/selfdrive/modeld/models/ModelList | awk '{print $1}')
+  fi
 
-if [ -z "$MODEL_NAME" ]; then
-  MODEL_NAME=$(head -n 1 /data/openpilot/selfdrive/modeld/models/ModelList | awk '{print $1}')
-fi
+  echo -en "$MODEL_NAME" > /data/params/d/DrivingModel
 
-echo -en "$MODEL_NAME" > /data/params/d/DrivingModel
-
-  # kisa agent start
-  python3 /data/openpilot/selfdrive/kisapilot/kisa_agent.py &
+    # kisa agent start
+    python3 /data/openpilot/selfdrive/kisapilot/kisa_agent.py &
 
   # start manager
   cd system/manager
