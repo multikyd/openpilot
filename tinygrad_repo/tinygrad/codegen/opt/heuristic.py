@@ -1,6 +1,6 @@
 import itertools
 from tinygrad.codegen.opt import Opt, OptOps, KernelOptError
-from tinygrad.helpers import getenv, DEBUG, prod, NOLOCALS, TC_OPT, TC_SELECT, USE_TC, AMX, IMAGE
+from tinygrad.helpers import getenv, DEBUG, prod, NOLOCALS, TC_OPT, TC_SELECT, USE_TC, IMAGE
 from tinygrad.dtype import PtrDType, ImageDType
 from tinygrad.uop.ops import Ops, resolve, AxisType
 from tinygrad.codegen.opt.postrange import Scheduler
@@ -34,7 +34,7 @@ def hand_coded_optimizations(k:Scheduler) -> Scheduler:
     except KernelOptError:
       pass
     # skip hand-coded TC opts if AMX, upcasting will make kernel slower
-    if good_tc_opt and not AMX:
+    if good_tc_opt and "AMX" not in k.ren.target.arch:
       if rngs is not None:
         for tc_dim in [1,0]: # attempt to upcast M and N
           szs = [sz for sz in [5,4,3,2] if rngs[tc_dim].src[0].divides(sz) is not None]
@@ -106,7 +106,7 @@ def hand_coded_optimizations(k:Scheduler) -> Scheduler:
   for axis in to_upcast[::-1]: k.apply_opt(Opt(OptOps.UPCAST, axis, 0))
 
   # potentially do more upcasts of non reduce axes based on a heuristic
-  is_dsp = k.ren is not None and k.ren.device == "DSP"
+  is_dsp = k.ren is not None and k.ren.target.device == "DSP"
   upcasted_axis: set[int] = set()
   while resolve(prod(k.output_shape[i] for i in k.upcastable_dims) >= 1024) and (k.upcast_size() < 32):
     xb_choices = []

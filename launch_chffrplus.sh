@@ -125,27 +125,6 @@ function launch {
   # write tmux scrollback to a file
   tmux capture-pane -pq -S-1000 > /tmp/launch_log
 
-  # KisaPilot Current Stat
-  git log -n 1 --pretty=format:"/ %cd / %h" --date=short > /data/params/d/KisaPilotCurrentDescription
-
-  # KisaPilot Model check
-
-  Model_OFF_Hash=$(sha256sum /data/openpilot/selfdrive/modeld/models/driving_off_policy.onnx | awk '{print $1}')
-  Model_ON_Hash=$(sha256sum /data/openpilot/selfdrive/modeld/models/driving_on_policy.onnx | awk '{print $1}')
-  Model_V_Hash=$(sha256sum /data/openpilot/selfdrive/modeld/models/driving_vision.onnx | awk '{print $1}')
-
-  MODEL_NAME=$(awk -v offh="$Model_OFF_Hash" -v onh="$Model_ON_Hash" -v vh="$Model_V_Hash" '
-    $2 == offh && $3 == onh && $4 == vh {
-      print $1;
-    }
-  ' /data/openpilot/selfdrive/modeld/models/ModelList)
-  
-  if [ -z "$MODEL_NAME" ]; then
-    MODEL_NAME=$(head -n 1 /data/openpilot/selfdrive/modeld/models/ModelList | awk '{print $1}')
-  fi
-
-  echo -en "$MODEL_NAME" > /data/params/d/DrivingModel
-
     # kisa agent start
     python3 /data/openpilot/selfdrive/kisapilot/kisa_agent.py &
 

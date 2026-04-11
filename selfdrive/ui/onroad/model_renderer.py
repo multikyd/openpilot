@@ -7,7 +7,7 @@ from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.params import Params
 from openpilot.selfdrive.locationd.calibrationd import HEIGHT_INIT
 from openpilot.selfdrive.ui.ui_state import ui_state
-from openpilot.system.ui.lib.application import gui_app, FontWeight
+from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.ui.lib.shader_polygon import draw_polygon, Gradient
 from openpilot.system.ui.widgets import Widget
 
@@ -27,18 +27,6 @@ NO_THROTTLE_COLORS = [
   rl.Color(242, 242, 242, 0),   # HSLF(112/360, 0.0, 0.95, 0.0)
 ]
 
-# kisa
-LL_THROTTLE_COLORS = [
-  rl.Color(64, 200, 255, 102),
-  rl.Color(90, 220, 255, 89),
-  rl.Color(90, 220, 255, 0),
-]
-
-LL_NO_THROTTLE_COLORS = [
-  rl.Color(200, 230, 255, 102),
-  rl.Color(200, 230, 255, 89),
-  rl.Color(200, 230, 255, 0),
-]
 
 @dataclass
 class ModelPoints:
@@ -88,8 +76,6 @@ class ModelRenderer(Widget):
       cp = messaging.log_from_bytes(car_params, car.CarParams)
       self._longitudinal_control = cp.openpilotLongitudinalControl
 
-    self._font_medium: rl.Font = gui_app.font(FontWeight.MEDIUM)
-
   def set_transform(self, transform: np.ndarray):
     self._car_space_transform = transform.astype(np.float32)
     self._transform_dirty = True
@@ -119,7 +105,7 @@ class ModelRenderer(Widget):
     model = sm['modelV2']
     radar_state = sm['radarState'] if sm.valid['radarState'] else None
     lead_one = radar_state.leadOne if radar_state else None
-    render_lead_indicator = radar_state is not None
+    render_lead_indicator = self._longitudinal_control and radar_state is not None
 
     # Update model data when needed
     model_updated = sm.updated['modelV2']
@@ -142,7 +128,6 @@ class ModelRenderer(Widget):
 
     if render_lead_indicator and radar_state:
       self._draw_lead_indicator()
-      self._draw_radar_info(radar_state)
 
   def _update_raw_points(self, model):
     """Update raw 3D points from model data"""
@@ -271,13 +256,13 @@ class ModelRenderer(Widget):
     return LeadVehicle(glow=glow, chevron=chevron, fill_alpha=int(fill_alpha))
 
   def _draw_lane_lines(self):
-    """Draw lane lines, road edges and bsm alert"""
+    """Draw lane lines and road edges"""
     for i, lane_line in enumerate(self._lane_lines):
       if lane_line.projected_points.size == 0:
         continue
 
       alpha = np.clip(self._lane_line_probs[i], 0.0, 0.7)
-      color = rl.Color(0, 255, 100, int(alpha * 255))
+      color = rl.Color(255, 255, 255, int(alpha * 255))
       draw_polygon(self._rect, lane_line.projected_points, color)
 
     for i, road_edge in enumerate(self._road_edges):
@@ -287,41 +272,6 @@ class ModelRenderer(Widget):
       alpha = np.clip(1.0 - self._road_edge_stds[i], 0.0, 1.0)
       color = rl.Color(255, 0, 0, int(alpha * 255))
       draw_polygon(self._rect, road_edge.projected_points, color)
-
-    if ui_state.show_ui_bsm:
-      if ui_state.leftblindspot:
-        if len(self._lane_lines) >= 2:
-          # 0 ~ 1
-          left_pts = self._lane_lines[0].projected_points
-          mid_pts  = self._lane_lines[1].projected_points
-          if left_pts.size > 0 and mid_pts.size > 0:
-            polygon_pts = np.vstack([left_pts, mid_pts])
-            draw_polygon(self._rect, polygon_pts, rl.Color(230, 50, 50, 125))
-          # e0 ~ 1
-          elif len(self._road_edges) >= 1:
-            road_edge_pts = self._road_edges[0].projected_points
-            if mid_pts.size > 0 and road_edge_pts.size > 0:
-              polygon_pts = np.vstack([mid_pts, road_edge_pts])
-              draw_polygon(self._rect, polygon_pts, rl.Color(230, 50, 50, 125))
-
-      if ui_state.rightblindspot:
-        if len(self._lane_lines) >= 4:
-          # 2 ~ 3
-          right_bsm = False
-          mid_pts = self._lane_lines[2].projected_points
-          right_pts = self._lane_lines[3].projected_points
-          if mid_pts.size > 0 and right_pts.size > 0:
-            right_bsm = True
-            polygon_pts = np.vstack([mid_pts, right_pts])
-            draw_polygon(self._rect, polygon_pts, rl.Color(230, 50, 50, 125))
-            return
-        # 2 ~ e1
-        if len(self._lane_lines) >= 3 and len(self._road_edges) >= 2 and not right_bsm:
-          mid_pts = self._lane_lines[2].projected_points
-          road_edge_pts = self._road_edges[1].projected_points
-          if mid_pts.size > 0 and road_edge_pts.size > 0:
-            polygon_pts = np.vstack([mid_pts, road_edge_pts])
-            draw_polygon(self._rect, polygon_pts, rl.Color(230, 50, 50, 125))
 
   def _draw_path(self, sm):
     """Draw path with dynamic coloring based on mode and throttle state."""
@@ -338,22 +288,16 @@ class ModelRenderer(Widget):
       else:
         draw_polygon(self._rect, self._path.projected_points, rl.Color(255, 255, 255, 30))
     else:
-      if not (ui_state.enabled or ui_state.latEnabled):
-        draw_polygon(self._rect, self._path.projected_points, rl.Color(255, 255, 255, 30))
-      else:
-        # Blend throttle/no throttle colors based on transition
-        blend_factor = round(self._blend_filter.x * 100) / 100
-        if ui_state.activeLaneLine:
-          blended_colors = self._blend_colors(NO_THROTTLE_COLORS, THROTTLE_COLORS, blend_factor)
-        else:
-          blended_colors = self._blend_colors(LL_NO_THROTTLE_COLORS, LL_THROTTLE_COLORS, blend_factor)
-        gradient = Gradient(
-          start=(0.0, 1.0),  # Bottom of path
-          end=(0.0, 0.0),  # Top of path
-          colors=blended_colors,
-          stops=[0.0, 0.5, 1.0],
-        )
-        draw_polygon(self._rect, self._path.projected_points, gradient=gradient)
+      # Blend throttle/no throttle colors based on transition
+      blend_factor = round(self._blend_filter.x * 100) / 100
+      blended_colors = self._blend_colors(NO_THROTTLE_COLORS, THROTTLE_COLORS, blend_factor)
+      gradient = Gradient(
+        start=(0.0, 1.0),  # Bottom of path
+        end=(0.0, 0.0),  # Top of path
+        colors=blended_colors,
+        stops=[0.0, 0.5, 1.0],
+      )
+      draw_polygon(self._rect, self._path.projected_points, gradient=gradient)
 
   def _draw_lead_indicator(self):
     # Draw lead vehicles if available
@@ -361,218 +305,8 @@ class ModelRenderer(Widget):
       if not lead.glow or not lead.chevron:
         continue
 
-      if 0 < ui_state.radarDRel < 149:
-        rl.draw_triangle_fan(lead.glow, len(lead.glow), rl.Color(218, 202, 37, 255))
-        rl.draw_triangle_fan(lead.chevron, len(lead.chevron), rl.Color(201, 34, 49, lead.fill_alpha))
-      else:
-        rl.draw_triangle_fan(lead.glow, len(lead.glow), rl.Color(100, 255, 100, 255))
-        rl.draw_triangle_fan(lead.chevron, len(lead.chevron), rl.Color(50, 200, 50, lead.fill_alpha))
-
-  def _draw_radar_info(self, radar_state):
-    """Draw radar details with distance-based box sizing and screen-bound correction."""
-    s = ui_state
-
-    try:
-      raw_lat = s.radar_lat_factor
-      radar_lat_factor = float(raw_lat) / 100.0 if raw_lat is not None else 0.2
-    except Exception:
-      radar_lat_factor = 0.2
-
-    if s.show_radar_info <= 0:
-      return
-
-    leads = []
-    if radar_state is None:
-      return
-
-    if getattr(radar_state, 'leadOne', None) is not None:
-      leads.append(radar_state.leadOne)
-    if getattr(radar_state, 'leadTwo', None) is not None:
-      leads.append(radar_state.leadTwo)
-
-    lane_z = None
-    try:
-      if len(self._lane_lines) > 2 and self._lane_lines[2].raw_points.size:
-        lane_z = self._lane_lines[2].raw_points[:, 2]
-    except Exception:
-      lane_z = None
-
-    screen_w, screen_h = 2160, 1080  # 화면 크기
-
-    for l in leads:
-      try:
-        if not getattr(l, 'status', False):
-          continue
-
-        dRel = float(getattr(l, 'dRel', 0.0))
-        yRel = float(getattr(l, 'yRel', 0.0))
-        v = float(getattr(l, 'vRel', 0.0))
-        v_lat = float(getattr(l, 'vLat', 0.0)) if hasattr(l, 'vLat') else 0.0
-
-        if dRel <= 2.5:
-          if s.show_radar_info >= 3:
-            pt = self._map_to_screen(dRel, -yRel, 0.0 + self._path_offset_z)
-            if pt:
-              rl.draw_text_ex(self._font_medium, "*", rl.Vector2(float(pt[0]), float(pt[1])), 40, 0, rl.BLACK)
-          continue
-
-        z = 0.0
-        if lane_z is not None:
-          idx = self._get_path_length_idx(self._lane_lines[2].raw_points[:, 0], dRel)
-          if idx < len(lane_z):
-            z = lane_z[idx] - 0.61
-
-        side = self._map_to_screen(dRel, -yRel, z + self._path_offset_z)
-        if not side:
-          continue
-        x, y = side
-
-        v_abs = np.sqrt(v * v + v_lat * v_lat)
-        v_sum = v_abs if v >= 0 else -v_abs
-
-        t = radar_lat_factor
-        if v_abs > 3.0:
-          a_dRel = max(dRel + v * t, 2.0)
-          a_yRel = yRel + v_lat * t
-          a_side = self._map_to_screen(a_dRel, -a_yRel, z + self._path_offset_z)
-          if a_side:
-            ax, ay = a_side
-            rl.draw_line(int(x), int(y), int(ax), int(ay),
-                        rl.Color(0, 255, 0, 255) if v_sum > 0 else rl.Color(255, 0, 0, 255))
-            rl.draw_circle(int(ax), int(ay), 10,
-                          rl.Color(0, 255, 0, 255) if v_sum > 0 else rl.Color(255, 0, 0, 255))
-
-        MS_TO_KPH = 3.6
-        MS_TO_MPH = 2.2369362920544
-        disp_speed = v_sum * MS_TO_KPH if s.is_metric else v_sum * MS_TO_MPH
-        speed_str = f"{int(round(disp_speed))}"
-
-        MIN_BOX_HEIGHT = 42
-        MAX_BOX_HEIGHT = 100
-        MIN_BOX_WIDTH = 35
-
-        box_height = max(MIN_BOX_HEIGHT, min(MAX_BOX_HEIGHT, 200 / (dRel + 0.1)))
-        box_width = max(MIN_BOX_WIDTH, 35 * max(1, len(speed_str)))
-
-        box_x = int(x - box_width / 2)
-        box_y = int(y - box_height / 2 - 10)
-
-        # --- 화면 밖 보정 ---
-        if box_x < 0:
-          box_x = 0
-        elif box_x + box_width > screen_w:
-          box_x = screen_w - box_width
-
-        if box_y < 0:
-          box_y = 0
-        elif box_y + box_height > screen_h:
-          box_y = screen_h - box_height
-
-        model_prob = float(getattr(l, 'modelProb', 0.0))
-        radar_flag = bool(getattr(l, 'radar', False)) if hasattr(l, 'radar') else True
-        if not radar_flag:
-          box_color = rl.Color(0, 122, 255, 200)
-        elif abs(model_prob - 0.01) < 1e-6:
-          box_color = rl.Color(0, 255, 0, 200)
-        else:
-          box_color = rl.Color(255, 165, 0, 200) if v_sum > 0 else rl.Color(255, 0, 0, 200)
-        rect = rl.Rectangle(box_x, box_y, box_width, int(box_height))
-        rl.draw_rectangle_rounded(rect, 0.35, 12, box_color)
-
-        text_x = int(x - (len(speed_str) * 6))
-        text_y = int(box_y + box_height / 4)
-        rl.draw_text_ex(self._font_medium, speed_str, rl.Vector2(float(text_x-15), float(text_y-10)), 40, 0, rl.Color(255, 255, 255, 255))
-
-        if s.show_radar_info >= 2:
-          dist_text = f"{dRel:.1f}" if s.is_metric else f"{dRel * 0.621371:.1f}"
-          lat_text = f"{yRel:.1f}"
-          rl.draw_text_ex(self._font_medium, lat_text, rl.Vector2(float(x - 27), float(y - 65)), 30, 0, rl.Color(255, 255, 255, 255))
-          rl.draw_text_ex(self._font_medium, dist_text, rl.Vector2(float(x - 27), float(y + 0)), 30, 0, rl.Color(255, 255, 255, 255))
-
-      except Exception:
-        continue
-
-
-  # def _draw_lead_box(self):
-  #   # Python 변환: 앞차 거리/박스/라인 표시 (C++ -> Python)
-  #   # 사용 전제: rl, self._font_medium, METER_TO_FOOT, isLeadSCC(), isRadarDetected(), ui_draw_line (선택적) 존재
-
-  #   if draw_dist:
-  #     wStr = 0
-  #     w = 80
-  #     dist = radarDist * (1.0 if s.scene.is_metric else METER_TO_FOOT)
-  #     text_color = COLOR_WHITE if xState == 0 else (COLOR_GREY if xState == 1 else COLOR_GREEN)
-  #     if dist > 0.0:
-  #       str_val = "{:.1f}".format(dist)
-  #       wStr = 32 * (len(str_val) + 0)
-  #       bx = int(x - w - wStr / 2)
-  #       by = int(disp_y - 35)
-  #       bh = 42
-  #       # 둥근 박스(채우기)
-  #       rect = rl.Rectangle(bx, by, wStr, bh)
-  #       bg_col = COLOR_RED if isLeadSCC() else COLOR_ORANGE
-  #       rl.draw_rectangle_rounded(rect, 0.25, 8, bg_col)
-  #       # optional outline (투명 흰색)
-  #       rl.draw_rectangle_rounded_lines(rect, 0.25, 8, 2, rl.Color(255,255,255,40))
-  #       # 텍스트 (왼쪽 정렬 스타일 유지)
-  #       rl.draw_text_ex(self._font_medium, str_val, rl.Vector2(float(x - w), float(disp_y)), 40, 0, text_color)
-
-  #     dist = visionDist * (1.0 if s.scene.is_metric else METER_TO_FOOT)
-  #     if dist > 0.0:
-  #       str_val = "{:.1f}".format(dist)
-  #       wStr = 32 * (len(str_val) + 0)
-  #       bx = int(x + w - wStr / 2)
-  #       by = int(disp_y - 35)
-  #       bh = 42
-  #       rect = rl.Rectangle(bx, by, wStr, bh)
-  #       rl.draw_rectangle_rounded(rect, 0.25, 8, COLOR_BLUE)
-  #       rl.draw_rectangle_rounded_lines(rect, 0.25, 8, 2, rl.Color(255,255,255,40))
-  #       rl.draw_text_ex(self._font_medium, str_val, rl.Vector2(float(x + w), float(disp_y)), 40, 0, text_color)
-
-  #   # TF (time-follow) 표시: 선 + 텍스트
-  #   if tf_distance > 0:
-  #     # 폴리라인 그리기: ui_draw_line이 있으면 그걸 사용, 없으면 rl.draw_line으로 fallback
-  #     try:
-  #       pts = [tf_vertex_left, tf_vertex_right]
-  #       # ui_draw_line(s, pts, None, None, 3.0, COLOR_WHITE)  # 프로젝트 helper가 있으면 이걸 사용
-  #       # fallback: 좌표 타입이 QPointF 또는 (x,y) 튜플일 수 있으니 안전하게 추출
-  #       lx = tf_vertex_left.x() if hasattr(tf_vertex_left, "x") else tf_vertex_left[0]
-  #       ly = tf_vertex_left.y() if hasattr(tf_vertex_left, "y") else tf_vertex_left[1]
-  #       rx = tf_vertex_right.x() if hasattr(tf_vertex_right, "x") else tf_vertex_right[0]
-  #       ry = tf_vertex_right.y() if hasattr(tf_vertex_right, "y") else tf_vertex_right[1]
-  #       rl.draw_line(int(lx), int(ly), int(rx), int(ry), COLOR_WHITE)
-  #     except Exception:
-  #       pass
-
-  #     tf_str = "{:.1f}({:.2f})".format(tf_distance, t_follow)
-  #     tx = tf_vertex_right.x() if hasattr(tf_vertex_right, "x") else tf_vertex_right[0]
-  #     ty = tf_vertex_right.y() if hasattr(tf_vertex_right, "y") else tf_vertex_right[1]
-  #     rl.draw_text_ex(self._font_medium, tf_str, rl.Vector2(float(tx), float(ty)), 25, 0, COLOR_WHITE)
-
-  #   # Lead 표시 박스 (메인)
-  #   if isLeadDetected():
-  #     radar_stroke = COLOR_BLUE
-  #     if lead_two_status > 0:
-  #       radar_stroke = COLOR_OCHRE
-  #       path_width2 = lead_two_xr - lead_two_xl
-  #       bx = int(lead_two_xl - 10)
-  #       by = int(lead_two_y - path_width2 * 0.8)
-  #       bw = int(path_width2 + 20)
-  #       bh = int(path_width2 * 0.8)
-  #       rect2 = rl.Rectangle(bx, by, bw, bh)
-  #       bg_col = COLOR_RED_ALPHA(50) if (lead_two_status == 2) else COLOR_BLACK_ALPHA(20)
-  #       rl.draw_rectangle_rounded(rect2, 0.25, 8, bg_col)
-  #       rl.draw_rectangle_rounded_lines(rect2, 0.25, 8, 3, radar_stroke)
-
-  #     radar_stroke = rcolor if isRadarDetected() else COLOR_BLUE
-  #     bx = int(path_x - path_width / 2 - 10)
-  #     by = int(path_y - path_width * 0.8)
-  #     bw = int(path_width + 20)
-  #     bh = int(path_width * 0.8)
-  #     rect_main = rl.Rectangle(bx, by, bw, bh)
-  #     rl.draw_rectangle_rounded(rect_main, 0.25, 8, COLOR_BLACK_ALPHA(20))
-  #     rl.draw_rectangle_rounded_lines(rect_main, 0.25, 8, 3, radar_stroke)
-
+      rl.draw_triangle_fan(lead.glow, len(lead.glow), rl.Color(218, 202, 37, 255))
+      rl.draw_triangle_fan(lead.chevron, len(lead.chevron), rl.Color(201, 34, 49, lead.fill_alpha))
 
   @staticmethod
   def _get_path_length_idx(pos_x_array: np.ndarray, path_distance: float) -> int:

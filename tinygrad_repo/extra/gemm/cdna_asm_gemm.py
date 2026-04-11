@@ -6,6 +6,7 @@ from tinygrad.renderer import Estimates
 from tinygrad.helpers import getenv, all_same, DEBUG
 from tinygrad.runtime.support.compiler_amd import HIPCCCompiler
 from tinygrad.runtime.autogen.amd.cdna.ins import *
+from examples.mlperf.models.flat_llama import FP8_DTYPE, FP8_GRAD_DTYPE, quantize_fp8
 
 # ** CDNA4 assembly gemm
 
@@ -2627,20 +2628,24 @@ def custom_asm_gemm(C:UOp, A:UOp, B:UOp, dname:str) -> UOp:
 # ** FP8 GEMM custom kernel
 
 @functools.cache
-def custom_hk_fp8_gemm(C:UOp, A:UOp, B:UOp, dname:str) -> UOp:
-  # A is (batch, M, K), B is (N, K) transposed
+def custom_hk_fp8_gemm(C:UOp, A:UOp, B:UOp, *args:UOp, dname:str, scale_mode:int=3) -> UOp:
+  # scale_mode: 0=no scale, 1=x only, 2=w only, 3=both
+  n_scales = (1 if scale_mode & 1 else 0) + (1 if scale_mode & 2 else 0)
+  scales, extra = args[:n_scales], args[n_scales:]
   M, K = A.shape[0]*A.shape[1], A.shape[2]
   N, K2 = B.shape[(1 if B.ndim == 3 else 0):]
   assert K == K2, f"{A.shape} {B.shape}"
   block_size = 256
   threads = UOp.special(64 * 8, "lidx0")
   workgroups = UOp.special((M // block_size) * (N // block_size), "gidx0")
-  sink = UOp.sink(C.base, A.base, B.base, threads, workgroups,
+  sink_inputs = (C.base, A.base, B.base) + tuple(s.base for s in scales) + (threads, workgroups)
+  sink = UOp.sink(*sink_inputs,
                   arg=KernelInfo(f"hk_fp8_gemm_{M}_{N}_{K}", estimates=Estimates(ops=2*M*N*K, mem=(M*K+N*K)*A.dtype.itemsize+M*N*C.dtype.itemsize)))
   kittens_path = pathlib.Path(__file__).parent.parent/"thunder"/"amd"
   src = (kittens_path/"gemm_fp8.cpp").read_text()
   lib = HIPCCCompiler("gfx950", [f"-I{(kittens_path/'include').as_posix()}", "-std=c++20", "-DKITTENS_CDNA4", "-ffast-math",
-                                 "-DHIP_ENABLE_WARP_SYNC_BUILTINS", f"-DGEMM_M={M}", f"-DGEMM_N={N}", f"-DGEMM_K={K}"]).compile_cached(src)
+                                 "-DHIP_ENABLE_WARP_SYNC_BUILTINS", f"-DGEMM_M={M}", f"-DGEMM_N={N}", f"-DGEMM_K={K}",
+                                 f"-DSCALE_MODE={scale_mode}"]).compile_cached(src)
   return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=dname), UOp(Ops.LINEAR, src=(*sink.src, sink)), UOp(Ops.SOURCE, arg=src),
                                UOp(Ops.BINARY, arg=lib)))
 
@@ -2655,7 +2660,7 @@ atexit.register(_asm_gemm_report)
 
 def can_use_asm_gemm(a:Tensor, b:Tensor) -> bool:
   if a.dtype != b.dtype: return todo(f"dtypes must match {a.dtype} != {b.dtype}")
-  if a.dtype not in {dtypes.bfloat16, dtypes.float16, dtypes.fp8e4m3}: return todo(f"only bfloat16/float16/fp8, got {a.dtype}")
+  if a.dtype not in {dtypes.bfloat16, dtypes.float16, FP8_DTYPE}: return todo(f"only bfloat16/float16/fp8, got {a.dtype}")
   batch, M, K = (1, *a.shape) if a.ndim == 2 else a.shape
   N = b.shape[1]
   if isinstance(a.device, tuple):
@@ -2668,7 +2673,7 @@ def can_use_asm_gemm(a:Tensor, b:Tensor) -> bool:
     else: return todo(f"sharding mismatch a.ndim={a.ndim} a.uop.axis={a.uop.axis} b.uop.axis={b.uop.axis}")
     dname = a.device[0]
   else: dname = a.device
-  arch = getattr(Device[dname].renderer, "arch", "")
+  arch = Device[dname].renderer.target.arch
   if batch not in {1, 2}: return todo(f"GEMM batch size {batch}")
   # blacklist slow matmul
   # TODO: why is this slow?
@@ -2695,23 +2700,48 @@ def custom_uop_gemm(C:UOp, A:UOp, B:UOp) -> UOp:
 
 # ** backward gemm, might use the asm gemm
 
-def custom_gemm_bw(gradient:UOp, kernel:UOp, rhs_transposed=False):
-  out, a, b = kernel.src[1:]
-  assert all_same([gradient.device, a.device, b.device, out.device])
-  a_t, b_t, g_t = Tensor(a, device=a.device), Tensor(b, device=a.device), Tensor(gradient, device=a.device)
-  # TODO: this needs to be cleaned up and done properly, the batch dim of grad and a multi need to align
-  g_t = g_t[:a.shape[0]]
-  if rhs_transposed:
-    grad_a = (g_t @ b_t).uop
-    grad_b = (g_t.permute(2, 0, 1).reshape(g_t.shape[2], -1) @ a_t.reshape(-1, a_t.shape[-1])).uop
+def custom_gemm_bw(gradient:UOp, kernel:UOp):
+  inputs = kernel.src[1:]
+  if inputs[1].dtype == FP8_DTYPE:
+    grad_amax_state = inputs[5] if len(inputs) == 6 else None
+    out, a, b, s_x, s_w = inputs[:5]
+    a_t, b_t, g_t = Tensor(a, device=a.device), Tensor(b, device=a.device), Tensor(gradient, device=a.device)
+    s_x_t, s_w_t = Tensor(s_x, device=a.device), Tensor(s_w, device=a.device)
+    g_t = g_t[:a.shape[0]]
+    from extra.llama_kernels.cast_amax import _grad_fp8_mailbox
+    from extra.llama_kernels.quantize_fp8_delayed import quantize_fp8_delayed
+    gbase = gradient.base if hasattr(gradient, "base") else gradient
+    mailbox_entry = _grad_fp8_mailbox.pop(gbase, None) or _grad_fp8_mailbox.pop(gradient, None)
+    if mailbox_entry is not None:
+      g_fp8_u, inv_scale_u, _new_amax_u, store_effect = mailbox_entry
+      g_fp8 = Tensor(g_fp8_u, device=a.device)[:a.shape[0]]
+      g_scale = Tensor(inv_scale_u, device=a.device)
+    else:
+      assert grad_amax_state is not None, "fp8 matmul bwd needs either a mailbox entry or a grad_amax_state"
+      g_fp8, g_scale, _, store_effect = quantize_fp8_delayed(g_t, Tensor(grad_amax_state, device=a.device))
+    # dgrad: uses g_scale * x_scale * w_scale
+    grad_a = asm_gemm(g_fp8, b_t, x_scale=g_scale * s_x_t, w_scale=s_w_t)
+    # wgrad: no w_scale
+    grad_b = asm_gemm(g_fp8.permute(2, 0, 1).reshape(g_t.shape[-1], -1), a_t.reshape(-1, a_t.shape[-1]), x_scale=g_scale * s_x_t)
+    # Attach the delayed-amax store effect (if any) to grad_a so realizing grads commits the amax update.
+    ret = (None, grad_a.uop.after(store_effect), grad_b.uop, None, None)
+    if len(inputs) == 6: ret = ret + (None,)
+    return ret
   else:
-    grad_a = (g_t @ b_t.T).uop
-    grad_b = (a_t.permute(2, 0, 1).reshape(a_t.shape[2], -1) @ g_t.reshape(-1, g_t.shape[-1])).uop
-  return (None, grad_a, grad_b)
+    out, a, b = inputs
+    assert all_same([gradient.device, a.device, b.device, out.device])
+    a_t, b_t, g_t = Tensor(a, device=a.device), Tensor(b, device=a.device), Tensor(gradient, device=a.device)
+    g_t = g_t[:a.shape[0]]
+    if can_use_asm_gemm(g_t, b_t.T): grad_a = asm_gemm(g_t, b_t.T).uop
+    else: grad_a = (g_t @ b_t.T).uop
+    a_t_flat, g_t_flat = a_t.permute(2, 0, 1).reshape(a_t.shape[2], -1), g_t.reshape(-1, g_t.shape[-1])
+    if can_use_asm_gemm(a_t_flat, g_t_flat): grad_b = asm_gemm(a_t_flat, g_t_flat).uop
+    else: grad_b = (a_t_flat @ g_t_flat).uop
+    return (None, grad_a, grad_b)
 
 # ** main gemm function
 
-def asm_gemm(a:Tensor, b:Tensor) -> Tensor:
+def asm_gemm(a:Tensor, b:Tensor, x_scale:Tensor|None=None, w_scale:Tensor|None=None, grad_amax_state:Tensor|None=None) -> Tensor:
   assert can_use_asm_gemm(a, b), f"{counters['todos'][-1]}"
   counters["used"] += 1
   unfold_batch = a.ndim == 3 and isinstance(a.device, tuple) and a.uop.axis == 2 and b.uop.axis == 0
@@ -2720,7 +2750,7 @@ def asm_gemm(a:Tensor, b:Tensor) -> Tensor:
     a = a.reshape(a.shape[0]*a.shape[1], a.shape[2])
   squeeze = a.ndim == 2
   if squeeze: a = a.unsqueeze(0)
-  out_dtype = dtypes.bfloat16 if a.dtype == dtypes.fp8e4m3 else a.dtype
+  out_dtype = dtypes.bfloat16 if a.dtype == FP8_DTYPE else a.dtype
 
   batch, M, K = a.shape
   N = b.shape[1]
@@ -2731,22 +2761,25 @@ def asm_gemm(a:Tensor, b:Tensor) -> Tensor:
 
   if is_multi:
     if n_sharded:
-      out = Tensor(Tensor.invalid(batch, M, N//len(a.device), dtype=out_dtype, device=a.device).uop.multi(2), device=a.device)
+      out = Tensor(Tensor.invalids(batch, M, N//len(a.device), dtype=out_dtype, device=a.device).uop.multi(2), device=a.device)
     elif m_sharded:
-      out = Tensor(Tensor.invalid(batch, M, N, dtype=out_dtype, device=a.device).uop.multi(1), device=a.device)
+      out = Tensor(Tensor.invalids(batch, M, N, dtype=out_dtype, device=a.device).uop.multi(1), device=a.device)
     else:
-      out = Tensor(Tensor.invalid(batch//len(a.device) if a.uop.axis==0 else batch, M, N, dtype=out_dtype, device=a.device).uop.multi(0),
+      out = Tensor(Tensor.invalids(batch//len(a.device) if a.uop.axis==0 else batch, M, N, dtype=out_dtype, device=a.device).uop.multi(0),
                    device=a.device)
   else:
-    out = Tensor.invalid(batch, M, N, dtype=out_dtype, device=a.device)
+    out = Tensor.invalids(batch, M, N, dtype=out_dtype, device=a.device)
 
-  renderer = Device[a.device[0] if is_multi else a.device].renderer
-  dname, arch = renderer.device, getattr(renderer, "arch", "")
+  renderer = Device[dname:=(a.device[0] if is_multi else a.device)].renderer
+  dname, arch = dname.split(":")[0], renderer.target.arch
   if arch.startswith("gfx950") and getenv("USE_ASM", 1):
-    # the FP8 gemm computes a @ b.T
-    if a.dtype == dtypes.fp8e4m3:
-      out = Tensor.custom_kernel(out, a, b.T, fxn=functools.partial(custom_hk_fp8_gemm, dname=dname),
-                                 grad_fxn=functools.partial(custom_gemm_bw, rhs_transposed=True))[0]
+    # fp8 gemm computes a@b.T, kernel multiplies output by x_scale * w_scale before bf16 store
+    if a.dtype == FP8_DTYPE:
+      scales = tuple(s for s in (x_scale, w_scale) if s is not None)
+      scale_mode = (1 if x_scale is not None else 0) | (2 if w_scale is not None else 0)
+      extra = [grad_amax_state] if grad_amax_state is not None else []
+      fxn = functools.partial(custom_hk_fp8_gemm, dname=dname, scale_mode=scale_mode)
+      out = Tensor.custom_kernel(out, a, b.T, *scales, *extra, fxn=fxn, grad_fxn=custom_gemm_bw)[0]
     else:
       out = Tensor.custom_kernel(out, a, b, fxn=functools.partial(custom_asm_gemm, dname=dname), grad_fxn=custom_gemm_bw)[0]
   else:

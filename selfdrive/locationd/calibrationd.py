@@ -167,7 +167,7 @@ class Calibrator:
 
     write_this_cycle = (self.idx == 0) and (self.block_idx % (INPUTS_WANTED//5) == 5)
     if self.param_put and write_this_cycle:
-      self.params.put_nonblocking("CalibrationParams", self.get_msg(True).to_bytes())
+      self.params.put("CalibrationParams", self.get_msg(True).to_bytes())
 
   def handle_v_ego(self, v_ego: float) -> None:
     self.v_ego = v_ego
@@ -276,12 +276,21 @@ def main() -> NoReturn:
 
     if sm.updated['cameraOdometry']:
       calibrator.handle_v_ego(sm['carState'].vEgo)
-      new_rpy = calibrator.handle_cam_odom(sm['cameraOdometry'].trans,
-                                           sm['cameraOdometry'].rot,
-                                           sm['cameraOdometry'].wideFromDeviceEuler,
-                                           sm['cameraOdometry'].transStd,
-                                           sm['cameraOdometry'].roadTransformTrans,
-                                           sm['cameraOdometry'].roadTransformTransStd)
+
+      yaw_trim_deg = params_reader.get("CameraYawTrimDeg")
+      trim_active = abs(yaw_trim_deg) > 1e-6
+      calib_done = calibrator.cal_status == log.LiveCalibrationData.Status.calibrated
+
+      freeze_calibration = trim_active and calib_done
+      if not freeze_calibration:
+        new_rpy = calibrator.handle_cam_odom(sm['cameraOdometry'].trans,
+                                             sm['cameraOdometry'].rot,
+                                             sm['cameraOdometry'].wideFromDeviceEuler,
+                                             sm['cameraOdometry'].transStd,
+                                             sm['cameraOdometry'].roadTransformTrans,
+                                             sm['cameraOdometry'].roadTransformTransStd)
+      else:
+        new_rpy = None
 
       if DEBUG and new_rpy is not None:
         print('got new rpy', new_rpy)

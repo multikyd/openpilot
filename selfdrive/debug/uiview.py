@@ -1,44 +1,35 @@
 #!/usr/bin/env python3
 import time
-import signal
-from cereal import log, messaging
+
+from cereal import car, log, messaging
+from openpilot.common.params import Params
 from openpilot.system.manager.process_config import managed_processes
+from openpilot.system.hardware import HARDWARE
 
-procs = ['camerad']
-pm = messaging.PubMaster(['deviceState', 'pandaStates'])
+if __name__ == "__main__":
+  CP = car.CarParams(notCar=True, wheelbase=1, steerRatio=10)
+  Params().put("CarParams", CP.to_bytes(), block=True)
 
-msgs_on = messaging.new_message('deviceState')
-msgs_on.deviceState.started = True
-
-msgs_panda_on = messaging.new_message('pandaStates', 1)
-msgs_panda_on.pandaStates[0].ignitionLine = True
-msgs_panda_on.pandaStates[0].pandaType = log.PandaState.PandaType.tres
-
-msgs_off = messaging.new_message('deviceState')
-msgs_off.deviceState.started = False
-
-msgs_panda_off = messaging.new_message('pandaStates', 1)
-msgs_panda_off.pandaStates[0].ignitionLine = False
-msgs_panda_off.pandaStates[0].pandaType = log.PandaState.PandaType.unknown
-
-def cleanup():
+  procs = ['camerad', 'ui', 'modeld', 'calibrationd', 'plannerd', 'dmonitoringmodeld', 'dmonitoringd']
   for p in procs:
-    managed_processes[p].stop()
-  pm.send('deviceState', msgs_off)
-  pm.send('pandaStates', msgs_panda_off)
+    managed_processes[p].start()
 
-def handle_sigterm(signum, frame):
-  cleanup()
-  exit(0)
+  pm = messaging.PubMaster(['controlsState', 'deviceState', 'pandaStates', 'carParams'])
 
-signal.signal(signal.SIGTERM, handle_sigterm)
+  msgs = {s: messaging.new_message(s) for s in ['controlsState', 'deviceState', 'carParams']}
+  msgs['deviceState'].deviceState.started = True
+  msgs['deviceState'].deviceState.deviceType = HARDWARE.get_device_type()
+  msgs['carParams'].carParams.openpilotLongitudinalControl = True
 
-try:
-  while True:
+  msgs['pandaStates'] = messaging.new_message('pandaStates', 1)
+  msgs['pandaStates'].pandaStates[0].ignitionLine = True
+  msgs['pandaStates'].pandaStates[0].pandaType = log.PandaState.PandaType.uno
+
+  try:
+    while True:
+      time.sleep(1 / 100)  # continually send, rate doesn't matter
+      for s in msgs:
+        pm.send(s, msgs[s])
+  except KeyboardInterrupt:
     for p in procs:
-      managed_processes[p].start()
-    pm.send('deviceState', msgs_on)
-    pm.send('pandaStates', msgs_panda_on)
-    time.sleep(1)
-except KeyboardInterrupt:
-  cleanup()
+      managed_processes[p].stop()

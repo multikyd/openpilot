@@ -68,6 +68,7 @@ PROCS = {
   "system.loggerd.deleter": 1.0,
   "./pandad": 19.0,
   "system.qcomgpsd.qcomgpsd": 1.0,
+  "system.hardware.tici.modem": 10.0,
 }
 
 TIMINGS = {
@@ -118,7 +119,7 @@ class TestOnroad:
     # setup env
     params = Params()
     params.remove("CurrentRoute")
-    params.put_bool("RecordFront", True)
+    params.put_bool("RecordFront", True, block=True)
     set_params_enabled()
     os.environ['REPLAY'] = '1'
     os.environ['MSGQ_PREALLOC'] = '1'
@@ -209,7 +210,7 @@ class TestOnroad:
 
     # other processes preempt ui while starting up
     offset = int(20 * LOG_OFFSET)
-    ts = self.ts['uiDebug']['drawTimeMillis'][offset:]
+    ts = self.ts['uiDebug']['cpuTimeMillis'][offset:]
     result += f"min  {min(ts):.2f}ms\n"
     result += f"max  {max(ts):.2f}ms\n"
     result += f"std  {np.std(ts):.2f}ms\n"

@@ -125,6 +125,13 @@ class TestPickle(unittest.TestCase):
     out = add_fxn(x, y)
     np.testing.assert_equal(out.numpy(), 102)
 
+  def test_pickle_jit_no_del(self):
+    @TinyJit
+    def fn(x): return x + 1.0
+    for _ in range(3): fn(Tensor.randn(4))
+    loaded = pickle.loads(pickle.dumps(fn))
+    self.assertEqual(loaded(Tensor([1.0,2.0,3.0,4.0])).tolist(), [2.0,3.0,4.0,5.0])
+
   def test_pickle_context_var(self):
     v = ContextVar("test_var", 0)
     with Context(test_var=1):
@@ -135,10 +142,10 @@ class TestPickle(unittest.TestCase):
   def test_pickle_schedule(self):
     a = Tensor([1,2])
     out = a + 2
-    sched = out.schedule()
+    sched = out.schedule_linear()
     pk = pickle.dumps(sched)
     sched_pk = pickle.loads(pk)
-    self.assertEqual(sched_pk[-1].ast, sched[-1].ast)
+    self.assertEqual(sched_pk.src[-1].src[0], sched.src[-1].src[0])
 
   def test_pickle_renderer(self):
     from tinygrad.device import Device

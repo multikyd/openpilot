@@ -16,7 +16,6 @@ const darkenHex = (h, p = 0) =>
 
 const ANSI_COLORS = ["#b3b3b3", "#ff6666", "#66b366", "#ffff66", "#6666ff", "#ff66ff", "#66ffff", "#ffffff"];
 const ANSI_COLORS_LIGHT = ["#d9d9d9","#ff9999","#99cc99","#ffff99","#9999ff","#ff99ff","#ccffff","#ffffff"];
-const colorsCache = new Map();
 const parseColors = (name, defaultColor="#ffffff") => Array.from(name.matchAll(/(?:\u001b\[(\d+)m([\s\S]*?)\u001b\[0m)|([^\u001b]+)/g),
   ([_, code, colored_st, st]) => ({ st: colored_st ?? st, color: code != null ? (code>=90 ? ANSI_COLORS_LIGHT : ANSI_COLORS)[(parseInt(code)-30+60)%60] : defaultColor }));
 
@@ -198,6 +197,8 @@ function formatCycles(cycles) {
 }
 
 const formatUnit = (d, unit="") => d3.format(".3~s")(d)+unit;
+const skipFmt = new Set(["tb", "pc", "link"]);
+const formatData = (fmt) => Object.entries(fmt ?? {}).filter(([k]) => !skipFmt.has(k)).map(([k, v]) => typeof(v) === "string" ? `${k} ${v}` : formatUnit(v, k));
 
 const waveColor = (op) => {
   let ret = data.waveColors.find(([pattern]) => op.includes(pattern))?.[1] ?? "#ffffff";
@@ -205,7 +206,7 @@ const waveColor = (op) => {
   if (op.includes("LDS_")) { ret = darkenHex(ret, 25) }
   return ret
 };
-const colorScheme = {TINY:new Map([["Schedule","#1b5745"],["get_program","#1d2e62"],["compile","#63b0cd"],["DEFAULT","#354f52"]]),
+const colorScheme = {TINY:new Map([["Schedule","#1b5745"],["precompile","#1d2e62"],["compile","#63b0cd"],["DEFAULT","#354f52"]]),
   DEFAULT:["#2b2e39", "#2c2f3a", "#31343f", "#323544", "#2d303a", "#2e313c", "#343746", "#353847", "#3c4050", "#404459", "#444862", "#4a4e65"],
   BUFFER:["#342483", "#3E2E94", "#4938A4", "#5442B4", "#5E4CC2", "#674FCA"], SIMD:new Map([["OCC", "#101725"], ["INST", "#0A2042"]]),
   GPC:new Map([["NONE","#1a7a2e"],["MEMORY_DEPENDENCY","#8b1a00"],["EXEC_DEPENDENCY","#006b6b"],["INST_FETCH","#7a7a00"],["SYNC","#6b006b"],
@@ -264,7 +265,7 @@ function timeAtCycle(clk) {
   let cur = data.instSt, ns = 0, freq = null;
   // walk through all frequency changes and accumulate time in nanoseconds
   for (const [s, v] of data.tracks.get("Shader Clock").valueMap) {
-    if (freq != null && cur < s) {
+    if (freq != null && freq > 0 && cur < s) {
       const et = Math.min(clk, s);
       ns += (et - cur) * 1e9 / freq;
       cur = et;
@@ -335,7 +336,7 @@ function setFocus(key) {
       const prgSrc = ctxs[i+1].steps.findIndex(s => s.name === "View Source");
       if (prgSrc !== -1) html.append("a").text("View Source").on("click", () => switchCtx(i, prgSrc));
     }
-    if (e.arg.trace != null) html.append(() => traceBlock(JSON.parse(e.arg.trace.replace("TB:", "")).slice(1).reverse()));
+    if (e.arg.trace != null) html.append(() => traceBlock(e.arg.trace.slice(1).reverse()));
   }
   if (eventType === EventTypes.BUF) {
     const [dtype, sz, nbytes, dur] = e.arg.tooltipText.split("\n");
@@ -375,7 +376,6 @@ function setFocus(key) {
 }
 
 const EventTypes = { EXEC:0, BUF:1 };
-const GraphConfig = [{ pcolor:"#c9a8ff", unit:"B", fillColor:"#2B1B72"}, { pcolor:"#4fa3cc", unit:"Hz", fillColor:"#4fa3cc"}];
 
 async function renderProfiler(path, opts) {
   displaySelection("#profiler");
@@ -408,8 +408,8 @@ async function renderProfiler(path, opts) {
   canvas.addEventListener("wheel", e => (e.stopPropagation(), e.preventDefault()), { passive:false });
   const ctx = canvas.getContext("2d");
   const canvasTop = rect(canvas).top;
-  // color by key (name/device)
-  const colorMap = new Map();
+  // map event name to shape and label colors
+  const colorMap = new Map(), coloredNames = new Map();
   // map shapes by event key
   const shapeMap = new Map();
   const heightScale = d3.scaleLinear().domain([0, tracePeak]).range([4,maxheight=100]);
@@ -423,7 +423,7 @@ async function renderProfiler(path, opts) {
     const offsetY = baseY-canvasTop+padding/2;
     const shapes = [], visible = [];
     const eventType = u8(), eventsLen = u32();
-    const [pcolor, scolor] = path.includes("pkts") ? ["#00c72f", "#858b9d"] : ["#9ea2ad", null];
+    const [pcolor, scolor] = path.includes("sqtt") ? ["#00c72f", "#858b9d"] : ["#9ea2ad", null];
     // last row doesn't get a border
     const rowBorderColor = i<layoutsLen-1 ? "#22232a" : null;
     if (rowBorderColor != null) div.style("border-bottom", `1px solid ${rowBorderColor}`);
@@ -433,7 +433,7 @@ async function renderProfiler(path, opts) {
       data.tracks.set(k, { shapes, eventType, visible, offsetY, scolor, pcolor, rowBorderColor });
       let colorKey, ref;
       for (let j=0; j<eventsLen; j++) {
-        const e = {name:strings[u32()], ref:optional(u32()), key:optional(u32()), st:u32(), dur:f32(), info:strings[u32()] || null};
+        const e = {name:strings[u32()], ref:optional(u32()), key:optional(u32()), st:u32(), dur:f32(), fmt:JSON.parse(strings[u32()])};
         // find a free level to put the event
         let depth = levels.findIndex(levelEt => e.st >= levelEt);
         const et = e.st+Math.trunc(e.dur);
@@ -448,11 +448,14 @@ async function renderProfiler(path, opts) {
           colorMap.set(colorKey, d3.rgb(color));
         }
         const fillColor = colorMap.get(colorKey).brighter(0.3*depth).toString();
-        const label = parseColors(e.name).flatMap(({ color, st }) => {
-          const parts = [];
-          for (let i=0; i<st.length; i+=4) { const part = st.slice(i, i+4); parts.push({ color, st:part, width:ctx.measureText(part).width }); }
-          return parts;
-        });
+        let label = coloredNames.get(e.name);
+        if (label == null) {
+          label = parseColors(e.name).flatMap(({ color, st }) => {
+            const parts = [];
+            for (let i=0; i<st.length; i+=4) { const part = st.slice(i, i+4); parts.push({ color, st:part, width:ctx.measureText(part).width }); }
+            return parts;
+          }); coloredNames.set(e.name, label);
+        }
         let shapeRef = e.ref;
         if (shapeRef != null) { ref = {ctx:e.ref, step:0}; shapeRef = ref; }
         else if (ref != null) {
@@ -471,11 +474,9 @@ async function renderProfiler(path, opts) {
         }
         // tiny device events go straight to the rewrite rule
         const key = k.startsWith("TINY") ? null : `${k}-${j}`;
-        let info = e.info != null ? "\n"+e.info : "", trace = null, pc = null, link = null
-        if (info.startsWith("\nPC:")) { pc = parseInt(e.info.split(":")[1]); info = ""; }
-        if (info.startsWith("\nTB:")) { trace = info; info = ""; }
-        if (info.startsWith("\nLINK:")) { link = info.replace("\nLINK:", ""); info = ""; data.links.set(link, key); }
-        const arg = { tooltipText:" N:"+shapes.length+"\n"+formatTime(e.dur)+info, label, pc, trace, link, bufs:[], key, ctx:shapeRef?.ctx, step:shapeRef?.step };
+        const trace = e.fmt.tb, pc = e.fmt.pc, link = e.fmt.link;
+        if (link != null) data.links.set(link, key);
+        const arg = { tooltipText:[" N:"+shapes.length, formatTime(e.dur), ...formatData(e.fmt)].join("\n"), label, pc, trace, link, bufs:[], key, ctx:shapeRef?.ctx, step:shapeRef?.step };
         if (e.key != null) shapeMap.set(e.key, key);
         // offset y by depth
         shapes.push({x:e.st, y:levelHeight*depth, width:e.dur, height:levelHeight, arg, label:opts.hideLabels ? null : label, fillColor });
@@ -484,7 +485,6 @@ async function renderProfiler(path, opts) {
       div.style("height", levelHeight*levels.length+padding+"px").style("pointerEvents", "none");
     } else {
       const linear = u8(), peak = u64();
-      const config = GraphConfig[linear];
       const timestamps = [], valueMap = new Map();
       // start by unpacking the raw events
       const memEvents = [];
@@ -513,7 +513,7 @@ async function renderProfiler(path, opts) {
       const yscale = d3.scaleLinear().domain([0, peak]).range([height, 0]);
       // generic polygon merger
       const base0 = yscale(0);
-      const sum = {x:[], y0:[], y1:[], fillColor:config.fillColor};
+      const sum = {x:[], y0:[], y1:[], fillColor:linear ? null : "#2b1b72"};
       for (let i=0; i<timestamps.length-1; i++) {
         const yv = yscale(valueMap.get(timestamps[i]));
         sum.x.push(timestamps[i], timestamps[i+1]); sum.y1.push(yv, yv); sum.y0.push(base0, base0);
@@ -552,8 +552,8 @@ async function renderProfiler(path, opts) {
         return bufShapes;
       };
       if (timestamps.length > 0) data.first = data.first == null ? timestamps[0] : Math.min(data.first, timestamps[0]);
-      data.tracks.set(k, { shapes:[sum], eventType, linear, visible, offsetY, pcolor:config.pcolor, height, peak, scaleFactor:maxheight*4/height,
-                           get views() { return [[sum], linear ? null : buildBufShapes()]; }, valueMap, rowBorderColor });
+      data.tracks.set(k, { shapes:[sum], eventType, linear, visible, offsetY, pcolor:linear ? "#4fa3cc" : "#c9a8ff", height, peak, scaleFactor:maxheight*4/height,
+                           get views() { return [[sum], linear ? null : buildBufShapes()]; }, valueMap, rowBorderColor, unit:linear ? "Hz" : "B" });
       div.style("height", height+padding+"px").style("cursor", "pointer").on("click", (e) => {
         if (linear) return;
         const newFocus = e.currentTarget.id === focusedDevice ? null : e.currentTarget.id;
@@ -563,7 +563,7 @@ async function renderProfiler(path, opts) {
           if (tid === newFocus) { track.shapes = track.views[1]; offset += rescaleTrack(track, tid, track.scaleFactor); }
           else if (tid === focusedDevice) { track.shapes = track.views[0]; offset += rescaleTrack(track, tid, 1/track.scaleFactor); }
         }
-        data.axes.y = newFocus != null ? { domain:[0, (t=data.tracks.get(newFocus)).peak], range:[t.offsetY+t.height, t.offsetY], fmt:config.unit } : null;
+        data.axes.y = newFocus != null ? { domain:[0, (t=data.tracks.get(newFocus)).peak], range:[t.offsetY+t.height, t.offsetY], fmt:t.unit } : null;
         toggleCls(document.getElementById(focusedDevice), document.getElementById(newFocus), "expanded");
         focusedDevice = newFocus;
         return resize();
@@ -574,7 +574,7 @@ async function renderProfiler(path, opts) {
   if (data.pcMap != null) setFocus(focusedShape);
   // secondary axis mapping
   let instRange = null;
-  for (const [k, { shapes }] of data.tracks) if (!k.includes("Clock") && path.includes("pkts")) {
+  for (const [k, { shapes }] of data.tracks) if (!k.includes("Clock") && path.includes("sqtt")) {
     const first = shapes[0].x, last = shapes.at(-1).x+shapes.at(-1).width;
     instRange = instRange == null ? [first, last] : [Math.min(first, instRange[0]), Math.max(last, instRange[1])];
   }
@@ -608,14 +608,13 @@ async function renderProfiler(path, opts) {
     const visibleYStart = profilerEl.scrollTop-canvasTop + rect(profilerEl).top, visibleYEnd = visibleYStart+profilerEl.clientHeight;
     ctx.textBaseline = "middle";
     // draw shapes
-    for (const [k, { shapes, eventType, linear, visible, offsetY, valueMap, pcolor, scolor, rowBorderColor }] of data.tracks) {
+    for (const [k, { shapes, eventType, linear, visible, offsetY, valueMap, pcolor, scolor, unit, rowBorderColor }] of data.tracks) {
       visible.length = 0;
       const trackHeight = rect(document.getElementById(k)).height;
       if (offsetY+trackHeight < visibleYStart || offsetY > visibleYEnd) continue;
-      const addBorder = scolor != null ? (w) => { if (w > 10) { ctx.strokeStyle = scolor; ctx.stroke(); } } : null;
-      const config = GraphConfig[linear];
-      for (const e of shapes) {
-        if (eventType === EventTypes.BUF) { // generic polygon
+      const link0 = data.link?.[0]; const link1 = data.link?.[1], highlightRect = focusedShape != null || data.link != null, splitRects = scolor != null;
+      if (eventType === EventTypes.BUF) { // generic polygon
+        for (const e of shapes) {
           if (e.x[0]>et || e.x.at(-1)<st) continue;
           ctx.beginPath();
           const x = e.x.map(xscale);
@@ -623,27 +622,30 @@ async function renderProfiler(path, opts) {
           for (let i=1; i<x.length; i++) {
             ctx.lineTo(x[i], offsetY+e.y1[i]);
             let arg = e.arg;
-            if (arg == null && valueMap != null) arg = {tooltipText: formatUnit(valueMap.get(e.x[i-1]), config.unit)}
+            if (arg == null && valueMap != null) arg = {tooltipText: formatUnit(valueMap.get(e.x[i-1]), unit)}
             visible.push({ x0:x[i-1], x1:x[i], y0:offsetY+e.y1[i-1], y1:offsetY+e.y0[i], arg });
           }
-          if (linear) { ctx.strokeStyle = e.fillColor; ctx.lineWidth = 2; ctx.stroke(); ctx.lineWidth = 1; }
+          if (linear) { ctx.strokeStyle = pcolor; ctx.lineWidth = 2; ctx.stroke(); ctx.lineWidth = 1; }
           // walk the path back and fill the complete shape
           else { for (let i=x.length-1; i>=0; i--) ctx.lineTo(x[i], offsetY+e.y0[i]); ctx.closePath(); ctx.fillStyle = e.fillColor; ctx.fill(); }
-        } else { // contiguous rect
+          if (focusedShape != null && e.arg?.key === focusedShape) { ctx.strokeStyle = pcolor; ctx.stroke(); }
+        }
+      } else { // contiguous rect
+        for (const e of shapes) {
           if (e.x>et || e.x+e.width<st) continue;
           const x = xscale(e.x);
           const y = offsetY+e.y;
           const width = xscale(e.x+e.width)-x;
-          ctx.beginPath();
-          ctx.rect(x, y, width, e.height);
           visible.push({ y0:y, y1:y+e.height, x0:x, x1:x+width, arg:e.arg });
-          ctx.fillStyle = e.fillColor; ctx.fill();
-          addBorder?.(width);
+          ctx.fillStyle = e.fillColor;
+          ctx.fillRect(x, y, width, e.height);
           // add label
           drawText(ctx, e.label, x+2, y+e.height/2, width);
-        }
-        if ((focusedShape != null && e.arg?.key === focusedShape) || (data.link != null && (e.arg?.key === data.link[0] || e.arg?.key === data.link[1]))) {
-          ctx.strokeStyle = pcolor; ctx.stroke();
+          // draw highlights
+          if (highlightRect) {
+            const key = e.arg.key; if (key === focusedShape || key === link0 || key === link1) { ctx.strokeStyle = pcolor; ctx.strokeRect(x, y, width, e.height); continue; }
+          }
+          if (splitRects && width > 10) { ctx.strokeStyle = scolor; ctx.strokeRect(x, y, width, e.height); }
         }
       }
       // draw row line
@@ -977,7 +979,7 @@ async function main() {
     }
     // timeline with cycles on the x axis
     if (ret instanceof ArrayBuffer) {
-      const pkts = step.name.includes("PKTS");
+      const pkts = step.query.includes("sqtt");
       return renderProfiler(ckey, {unit:"clk", heightScale:0.5, hideLabels:true, colorByName:pkts});
     }
     metadata.replaceChildren(...((ret.metadata ?? []).map((m) => {
@@ -1178,7 +1180,7 @@ document.addEventListener("keydown", (event) => {
   // r key toggles indexing
   if (event.key === "r") showIndexing.toggle.click();
   // c key toggles CALL src
-  if (event.key === "c") showCallSrc.toggle.click();
+  if (event.key === "c" && !event.ctrlKey && !event.metaKey && !event.altKey) showCallSrc.toggle.click();
   // s key toggles SINK
   if (event.key === "s") showSink.toggle.click();
   // g key toggles graph

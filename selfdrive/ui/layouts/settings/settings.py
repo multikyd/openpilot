@@ -14,13 +14,11 @@ from openpilot.system.ui.lib.wifi_manager import WifiManager
 from openpilot.system.ui.widgets import Widget
 from openpilot.system.ui.widgets.network import NetworkUI
 
-from openpilot.selfdrive.ui.layouts.settings.kisapilot import KisaPilotLayout
-
 # Constants
 SIDEBAR_WIDTH = 500
 CLOSE_BTN_SIZE = 200
 CLOSE_ICON_SIZE = 70
-NAV_BTN_HEIGHT = 105
+NAV_BTN_HEIGHT = 110
 PANEL_MARGIN = 50
 
 # Colors
@@ -39,7 +37,6 @@ class PanelType(IntEnum):
   SOFTWARE = 3
   FIREHOSE = 4
   DEVELOPER = 5
-  KISAPILOT = 6
 
 
 @dataclass
@@ -65,7 +62,6 @@ class SettingsLayout(Widget):
       PanelType.SOFTWARE: PanelInfo(tr_noop("Software"), SoftwareLayout()),
       PanelType.FIREHOSE: PanelInfo(tr_noop("Firehose"), FirehoseLayout()),
       PanelType.DEVELOPER: PanelInfo(tr_noop("Developer"), DeveloperLayout()),
-      PanelType.KISAPILOT: PanelInfo(tr_noop("KisaPilot"), KisaPilotLayout()),
     }
 
     self._font_medium = gui_app.font(FontWeight.MEDIUM)

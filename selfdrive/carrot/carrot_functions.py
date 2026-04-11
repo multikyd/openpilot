@@ -211,7 +211,7 @@ class CarrotPlanner:
       personality = int(np.clip(np.digitize(v_kph, bp[1:], right=False), 0, 3))
 
       if self.params_count % 100 == 0 and personality != self.personality:
-        self.params.put_nonblocking("LongitudinalPersonality", personality)
+        self.params.put("LongitudinalPersonality", personality)
         self.personality = personality
 
     else:

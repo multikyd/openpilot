@@ -506,34 +506,17 @@ struct CarControl {
       promptRepeat @7;
       promptDistracted @8;
 
-      longEngaged @10;
-      longDisengaged @11;
-      trafficSignGreen @12;
-      trafficSignChanged @13;
-      laneChange @14;
-      stopping @15;
-      autoHold @16;
-      engage2 @17;
-      disengage2 @18;
-      trafficError @19;
-      bsdWarning @20;
-      speedDown @21;
-      stopStop @22;
-      audioTurn @9;
-      reverseGear @23;
-      audio1 @24;
-      audio2 @25;
-      audio3 @26;
-      audio4 @27;
-      audio5 @28;
-      audio6 @29;
-      audio7 @30;
-      audio8 @31;
-      audio9 @32;
-      audio10 @33;
+      trafficSignGreen @9;
+      trafficSignChanged @10;
+      laneChange @11;
+      stopping @12;
+      autoHold @13;
+      bsdWarning @14;
+      speedDown @15;
+      stopStop @16;
+      reverseGear @17;
 
-      nnff @34;
-      dingdong @35;
+      dingdong @18;
     }
   }
 

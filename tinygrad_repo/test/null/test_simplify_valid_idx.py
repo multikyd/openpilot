@@ -1,10 +1,10 @@
 import unittest, itertools
 
-from tinygrad.codegen import full_rewrite_to_sink
 from tinygrad.dtype import dtypes
 from tinygrad.uop.ops import UOp, Ops
 from tinygrad.uop.symbolic import simplify_valid
 from tinygrad.helpers import Context
+from test.helpers import full_rewrite
 from test.null.test_uop_symbolic import check_uop_against_string
 
 def get_gated_load_uop(valid:UOp, idx:UOp):
@@ -15,8 +15,8 @@ def get_gated_load_uop(valid:UOp, idx:UOp):
 
 def get_load_image_uop(image_shape:tuple[int, ...], valid:UOp, idx:tuple[UOp, UOp]):
   return UOp(Ops.LOAD, dtypes.float.vec(4), (
-    UOp(Ops.PARAM, dtypes.imagef(image_shape), arg=0).index(UOp(Ops.VECTORIZE, dtypes.weakint.vec(2), idx).valid(valid), ptr=True),
-    UOp(Ops.VECTORIZE, dtypes.float.vec(4), src=(UOp.const(dtypes.float, 0.0),) * 4)
+    UOp(Ops.PARAM, dtypes.imagef(image_shape), arg=0).index(UOp(Ops.STACK, dtypes.weakint.vec(2), idx).valid(valid), ptr=True),
+    UOp(Ops.STACK, dtypes.float.vec(4), src=(UOp.const(dtypes.float, 0.0),) * 4)
   ))
 
 def Special(expr, nmax): return UOp(Ops.SPECIAL, dtypes.weakint, (UOp.const(dtypes.weakint, nmax),), expr)
@@ -48,7 +48,7 @@ class TestHelpers(unittest.TestCase):
 class TestValidIdxSimplification(unittest.TestCase):
   def check(self, load, sidx, svalid, extra=()):
     with Context(NOOPT=1, SPEC=0):
-      load = full_rewrite_to_sink(UOp.sink(load, *extra)).src[0]
+      load = full_rewrite(UOp.sink(load, *extra)).src[0]
     idx, valid = load.src[0].src[1], load.src[0].src[2]
     check_uop_against_string(self, idx, sidx)
     check_uop_against_string(self, valid, svalid)
@@ -157,7 +157,7 @@ class TestValidIdxSimplification(unittest.TestCase):
     valid = (ridx2<1)&(ridx1<6)
     load = get_gated_load_uop(valid, idx)
     # prevent ridx1 and ridx2 from being shrunk
-    red = UOp(Ops.REDUCE, dtypes.float, (load, ridx1, ridx2), Ops.ADD)
+    red = load.reduce(ridx1, ridx2, arg=Ops.ADD)
     self.check(load,
       "(r0*1568)",
       "((r2<1)&(r1<6))",
@@ -217,9 +217,9 @@ class TestValidIdxSimplification(unittest.TestCase):
 class TestImageSimplification(unittest.TestCase):
   def check(self, load, svalid, sidx0, sidx1):
     with Context(NOOPT=1, SPEC=0):
-      load = full_rewrite_to_sink(load.sink()).src[0]
+      load = full_rewrite(load.sink()).src[0]
     idx = load.src[0].src[1]
-    self.assertEqual(idx.op, Ops.VECTORIZE)
+    self.assertEqual(idx.op, Ops.STACK)
     self.assertEqual(len(idx.src), 2)
     idx0, idx1 = idx.src[0], idx.src[1]
     check_uop_against_string(self, idx0, sidx0)
@@ -287,8 +287,8 @@ class TestImageSimplification(unittest.TestCase):
     # empty -> invalid
     load = get_load_image_uop(shape, (gidx0<8) & (gidx0<8).ne(True), idx)
     with Context(NOOPT=1, SPEC=0):
-      load = full_rewrite_to_sink(load.sink()).src[0]
-    self.assertEqual(load.op, Ops.VECTORIZE)
+      load = full_rewrite(load.sink()).src[0]
+    self.assertEqual(load.op, Ops.STACK)
     self.assertEqual(load.dtype.count, 4)
 
   def test_openpilot_conv1(self):
@@ -508,7 +508,7 @@ class TestUnfoldableImage(unittest.TestCase):
     with Context(SPEC=0):
       lidx = Special("lidx", 2)
       load = UOp(Ops.LOAD, dtypes.float, (UOp(Ops.PARAM, dtypes.imagef((10, 10, 4)), arg=0).index(lidx, ptr=True), UOp.const(dtypes.float, 0)))
-      res = full_rewrite_to_sink(load.sink()).src[0]
+      res = full_rewrite(load.sink()).src[0]
       self.assertEqual(res.src[0].src[0].dtype, dtypes.float.ptr(400))
 
 class TestDropTrueGate(unittest.TestCase):
@@ -528,7 +528,7 @@ class TestDropTrueGate(unittest.TestCase):
 class TestRangeShrink(unittest.TestCase):
   def get_ranges(self, sink):
     with Context(NOOPT=1, SPEC=0):
-      result = full_rewrite_to_sink(sink)
+      result = full_rewrite(sink)
     return [u for u in result.toposort() if u.op is Ops.RANGE]
 
   def test_range_shrink_single_guard(self):
@@ -569,7 +569,7 @@ class TestRangeShrink(unittest.TestCase):
     # range used in both a gated load AND directly in the reduce expression -> no shrink
     r = Range(0, 204)
     gated_load = get_gated_load_uop(r < UOp.const(dtypes.weakint, 4), r)
-    red = UOp(Ops.REDUCE, dtypes.float, (r.cast(dtypes.float) + gated_load, r), Ops.ADD)
+    red = (r.cast(dtypes.float) + gated_load).reduce(r, arg=Ops.ADD)
     ranges = self.get_ranges(red.sink())
     self.assertEqual(len(ranges), 1)
     self.assertEqual(ranges[0].src[0].arg, 204)

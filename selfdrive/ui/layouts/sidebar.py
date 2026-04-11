@@ -9,8 +9,6 @@ from openpilot.system.ui.lib.multilang import tr, tr_noop
 from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.widgets import Widget
 
-import os
-
 SIDEBAR_WIDTH = 300
 METRIC_HEIGHT = 126
 METRIC_WIDTH = 240
@@ -29,7 +27,6 @@ class Colors:
   WHITE = rl.WHITE
   WHITE_DIM = rl.Color(255, 255, 255, 85)
   GRAY = rl.Color(84, 84, 84, 255)
-  YELLOW = rl.Color(255, 255, 0, 255)
 
   # Status colors
   GOOD = rl.WHITE
@@ -89,11 +86,6 @@ class Sidebar(Widget):
     self._on_flag_click: Callable | None = None
     self._open_settings_callback: Callable | None = None
 
-    self._ip_address = "N/A"
-
-    if os.path.isfile("/data/kisa_starting"):
-      os.remove("/data/kisa_starting")
-
   def set_callbacks(self, on_settings: Callable | None = None, on_flag: Callable | None = None,
                     open_settings: Callable | None = None):
     self._on_settings_click = on_settings
@@ -126,18 +118,11 @@ class Sidebar(Widget):
     strength = device_state.networkStrength
     self._net_strength = max(0, min(5, strength.raw + 1)) if strength.raw > 0 else 0
 
-    try:
-      self._ip_address = str(device_state.ipAddress or "N/A")
-    except Exception:
-      self._ip_address = "N/A"
-
   def _update_temperature_status(self, device_state):
     thermal_status = device_state.thermalStatus
 
-    if thermal_status == ThermalStatus.green:
+    if thermal_status == ThermalStatus.ok:
       self._temp_status.update(tr_noop("TEMP"), tr_noop("GOOD"), Colors.GOOD)
-    elif thermal_status == ThermalStatus.yellow:
-      self._temp_status.update(tr_noop("TEMP"), tr_noop("OK"), Colors.WARNING)
     else:
       self._temp_status.update(tr_noop("TEMP"), tr_noop("HIGH"), Colors.DANGER)
 
@@ -211,11 +196,6 @@ class Sidebar(Widget):
     text_y = rect.y + 247
     text_pos = rl.Vector2(rect.x + 58, text_y)
     rl.draw_text_ex(self._font_regular, tr(self._net_type), text_pos, FONT_SIZE, 0, Colors.WHITE)
-
-    # IP text
-    ip_text_y = text_y + FONT_SIZE + 5
-    ip_text_pos = rl.Vector2(rect.x + 32, ip_text_y)
-    rl.draw_text_ex(self._font_regular, self._ip_address, ip_text_pos, FONT_SIZE-1, 0, Colors.YELLOW)
 
   def _draw_metrics(self, rect: rl.Rectangle):
     metrics = [(self._temp_status, 338), (self._panda_status, 496), (self._connect_status, 654)]

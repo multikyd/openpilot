@@ -2,7 +2,7 @@ import time, math, unittest, functools, platform, warnings
 import numpy as np
 from typing import List, Callable
 import torch
-from tinygrad.helpers import getenv, CI, DEBUG, DEV, EMULATE, IMAGE, Context
+from tinygrad.helpers import getenv, CI, DEBUG, DEV, IMAGE, Context
 from tinygrad import Tensor, Device, dtypes
 from tinygrad.tensor import _to_np_dtype
 from tinygrad.device import is_dtype_supported
@@ -18,7 +18,7 @@ warnings.filterwarnings("ignore", message="Non-empty compiler output encountered
 
 FORWARD_ONLY = getenv("FORWARD_ONLY", 0)
 PRINT_TENSORS = getenv("PRINT_TENSORS", 0)
-COMPILE_ONLY = Device.DEFAULT == "NULL" and not EMULATE
+COMPILE_ONLY = Device.DEFAULT == "NULL"
 
 def slow_test(test_func):
   return unittest.skipIf(getenv("SKIP_SLOW_TEST"), "Skipping slow test")(test_func)
@@ -94,7 +94,7 @@ def prepare_test_op(low, high, shps, vals, forward_only=False):
 class TestOps(unittest.TestCase):
 
   def helper_test_exception(self, shps, torch_fxn, tinygrad_fxn=None, expected=None, forward_only=False, exact=False, vals=None, low=-1.5, high=1.5):
-    if getenv("MOCKGPU") and Device.DEFAULT == "NV": self.skipTest('helper_test_exception fails in CI CUDA')
+    if DEV.interface.startswith("MOCK") and Device.DEFAULT == "NV": self.skipTest('helper_test_exception fails in CI CUDA')
     ts, tst = prepare_test_op(low, high, shps, vals, forward_only)
     if tinygrad_fxn is None:
       tinygrad_fxn = torch_fxn
@@ -281,6 +281,17 @@ class TestOps(unittest.TestCase):
     helper_test_op([], lambda: torch.arange(5.5, 175.5, 2.5), lambda: Tensor.arange(5.5, 175.5, 2.5), forward_only=True)
     helper_test_op([], lambda: torch.arange(-30.2, -0.3, 0.75), lambda: Tensor.arange(-30.2, -0.3, 0.75), forward_only=True)
     helper_test_op([], lambda: torch.arange(-50.3, -380.2, -2.25), lambda: Tensor.arange(-50.3, -380.2, -2.25), forward_only=True)
+    # boundary values that fit exactly in int8 (min=-128, max=127)
+    helper_test_op([], lambda: torch.arange(128, dtype=torch.int8), lambda: Tensor.arange(128, dtype=dtypes.int8), forward_only=True)
+    helper_test_op([], lambda: torch.arange(-128, 128, dtype=torch.int8), lambda: Tensor.arange(-128, 128, dtype=dtypes.int8), forward_only=True)
+    helper_test_op([], lambda: torch.arange(127, -129, -1, dtype=torch.int8),
+                   lambda: Tensor.arange(127, -129, -1, dtype=dtypes.int8), forward_only=True)
+    # overflow: tinygrad raises (torch silently wraps)
+    with self.assertRaises(OverflowError): Tensor.arange(2**33, dtype=dtypes.int)
+    with self.assertRaises(OverflowError): Tensor.arange(129, dtype=dtypes.int8)            # last=128 overflows
+    with self.assertRaises(OverflowError): Tensor.arange(-129, 128, dtype=dtypes.int8)      # start=-129 overflows
+    with self.assertRaises(OverflowError): Tensor.arange(128, 0, -1, dtype=dtypes.int8)     # start=128 overflows
+    with self.assertRaises(OverflowError): Tensor.arange(127, -130, -1, dtype=dtypes.int8)  # last=-129 overflows
 
   def test_arange_big(self):
     helper_test_op([], lambda: torch.arange(256, dtype=torch.int32), lambda: Tensor.arange(256), forward_only=True)
@@ -625,6 +636,17 @@ class TestOps(unittest.TestCase):
         helper_test_op(None, lambda x: 100%x, forward_only=True, vals=[va])
         helper_test_op(None, lambda x: 100.5%x, forward_only=True, vals=[va])
 
+  def test_fmod(self):
+    a = [-4, 7, 5, 4, -7, 8, -9]
+    b = [2, -3, 8, -2, 3, 5, -5]
+    for float_a in [True, False]:
+      for float_b in [True, False]:
+        va = [float(ai) for ai in a] if float_a else a
+        vb = [float(bi) for bi in b] if float_b else b
+        helper_test_op(None, lambda x,y: x.fmod(y), forward_only=True, vals=[va, vb])
+        helper_test_op(None, lambda x: x.fmod(2), forward_only=True, vals=[va])
+        helper_test_op(None, lambda x: x.fmod(3.5), forward_only=True, vals=[va])
+
   def test_mul_naninf(self):
     helper_test_op([(45,65)], lambda x: x*math.inf)
     helper_test_op([(45,65)], lambda x: x*-math.inf)
@@ -837,6 +859,24 @@ class TestOps(unittest.TestCase):
     helper_test_op([], lambda: tor.__rshift__(2), lambda: ten.__rshift__(2).cast(dtypes.int32), forward_only=True)
     helper_test_op([], lambda: tor.bitwise_right_shift(2), lambda: ten.rshift(2).cast(dtypes.int32), forward_only=True)
 
+  def test_lshift_signed(self):
+    data = [[-1, -3, 1, 7], [0, -2147483648, 2147483647, -1]]
+    tor = torch.tensor(data, dtype=torch.int32)
+    ten = Tensor(data, dtype=dtypes.int)
+    helper_test_op([], lambda: tor << 0, lambda: ten << 0, forward_only=True)
+    helper_test_op([], lambda: tor << 2, lambda: ten << 2, forward_only=True)
+    helper_test_op([], lambda: tor << 8, lambda: ten << 8, forward_only=True)
+    helper_test_op([], lambda: tor << 31, lambda: ten << 31, forward_only=True)
+
+  def test_rshift_signed(self):
+    data = [[-1, -3, 1, 7], [0, -2147483648, 2147483647, -1]]
+    tor = torch.tensor(data, dtype=torch.int32)
+    ten = Tensor(data, dtype=dtypes.int)
+    helper_test_op([], lambda: tor >> 0, lambda: ten >> 0, forward_only=True)
+    helper_test_op([], lambda: tor >> 2, lambda: ten >> 2, forward_only=True)
+    helper_test_op([], lambda: tor >> 8, lambda: ten >> 8, forward_only=True)
+    helper_test_op([], lambda: tor >> 31, lambda: ten >> 31, forward_only=True)
+
   def test_idiv_shift_rewrite_negative(self):
     a = Tensor(-5).idiv(2).item()
     b = Tensor(-5).contiguous().idiv(2).item()
@@ -848,7 +888,7 @@ class TestOps(unittest.TestCase):
     helper_test_op([(45,65)], lambda x: x.sin())
     helper_test_op([()], lambda x: x.sin())
     # works on real CUDA but not CI
-    if not ((getenv("MOCKGPU") and Device.DEFAULT == "NV") or Device.DEFAULT == "WEBGPU"):
+    if not ((DEV.interface.startswith("MOCK") and Device.DEFAULT == "NV") or Device.DEFAULT == "WEBGPU"):
       helper_test_op(None, lambda x: x.sin(), vals=[[math.nan, math.inf, -math.inf, 0.0]])
       helper_test_op(None, lambda x: x.sin(), vals=[[1e1, 1e2, 1e3, 1e4, 1e5, 1e6, -1e1, -1e2, -1e3, -1e4, -1e5, -1e6]],
                     atol=3e-3, rtol=3e-3, grad_atol=3e-3, grad_rtol=3e-3)
@@ -857,7 +897,7 @@ class TestOps(unittest.TestCase):
   def test_cos(self):
     helper_test_op([(45,65)], lambda x: x.cos())
     helper_test_op([()], lambda x: x.cos())
-    if not ((getenv("MOCKGPU") and Device.DEFAULT == "NV") or Device.DEFAULT == "WEBGPU"):
+    if not ((DEV.interface.startswith("MOCK") and Device.DEFAULT == "NV") or Device.DEFAULT == "WEBGPU"):
       helper_test_op(None, lambda x: x.cos(), vals=[[math.nan, math.inf, -math.inf, 0.0]])
       helper_test_op(None, lambda x: x.cos(), vals=[[1e1, 1e2, 1e3, 1e4, 1e5, 1e6, -1e1, -1e2, -1e3, -1e4, -1e5, -1e6]],
                     atol=3e-3, rtol=3e-3, grad_atol=3e-3, grad_rtol=3e-3)
@@ -868,7 +908,7 @@ class TestOps(unittest.TestCase):
     helper_test_op([(45,65)], lambda x: x.tan(), low=-1.5, high=1.5)
     helper_test_op([(45,65)], lambda x: x.tan(), low=-5, high=5)
     helper_test_op([()], lambda x: x.tan())
-    if not ((getenv("MOCKGPU") and Device.DEFAULT == "NV") or Device.DEFAULT == "WEBGPU"):
+    if not ((DEV.interface.startswith("MOCK") and Device.DEFAULT == "NV") or Device.DEFAULT == "WEBGPU"):
       helper_test_op(None, lambda x: x.tan(), vals=[[math.nan, math.inf, -math.inf, 0.0]])
       helper_test_op(None, lambda x: x.tan(), vals=[[1e1, 1e2, 1e3, 1e4, 1e5, 1e6, -1e1, -1e2, -1e3, -1e4, -1e5, -1e6]],
                     atol=3e-3, rtol=3e-3, grad_atol=3e-3, grad_rtol=3e-3)
@@ -3269,19 +3309,17 @@ class TestOps(unittest.TestCase):
     data = [1, 2, 4]
     helper_test_op([], lambda: torch.nn.functional.one_hot(torch.tensor(data), 6).type(torch.int32),
                        lambda: Tensor(data).one_hot(6), forward_only=True)
-    helper_test_op([], lambda: torch.nn.functional.one_hot(torch.tensor(data)).type(torch.int32),
-                       lambda: Tensor(data).one_hot(), forward_only=True)
+    # like jax.nn.one_hot, num_classes must be non-negative (torch accepts -1 for auto-inference, we don't)
+    with self.assertRaises(ValueError): Tensor(data).one_hot(-1)
     data = [[[1, 2, 3], [0, 3, 5]], [[1, 2, 3], [0, 3, 5]]]
     helper_test_op([], lambda: torch.nn.functional.one_hot(torch.tensor(data), 8).type(torch.int32),
                        lambda: Tensor(data).one_hot(8), forward_only=True)
-    helper_test_op([], lambda: torch.nn.functional.one_hot(torch.tensor(data)).type(torch.int32),
-                       lambda: Tensor(data).one_hot(), forward_only=True)
 
   def test_masked_fill(self):
     helper_test_op([(32,10)], lambda x: x.masked_fill((x>0.1).detach(), -math.inf))
     helper_test_op([(32,10)], lambda x: x.masked_fill((x<0.1).detach(), -math.inf))
 
-  @unittest.skipIf((getenv("MOCKGPU") or Device.DEFAULT == "PYTHON"), "very slow on MOCKGPU because reduce does not fold")
+  @unittest.skipIf((DEV.interface.startswith("MOCK") or Device.DEFAULT == "PYTHON"), "very slow on MOCKGPU because reduce does not fold")
   @unittest.skipIf(Device.DEFAULT == "WEBGPU", "webgpu runtime issue")
   @unittest.skipIf(Device.DEFAULT == "QCOM", "QCOM fails with: Resource deadlock avoided")
   def test_masked_select(self):

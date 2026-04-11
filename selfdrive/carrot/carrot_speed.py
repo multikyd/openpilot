@@ -332,7 +332,7 @@ class CarrotSpeed:
 
   def save(self) -> None:
     payload = self._encode_payload()
-    self._params.put_nonblocking(self.KEY, payload)
+    self._params.put(self.KEY, payload)
     self._last_save = self._now()
     self._dirty = False
 

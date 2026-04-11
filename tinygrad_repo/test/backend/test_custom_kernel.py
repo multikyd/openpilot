@@ -1,37 +1,37 @@
 import unittest
-from tinygrad import Tensor, UOp
+from tinygrad import Tensor, UOp, GlobalCounters
 from tinygrad.dtype import AddrSpace, dtypes
 from tinygrad.uop.ops import KernelInfo, AxisType
 
 # **** kernels ****
 
 def custom_arange_kernel(C:UOp) -> UOp:
-  i = UOp.range(C.size, 0)
-  return C[i].store(i.cast(C.dtype.base)).end(i).sink(arg=KernelInfo(name=f"custom_arange_{C.size}"))
+  i = UOp.range(C.shape[0], 0)
+  return C[i].store(i.cast(C.dtype.base)).end(i).sink(arg=KernelInfo(name=f"custom_arange_{C.shape[0]}"))
 
 def custom_eye_kernel(C:UOp) -> UOp:
   i = UOp.range(C.shape[0], 0)
   j = UOp.range(C.shape[1], 1)
-  return C[i, j].store((i.eq(j)).cast(C.dtype.base)).end(i, j).sink(arg=KernelInfo(name=f"custom_eye_{C.size}"))
+  return C[i, j].store((i.eq(j)).cast(C.dtype.base)).end(i, j).sink(arg=KernelInfo(name=f"custom_eye_{C.numel()}"))
 
 def custom_add_one_kernel(B:UOp, A:UOp) -> UOp:
   A,B = A.flatten(), B.flatten()
-  assert B.size == A.size
-  i = UOp.range(A.size, 0)
-  return B[i].store(A[i] + 1).end(i).sink(arg=KernelInfo(name=f"add_one_{A.size}"))
+  assert B.numel() == A.numel()
+  i = UOp.range(A.numel(), 0)
+  return B[i].store(A[i] + 1).end(i).sink(arg=KernelInfo(name=f"add_one_{A.numel()}"))
 
 def custom_elementwise_add_kernel(C:UOp, A:UOp, B:UOp) -> UOp:
   C,A,B = C.flatten(), A.flatten(), B.flatten()
-  i = UOp.range(C.size, 0)
-  return C[i].store(A[i]+B[i]).end(i).sink(arg=KernelInfo(name=f"custom_add_kernel_{C.size}")).simplify()
+  i = UOp.range(C.numel(), 0)
+  return C[i].store(A[i]+B[i]).end(i).sink(arg=KernelInfo(name=f"custom_add_kernel_{C.numel()}")).simplify()
 
 def custom_elementwise_addmul_kernel(C:UOp, D:UOp, A:UOp, B:UOp) -> UOp:
   C,D,A,B = C.flatten(), D.flatten(), A.flatten(), B.flatten()
-  assert C.size == D.size
-  i = UOp.range(C.size, 0)
+  assert C.numel() == D.numel()
+  i = UOp.range(C.numel(), 0)
   store_c = C[i].store(A[i]+B[i])
   store_d = D[i].store(A[i]*B[i])
-  return UOp.group(store_c, store_d).end(i).sink(arg=KernelInfo(name=f"custom_addmul_kernel_{C.size}")).simplify()
+  return UOp.group(store_c, store_d).end(i).sink(arg=KernelInfo(name=f"custom_addmul_kernel_{C.numel()}")).simplify()
 
 def custom_gemm(C:UOp, A:UOp, B:UOp) -> UOp:
   assert A.shape[1] == B.shape[0]
@@ -52,7 +52,7 @@ def flip_contract_kernel(dest:UOp, src:UOp):
   j = UOp.range(dest.shape[1], 1, AxisType.UPCAST)
   vec = src[i, j].contract(j)
   store = UOp.group(*[dest[i, k].store(vec.gep(3-k)) for k in range(4)])
-  return store.end(i, j).sink(arg=KernelInfo(name=f"flip_contract_{dest.size}", opts_to_apply=()))
+  return store.end(i, j).sink(arg=KernelInfo(name=f"flip_contract_{dest.numel()}", opts_to_apply=()))
 
 def slice_sum_kernel(dest:UOp, src:UOp):
   G = UOp.range(src.shape[0], 0)
@@ -189,7 +189,7 @@ class TestCustomKernel(unittest.TestCase):
     A = Tensor.randn(16, 16).contiguous()
     B = Tensor.empty(16)
     B = Tensor.custom_kernel(B, A, fxn=slice_sum_kernel)[0]
-    self.assertTrue(B.allclose(A.sum(1)))
+    self.assertTrue(B.allclose(A.sum(1)).item())
 
   def test_gemm(self):
     N = 16
@@ -273,12 +273,12 @@ class TestCustomKernel(unittest.TestCase):
     C, D, _, _ = Tensor.custom_kernel(C, D, A2, B2, fxn=custom_elementwise_addmul_kernel)  # depends on A2 AND B2
     E = (A2 * 3).contiguous()                      # kernel 2: depends only on A2
     result = (C + D + E).sum()                     # kernel 3: custom_addmul, then kernel 4: sum
-    schedule = result.schedule()
+    schedule = result.schedule_linear().src
 
     # Find the custom_addmul kernel position
     custom_idx = next((i for i, item in enumerate(schedule)
-                       if hasattr(item.ast, "arg") and hasattr(item.ast.arg, "name")
-                       and "custom_addmul" in item.ast.arg.name), None)
+                       if hasattr(item.src[0], "arg") and hasattr(item.src[0].arg, "name")
+                       and "custom_addmul" in item.src[0].arg.name), None)
 
     self.assertIsNotNone(custom_idx, "custom_addmul kernel not found in schedule")
     self.assertEqual(custom_idx, 3, f"custom_addmul should be at index 3, got {custom_idx}")
@@ -291,22 +291,52 @@ class TestCustomKernel(unittest.TestCase):
 
     def custom_add_with_tmp(o1:UOp, o2:UOp, A:UOp, B:UOp) -> UOp:
       o1,o2,A,B = o1.flatten(), o2.flatten(), A.flatten(), B.flatten()
-      i = UOp.range(o1.size, 0)
+      i = UOp.range(o1.numel(), 0)
       store_o1 = o1[i].store(A[i]+B[i])
       store_o2 = o2[i].store(A[i]+B[i]+2)
-      return UOp.group(store_o1, store_o2).end(i).sink(arg=KernelInfo(name=f"add_with_tmp_{o1.size}")).simplify()
+      return UOp.group(store_o1, store_o2).end(i).sink(arg=KernelInfo(name=f"add_with_tmp_{o1.numel()}")).simplify()
 
     from tinygrad import function
     @function(precompile=True)
     def run(x:Tensor, w:Tensor) -> Tensor:
-      out = Tensor.invalid(*x.shape, dtype=x.dtype)
-      tmp = Tensor.invalid(*x.shape, dtype=x.dtype)
+      out = Tensor.invalids(*x.shape, dtype=x.dtype)
+      tmp = Tensor.invalids(*x.shape, dtype=x.dtype)
       out, tmp = Tensor.custom_kernel(out, tmp, x, w, fxn=custom_add_with_tmp)[:2]
       return out+tmp
 
     result = run(a, b).flatten().tolist()
     expected = (3+2)*2+2
     assert all(x == expected for x in result), f"expected all {expected}, got {result}"
+
+  def test_custom_kernel_sched(self, use_custom=False):
+    x = Tensor.arange(32).reshape(8, 4).realize()
+    y = Tensor.empty_like(x)
+    y = Tensor.custom_kernel(y, x, fxn=custom_add_one_kernel)[0]
+    if use_custom:
+      z = Tensor.empty_like(x)
+      z = Tensor.custom_kernel(y, y.T.T, fxn=custom_add_one_kernel)[0]
+    else: z = y.T.T+1
+    GlobalCounters.reset()
+    z.realize()
+    self.assertEqual(GlobalCounters.kernel_count, 2)
+    self.assertEqual(z.tolist(), x.add(2).tolist())
+
+  @unittest.expectedFailure
+  def test_custom_kernel_sched_copy(self): self.test_custom_kernel_sched(use_custom=True)
+
+  @unittest.expectedFailure
+  def test_sliced_buffer_function(self):
+    x = Tensor.arange(32).reshape(8, 4).realize()
+    from tinygrad import function
+    @function(precompile=True)
+    def run(x:Tensor) -> Tensor:
+      y = Tensor.invalids(*x.shape, dtype=x.dtype)
+      return Tensor.custom_kernel(y, x, fxn=custom_add_one_kernel)[0]
+    GlobalCounters.reset()
+    y = run(x[0]).realize()
+    # it's copying the input and the output
+    self.assertEqual(GlobalCounters.kernel_count, 1)
+    self.assertEqual(y.tolist(), [1, 2, 3, 4])
 
 class TestUOpReduce(unittest.TestCase):
   def test_uop_sum(self):
@@ -356,6 +386,10 @@ class TestUOpReduce(unittest.TestCase):
     a = Tensor([[1, 5, 3], [4, 2, 6]]).float()
     result = Tensor(a.uop.max(axis=0)).numpy()
     assert result[0] == 4 and result[1] == 5 and result[2] == 6
+
+  def test_uop_std(self):
+    a = Tensor([2.0, 4, 4, 4, 5, 5, 7, 9])
+    self.assertAlmostEqual(Tensor(a.uop.std()).item(), a.std().item(), places=5)
 
 class TestUOpWhere(unittest.TestCase):
   def test_uop_where_both_const(self):

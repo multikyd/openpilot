@@ -528,7 +528,7 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
       Priority.LOW, VisualAlert.steerRequired, AudibleAlert.none, 1.8),
   },
 
-  EventName.preDriverDistracted: {
+  EventName.driverDistracted1: {
     ET.WARNING: Alert(
       "Pay Attention",
       "",
@@ -536,7 +536,7 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
       Priority.LOW, VisualAlert.none, AudibleAlert.none, .1),
   },
 
-  EventName.promptDriverDistracted: {
+  EventName.driverDistracted2: {
     ET.WARNING: Alert(
       "Pay Attention",
       "Driver Distracted",
@@ -544,7 +544,7 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
       Priority.MID, VisualAlert.steerRequired, AudibleAlert.promptDistracted, .1),
   },
 
-  EventName.driverDistracted: {
+  EventName.driverDistracted3: {
     ET.WARNING: Alert(
       "DISENGAGE IMMEDIATELY",
       "Driver Distracted",
@@ -552,7 +552,7 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
       Priority.HIGH, VisualAlert.steerRequired, AudibleAlert.warningImmediate, .1),
   },
 
-  EventName.preDriverUnresponsive: {
+  EventName.driverUnresponsive1: {
     ET.WARNING: Alert(
       "Touch Steering Wheel: No Face Detected",
       "",
@@ -560,7 +560,7 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
       Priority.LOW, VisualAlert.steerRequired, AudibleAlert.none, .1),
   },
 
-  EventName.promptDriverUnresponsive: {
+  EventName.driverUnresponsive2: {
     ET.WARNING: Alert(
       "Touch Steering Wheel",
       "Driver Unresponsive",
@@ -568,7 +568,7 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
       Priority.MID, VisualAlert.steerRequired, AudibleAlert.promptDistracted, .1),
   },
 
-  EventName.driverUnresponsive: {
+  EventName.driverUnresponsive3: {
     ET.WARNING: Alert(
       "DISENGAGE IMMEDIATELY",
       "Driver Unresponsive",
@@ -1088,9 +1088,6 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
   EventName.audioLaneChange: {
      ET.WARNING: EngagementAlert(AudibleAlert.laneChange),
   },
-  EventName.audioTurn: {
-     ET.WARNING: EngagementAlert(AudibleAlert.audioTurn),
-  },
   EventName.trafficSignGreen: {
     ET.WARNING: EngagementAlert(AudibleAlert.trafficSignGreen),
     #ET.WARNING: Alert(
@@ -1121,39 +1118,6 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
       AlertStatus.normal, AlertSize.small,
       Priority.LOW, VisualAlert.none, AudibleAlert.none, .1),
   },
-  EventName.audio1: {
-     ET.WARNING: EngagementAlert(AudibleAlert.audio1),
-  },
-  EventName.audio2: {
-     ET.WARNING: EngagementAlert(AudibleAlert.audio2),
-  },
-  EventName.audio3: {
-     ET.WARNING: EngagementAlert(AudibleAlert.audio3),
-  },
-  EventName.audio4: {
-     ET.WARNING: EngagementAlert(AudibleAlert.audio4),
-  },
-  EventName.audio5: {
-     ET.WARNING: EngagementAlert(AudibleAlert.audio5),
-  },
-  EventName.audio6: {
-     ET.WARNING: EngagementAlert(AudibleAlert.audio6),
-  },
-  EventName.audio7: {
-     ET.WARNING: EngagementAlert(AudibleAlert.audio7),
-  },
-  EventName.audio8: {
-     ET.WARNING: EngagementAlert(AudibleAlert.audio8),
-  },
-  EventName.audio9: {
-     ET.WARNING: EngagementAlert(AudibleAlert.audio9),
-  },
-  EventName.audio10: {
-     ET.WARNING: EngagementAlert(AudibleAlert.audio10),
-  },
-  EventName.audio0: {
-     ET.WARNING: EngagementAlert(AudibleAlert.longDisengaged),
-  },
   EventName.chimeAtResume: {
     ET.PERMANENT: Alert(
       "Start Moving",
@@ -1162,6 +1126,74 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
       Priority.LOW, VisualAlert.none, AudibleAlert.dingdong, 3.),
   },
 }
+
+
+if HARDWARE.get_device_type() == 'mici':
+  EVENTS.update({
+    EventName.driverDistracted1: {
+      ET.WARNING: Alert(
+        "Pay Attention",
+        "",
+        AlertStatus.normal, AlertSize.small,
+        Priority.LOW, VisualAlert.none, AudibleAlert.none, 2),
+    },
+    EventName.driverDistracted2: {
+      ET.WARNING: Alert(
+        "Pay Attention",
+        "Driver Distracted",
+        AlertStatus.userPrompt, AlertSize.mid,
+        Priority.MID, VisualAlert.steerRequired, AudibleAlert.promptDistracted, 1),
+    },
+    EventName.resumeRequired: {
+      ET.WARNING: Alert(
+        "Press Resume",
+        "",
+        AlertStatus.userPrompt, AlertSize.small,
+        Priority.LOW, VisualAlert.none, AudibleAlert.none, .2),
+    },
+    EventName.preLaneChangeLeft: {
+      ET.WARNING: Alert(
+        "Steer Left",
+        "Confirm Lane Change",
+        AlertStatus.normal, AlertSize.mid,
+        Priority.LOW, VisualAlert.none, AudibleAlert.none, .1),
+    },
+    EventName.preLaneChangeRight: {
+      ET.WARNING: Alert(
+        "Steer Right",
+        "Confirm Lane Change",
+        AlertStatus.normal, AlertSize.mid,
+        Priority.LOW, VisualAlert.none, AudibleAlert.none, .1),
+    },
+    EventName.laneChangeBlocked: {
+      ET.WARNING: Alert(
+        "Car in Blindspot",
+        "",
+        AlertStatus.userPrompt, AlertSize.small,
+        Priority.LOW, VisualAlert.none, AudibleAlert.prompt, .1),
+    },
+    EventName.steerSaturated: {
+      ET.WARNING: Alert(
+        "take control",
+        "turn exceeds limit",
+        AlertStatus.normal, AlertSize.small,
+        Priority.LOW, VisualAlert.none, AudibleAlert.none, 1.),
+    },
+    EventName.calibrationIncomplete: {
+      ET.PERMANENT: calibration_incomplete_alert,
+      ET.SOFT_DISABLE: soft_disable_alert("Calibration Incomplete"),
+      ET.NO_ENTRY: NoEntryAlert("Calibrating"),
+    },
+    EventName.reverseGear: {
+      ET.PERMANENT: Alert(
+        "Reverse\nGear",
+        "",
+        AlertStatus.normal, AlertSize.none,
+        Priority.LOWEST, VisualAlert.none, AudibleAlert.reverseGear, .2, creation_delay=0.5),
+      ET.SOFT_DISABLE: SoftDisableAlert("Reverse Gear"),
+      ET.NO_ENTRY: NoEntryAlert("Reverse Gear"),
+    },
+  })
 
 
 if __name__ == '__main__':

@@ -1,13 +1,14 @@
 import unittest
 from tinygrad import Tensor, Device, dtypes, Context
 from tinygrad.device import is_dtype_supported
-from tinygrad.helpers import getenv, system
+from tinygrad.helpers import getenv, system, DEV
 from extra.gemm.cdna_asm_gemm import asm_gemm
 from test.helpers import needs_second_gpu
+from examples.mlperf.models.flat_llama import FP8_DTYPE
 
 # On non CDNA4 it will only validate the Tensor.custom_kernel integration
-# Use DEV=NULL EMULATE=AMD_CDNA4 to also test the assembly
-def is_cdna4(): return getattr(Device[Device.DEFAULT].renderer, "arch", "").startswith("gfx950")
+# Use DEV=NULL:HIP:gfx950 to also test the assembly
+def is_cdna4(): return Device[Device.DEFAULT].renderer.target.arch.startswith("gfx950")
 
 def run_asm_gemm(a_shape, b_shape, dtype=dtypes.float16, a_shard=None, b_shard=None, gpus:int=1) -> None:
   Tensor.manual_seed(0)
@@ -20,25 +21,34 @@ def run_asm_gemm(a_shape, b_shape, dtype=dtypes.float16, a_shard=None, b_shard=N
 
   a, b = a_rand.clone().requires_grad_(), b_rand.clone().requires_grad_()
   if multi: a, b = a.shard(devs, axis=a_shard), b.shard(devs, axis=b_shard)
-  with Context(ASM_GEMM=1):
-    tst = asm_gemm(a, b)
-    tst.sum().backward()
+  tst = asm_gemm(a, b)
+  tst.sum().backward()
   Tensor.realize(tst, a.grad, b.grad)
 
   a_ref, b_ref = a_rand.clone().requires_grad_(), b_rand.clone().requires_grad_()
+  # do reference gemm in bf16 for fp8, adjusting atol for quantization effects
+  if a_ref.dtype == FP8_DTYPE:
+    a_ref = a_ref.cast(dtypes.bfloat16)
+    b_ref = b_ref.cast(dtypes.bfloat16)
   if multi: a_ref, b_ref = a_ref.shard(devs, axis=a_shard), b_ref.shard(devs, axis=b_shard)
-  with Context(ASM_GEMM=0):
-    ref = asm_gemm(a_ref, b_ref)
-    ref.sum().backward()
+  ref = a_ref @ b_ref
+  ref.sum().backward()
   Tensor.realize(ref, a_ref.grad, b_ref.grad)
 
   # no validation on the NULL device
   if a_rand.device.startswith("NULL"): return None
-  atol, rtol = (2e-1, 1e-2) if dtype == dtypes.bfloat16 else (1e-2, 1e-3)
+  atol, rtol = (2e-1, 1e-2) if dtype == dtypes.bfloat16 else (256, 1e-2) if dtype == FP8_DTYPE else (1e-2, 1e-3)
+  grad_atol, grad_rtol = (16895, 0.125) if dtype == FP8_DTYPE else (atol, rtol)
   with Context(DEBUG=0):
-    assert tst.allclose(ref, atol=atol, rtol=rtol), "forward mismatch"
-    assert a.grad.allclose(a_ref.grad, atol=atol, rtol=rtol), "grad_a mismatch"
-    assert b.grad.allclose(b_ref.grad, atol=atol, rtol=rtol), "grad_b mismatch"
+    # enable for debugging, slow for larger gemms
+    if getenv("USE_NPY"):
+      import numpy as np
+      np.testing.assert_allclose(tst.numpy(), ref.numpy(), atol=atol, rtol=rtol)
+      np.testing.assert_allclose(a.grad.numpy(), a_ref.grad.numpy(), atol=grad_atol, rtol=grad_rtol)
+      np.testing.assert_allclose(b.grad.numpy(), b_ref.grad.numpy(), atol=grad_atol, rtol=grad_rtol)
+    assert tst.allclose(ref, atol=atol, rtol=rtol).item(), "forward mismatch"
+    assert a.grad.allclose(a_ref.grad, atol=grad_atol, rtol=grad_rtol).item(), "grad_a mismatch"
+    assert b.grad.allclose(b_ref.grad, atol=grad_atol, rtol=grad_rtol).item(), "grad_b mismatch"
 
 def verify_asm_gemm(batch:int, M:int, N:int, K:int, dtype=dtypes.float16, gpus:int=1) -> None:
   run_asm_gemm((batch, M, K), (K, N), dtype=dtype, a_shard=0, b_shard=None, gpus=gpus)
@@ -121,11 +131,21 @@ class TestGemmLlama(unittest.TestCase):
   dtype = dtypes.bfloat16
 
   def setUp(self):
-    if not is_cdna4() or getenv("MOCKGPU"):
+    if not is_cdna4() or DEV.interface.startswith("MOCK"):
       self.skipTest("very slow on non mi350x")
 
-  @Context(ASM_GEMM=1)
-  def test_empty(self): (Tensor.empty(N:=getenv("N", 4096), N, dtype=self.dtype)@Tensor.empty(N, N, dtype=self.dtype)).realize()
+  def test_empty(self): asm_gemm(Tensor.empty(N:=getenv("N", 4096), N, dtype=self.dtype), Tensor.empty(N, N, dtype=self.dtype)).realize()
+
+  def test_empty_bw(self):
+    x = Tensor.empty(1, N:=getenv("N", 4096), N, dtype=self.dtype, requires_grad=True)
+    y = Tensor.empty((N, N), dtype=self.dtype, requires_grad=True)
+    z = asm_gemm(x, y)
+    z.sum().backward()
+    Tensor.realize(z, x.grad, y.grad)
+    # FP8 forward output is bf16, gradients use fp8e5m2 (aka bf8)
+    grad_dtype = dtypes.fp8e5m2 if self.dtype == FP8_DTYPE else self.dtype
+    assert z.dtype == dtypes.bfloat16
+    assert x.grad.dtype == y.grad.dtype == grad_dtype
 
   def test_simple(self): verify_asm_gemm(1, N:=getenv("N", 4096), N, N, dtype=self.dtype)
   def test_gemm(self): verify_asm_gemm(1, 8192, 4096, 14336, dtype=self.dtype)
@@ -188,7 +208,7 @@ def has_hipcc():
   return True
 
 @unittest.skipUnless(has_hipcc(), "FP8 gemm requires hipcc to compile")
-class TestGemmLlamaFP8(TestGemmLlama): dtype = dtypes.fp8e4m3
+class TestGemmLlamaFP8(TestGemmLlama): dtype = FP8_DTYPE
 
 class TestMagicGu(unittest.TestCase):
   def test_magicgu_matches_old(self):

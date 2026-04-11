@@ -801,26 +801,6 @@ class CarrotServ:
 
     return atc_desired, atc_type, atc_speed, atc_dist
 
-  def update_nav_instruction(self, sm):
-    if sm.alive['navInstruction'] and sm.valid['navInstruction']:
-      msg_nav = sm['navInstruction']
-
-      self.nGoPosDist = int(msg_nav.distanceRemaining)
-      self.nGoPosTime = int(msg_nav.timeRemaining)
-      if self.active_kisa_count <= 0 and msg_nav.speedLimit > 0:
-        self.nRoadLimitSpeed = max(30, round(msg_nav.speedLimit * CV.MS_TO_KPH))
-      self.xDistToTurn = int(msg_nav.maneuverDistance)
-      self.szTBTMainText = msg_nav.maneuverPrimaryText
-      self.xTurnInfo = -1
-      for key, value in nav_type_mapping.items():
-        if value[0] == msg_nav.maneuverType and value[1] == msg_nav.maneuverModifier:
-          self.xTurnInfo = value[2]
-          break
-
-      self.debugText = f"{self.nRoadLimitSpeed if self.is_metric else self.nRoadLimitSpeed * CV.KPH_TO_MPH:.0f},{msg_nav.maneuverType},{msg_nav.maneuverModifier} "
-      #print(msg_nav)
-      #print(f"navInstruction: {self.xTurnInfo}, {self.xDistToTurn}, {self.szTBTMainText}")
-
   def update_kisa(self, data):
     self.active_kisa_count = 100
     if "kisawazecurrentspd" in data:
@@ -916,8 +896,6 @@ class CarrotServ:
       self.nTBTTurnType = self.nTBTTurnTypeNext = -1
       self.roadcate = 8
       self.nGoPosDist = 0
-    if self.active_carrot <= 1 or self.active_kisa_count > 0:
-      self.update_nav_instruction(sm)
 
     if self.xSpdType < 0 or (self.xSpdType not in [100,101] and self.xSpdDist <= 0) or (self.xSpdType in [100,101] and self.xSpdDist < -250):
       self.xSpdType = -1
@@ -1010,6 +988,7 @@ class CarrotServ:
       if road_speed_limit_changed or CS.brakePressed or not CS.cruiseState.enabled:
         self.gas_override_speed = 0
         self.desired_speed_vcruise = 0
+        self.desired_speed_vcruise_prev = 0
       elif CS.gasPressed and not self.gas_pressed_state and self.autoGasSync:
         #self.gas_override_speed = max(v_ego_kph, self.gas_override_speed)
         self.gas_override_speed = max(CS.vEgoCluster*CV.MS_TO_KPH, self.gas_override_speed)
@@ -1021,6 +1000,8 @@ class CarrotServ:
       elif CS.cruiseButtons == Buttons.RES_ACCEL or CS.gasTok:
         if source == "road":
           self.desired_speed_vcruise = CS.vCruiseCluster + self.autoRoadSpeedLimitOffset
+          if self.desired_speed_vcruise <= desired_speed:
+            self.desired_speed_vcruise = desired_speed + self.autoRoadSpeedLimitOffset
           self.gas_override_speed = 0
       else:
         self.gas_pressed_state = False
@@ -1117,51 +1098,6 @@ class CarrotServ:
 
     msg.carrotMan.leftSec = int(self.carrot_left_sec)
     pm.send('carrotMan', msg)
-
-    inst = messaging.new_message('navInstructionCarrot')
-    if self.active_carrot > 1 and self.active_kisa_count <= 0:
-      inst.valid = True
-
-      instruction = inst.navInstructionCarrot
-      instruction.distanceRemaining = self.nGoPosDist
-      instruction.timeRemaining = self.nGoPosTime
-      instruction.speedLimit = self.nRoadLimitSpeed / 3.6 if self.nRoadLimitSpeed > 0 else 0
-      instruction.maneuverDistance = float(self.nTBTDist)
-      instruction.maneuverSecondaryText = self.szNearDirName
-      if self.szFarDirName and len(self.szFarDirName):
-        instruction.maneuverSecondaryText += "[{}]".format(self.szFarDirName)
-      instruction.maneuverPrimaryText = self.szTBTMainText
-      instruction.timeRemainingTypical = self.nGoPosTime
-
-      navType, navModifier, xTurnInfo1 = "invalid", "", -1
-      if self.nTBTTurnType in nav_type_mapping:
-        navType, navModifier, xTurnInfo1 = nav_type_mapping[self.nTBTTurnType]
-      navTypeNext, navModifierNext, xTurnInfoNext = "invalid", "", -1
-      if self.nTBTTurnTypeNext in nav_type_mapping:
-        navTypeNext, navModifierNext, xTurnInfoNext = nav_type_mapping[self.nTBTTurnTypeNext]
-
-      instruction.maneuverType = navType
-      instruction.maneuverModifier = navModifier
-
-      maneuvers = []
-      if self.nTBTTurnType >= 0:
-        maneuver = {}
-        maneuver['distance'] = float(self.xDistToTurn)
-        maneuver['type'] = navType
-        maneuver['modifier'] = navModifier
-        maneuvers.append(maneuver)
-        if self.nTBTDistNext >= self.nTBTDist:
-          maneuver = {}
-          maneuver['distance'] = float(self.nTBTDistNext)
-          maneuver['type'] = navTypeNext
-          maneuver['modifier'] = navModifierNext
-          maneuvers.append(maneuver)
-
-      instruction.allManeuvers = maneuvers
-    elif sm.alive['navInstruction'] and sm.valid['navInstruction']:
-      inst.navInstructionCarrot = sm['navInstruction']
-
-    pm.send('navInstructionCarrot', inst)
 
   def _update_system_time(self, epoch_time_remote, timezone_remote):
     epoch_time = int(time.time())

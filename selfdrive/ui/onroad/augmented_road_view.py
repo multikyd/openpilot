@@ -1,7 +1,6 @@
-import time
 import numpy as np
 import pyray as rl
-from cereal import log, messaging, car
+from cereal import log
 from msgq.visionipc import VisionStreamType
 from openpilot.selfdrive.ui import UI_BORDER_SIZE
 from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus
@@ -49,12 +48,8 @@ class AugmentedRoadView(CameraView):
     self.alert_renderer = AlertRenderer()
     self.driver_state_renderer = DriverStateRenderer()
 
-    # debug
-    self._pm = messaging.PubMaster(['uiDebug'])
-
   def _render(self, rect):
     # Only render when system is started to avoid invalid data access
-    start_draw = time.monotonic()
     if not ui_state.started:
       return
 
@@ -84,11 +79,10 @@ class AugmentedRoadView(CameraView):
     super()._render(rect)
 
     # Draw all UI overlays
-    if ui_state.gearShifter != car.CarState.GearShifter.reverse:
-      self.model_renderer.render(self._content_rect)
-      self._hud_renderer.render(self._content_rect)
-      self.alert_renderer.render(self._content_rect)
-      self.driver_state_renderer.render(self._content_rect)
+    self.model_renderer.render(self._content_rect)
+    self._hud_renderer.render(self._content_rect)
+    self.alert_renderer.render(self._content_rect)
+    self.driver_state_renderer.render(self._content_rect)
 
     # Custom UI extension point - add custom overlays here
     # Use self._content_rect for positioning within camera bounds
@@ -97,15 +91,7 @@ class AugmentedRoadView(CameraView):
     rl.end_scissor_mode()
 
     # Draw colored border based on driving state
-    if ui_state.gearShifter != car.CarState.GearShifter.reverse:
-      self._draw_border(rect)
-    else:
-      rl.draw_text("R", int(self._content_rect.x), int(self._content_rect.y + self._content_rect.height - 150), 200, rl.RED)
-
-    # publish uiDebug
-    msg = messaging.new_message('uiDebug')
-    msg.uiDebug.drawTimeMillis = (time.monotonic() - start_draw) * 1000
-    self._pm.send('uiDebug', msg)
+    self._draw_border(rect)
 
   def _handle_mouse_press(self, _):
     if not self._hud_renderer.user_interacting() and self._click_callback is not None:
@@ -123,36 +109,8 @@ class AugmentedRoadView(CameraView):
                                rect.width - 2 * UI_BORDER_SIZE, rect.height - 2 * UI_BORDER_SIZE)
     rl.draw_rectangle_rounded_lines_ex(border_rect, border_roundness, 10, UI_BORDER_SIZE, border_color)
 
-    # Kisa Status
-    texts = []
-    if ui_state.active_carrot:
-      text = "APN" if ui_state.active_carrot >= 2 else "APM" if ui_state.active_carrot >= 1 else ""
-      texts.append(text)
-
-    font_size = 30
-    padding = 30
-
-    y = self._content_rect.y + self._content_rect.height
-    x = self._content_rect.x + 55
-
-    thickness = 7
-
-    for text in texts:
-      text_width = rl.measure_text(text, font_size)
-      for dx in range(-thickness, thickness+1):
-        for dy in range(-thickness, thickness+1):
-          if dx == 0 and dy == 0:
-            continue
-          rl.draw_text(text, int(x+dx), int(y+dy), font_size, rl.BLACK)
-      rl.draw_text(text, int(x), int(y), font_size, rl.WHITE)
-
-      x += text_width + padding
-
-
   def _switch_stream_if_needed(self, sm):
-    if ui_state.gearShifter == car.CarState.GearShifter.reverse:
-      target = VisionStreamType.VISION_STREAM_DRIVER
-    elif sm['selfdriveState'].experimentalMode and WIDE_CAM in self.available_streams:
+    if sm['selfdriveState'].experimentalMode and WIDE_CAM in self.available_streams:
       v_ego = sm['carState'].vEgo
       if v_ego < WIDE_CAM_MAX_SPEED:
         target = WIDE_CAM
@@ -253,6 +211,7 @@ class AugmentedRoadView(CameraView):
 if __name__ == "__main__":
   gui_app.init_window("OnRoad Camera View")
   road_camera_view = AugmentedRoadView(ROAD_CAM)
+  gui_app.push_widget(road_camera_view)
   print("***press space to switch camera view***")
   try:
     for _ in gui_app.render():
@@ -261,6 +220,5 @@ if __name__ == "__main__":
         if WIDE_CAM in road_camera_view.available_streams:
           stream = ROAD_CAM if road_camera_view.stream_type == WIDE_CAM else WIDE_CAM
           road_camera_view.switch_stream(stream)
-      road_camera_view.render(rl.Rectangle(0, 0, gui_app.width, gui_app.height))
   finally:
     road_camera_view.close()

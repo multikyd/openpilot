@@ -114,7 +114,7 @@ class DriverStateRenderer(Widget):
 
     # Get monitoring state
     dm_state = sm["driverMonitoringState"]
-    self.is_active = dm_state.isActiveMode
+    self.is_active = dm_state.activePolicy == log.DriverMonitoringState.MonitoringPolicy.vision
     self.is_rhd = dm_state.isRHD
 
     # Update fade state (smoother transition between active/inactive)
@@ -166,7 +166,7 @@ class DriverStateRenderer(Widget):
     width, height = self._rect.width, self._rect.height
     offset = UI_BORDER_SIZE + BTN_SIZE // 2
     self.position_x = self._rect.x + (width - offset if self.is_rhd else offset)
-    self.position_y = self._rect.y + offset
+    self.position_y = self._rect.y + height - offset
 
     # Pre-calculate the face lines positions
     positioned_keypoints = self.face_keypoints_transformed + np.array([self.position_x, self.position_y])

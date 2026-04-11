@@ -12,6 +12,7 @@ CAR_ROTATION_RADIUS = 0.0
 # This is a turn radius smaller than most cars can achieve
 MAX_CURVATURE = 0.2
 MAX_VEL_ERR = 5.0  # m/s
+MIN_STABLE_DELAY = 0.3
 
 # EU guidelines
 MAX_LATERAL_JERK = 5.0  # m/s^3
@@ -124,6 +125,9 @@ def curv_from_psis(psi_target, psi_rate, vego, action_t):
   return 2*curv_from_psi - psi_rate / vego
 
 def get_curvature_from_plan(yaws, yaw_rates, t_idxs, vego, action_t):
-  psi_target = np.interp(action_t, t_idxs, yaws)
+  if action_t < MIN_STABLE_DELAY:
+    psi_target = (action_t / MIN_STABLE_DELAY) * np.interp(MIN_STABLE_DELAY, t_idxs, yaws)
+  else:
+    psi_target = np.interp(action_t, t_idxs, yaws)
   psi_rate = yaw_rates[0]
   return curv_from_psis(psi_target, psi_rate, vego, action_t)

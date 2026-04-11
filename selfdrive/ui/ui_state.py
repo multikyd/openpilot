@@ -13,6 +13,7 @@ from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.hardware import HARDWARE, PC
 
 BACKLIGHT_OFFROAD = 65 if HARDWARE.get_device_type() == "mici" else 50
+PARAM_UPDATE_TIME = 5.0
 
 
 class UIStatus(Enum):
@@ -67,10 +68,8 @@ class UIState:
         "carOutput",
         "carControl",
         "liveParameters",
+        "testJoystick",
         "rawAudioData",
-        "peripheralState",
-        "gpsLocation",
-        "lateralPlan",
         "carrotMan",
       ]
     )
@@ -88,15 +87,17 @@ class UIState:
     self.is_metric: bool = self.params.get_bool("IsMetric")
     self.is_release = self.params.get_bool("IsReleaseBranch")
     self.always_on_dm: bool = self.params.get_bool("AlwaysOnDM")
+    self.experimental_mode: bool = self.params.get_bool("ExperimentalMode")
     self.started: bool = False
     self.ignition: bool = False
     self.recording_audio: bool = False
     self.panda_type: log.PandaState.PandaType = log.PandaState.PandaType.unknown
     self.personality: log.LongitudinalPersonality = log.LongitudinalPersonality.standard
     self.has_longitudinal_control: bool = False
+    self.is_body: bool | None = None
     self.CP: car.CarParams | None = None
     self.light_sensor: float = -1.0
-    self._param_update_time: float = 0.0
+    self._param_update_time: float = -PARAM_UPDATE_TIME
 
     # Kisa state variables
     self.controlAllowed: bool = False
@@ -169,7 +170,6 @@ class UIState:
     self.show_radar_info: int = self.params.get("ShowRadarInfo")
     self.radar_lat_factor: float = self.params.get("RadarLatFactor")
     self.show_plot_mode: int = self.params.get("ShowPlotMode")
-    self.driving_model: str = self.params.get("DrivingModel")
 
     # Carrot
     self.active_carrot: int = 0
@@ -183,14 +183,16 @@ class UIState:
     # Callbacks
     self._offroad_transition_callbacks: list[Callable[[], None]] = []
     self._engaged_transition_callbacks: list[Callable[[], None]] = []
-
-    self.update_params()
+    self._on_body_changed_callbacks: list[Callable[[], None]] = []
 
   def add_offroad_transition_callback(self, callback: Callable[[], None]):
     self._offroad_transition_callbacks.append(callback)
 
   def add_engaged_transition_callback(self, callback: Callable[[], None]):
     self._engaged_transition_callbacks.append(callback)
+
+  def add_on_body_changed_callbacks(self, callback: Callable[[], None]):
+    self._on_body_changed_callbacks.append(callback)
 
   @property
   def engaged(self) -> bool:
@@ -207,7 +209,7 @@ class UIState:
     self.sm.update(0)
     self._update_state()
     self._update_status()
-    if time.monotonic() - self._param_update_time > 5.0:
+    if time.monotonic() - self._param_update_time >= PARAM_UPDATE_TIME:
       self.update_params()
     device.update()
 
@@ -283,17 +285,6 @@ class UIState:
       self.fanSpeedPercentDesired = device_state.fanSpeedPercentDesired
       self.storageUsage = int(round(100. - device_state.freeSpacePercent))
 
-    if self.sm.updated["peripheralState"]:
-      peripheral_state = self.sm["peripheralState"]
-      self.voltage = peripheral_state.voltage / 1000.0
-      self.fanSpeedRpm = peripheral_state.fanSpeedRpm
-
-    if self.sm.updated["gpsLocation"]:
-      gps_Location = self.sm["gpsLocation"]
-      self.gpsAccuracy = gps_Location.verticalAccuracy
-      self.altitude = gps_Location.altitude
-      self.bearing = gps_Location.bearingDeg
-
     if self.sm.updated["liveParameters"]:
       live_Parameters = self.sm["liveParameters"]
       self.angleOffsetDeg = live_Parameters.angleOffsetDeg
@@ -333,11 +324,6 @@ class UIState:
       self.aReqValue = car_state.aReqValue
       self.latEnabled = car_state.latEnabled
       self.cruise_gap = car_state.cruiseGap
-
-    if self.sm.updated["lateralPlan"]:
-      lat_plan = self.sm["lateralPlan"]
-      self.lProb = lat_plan.lProb
-      self.rProb = lat_plan.rProb
 
     if self.sm.updated["carrotMan"]:
       carrotman_state = self.sm["carrotMan"]
@@ -393,6 +379,13 @@ class UIState:
         self.has_longitudinal_control = self.params.get_bool("AlphaLongitudinalEnabled")
       else:
         self.has_longitudinal_control = self.CP.openpilotLongitudinalControl
+
+      if self.is_body != self.CP.notCar:
+        self.is_body = self.CP.notCar
+        for callback in self._on_body_changed_callbacks:
+          callback()
+
+    self.experimental_mode = self.params.get_bool("ExperimentalMode")
 
     # Update user params
     self.show_ui_bsm = self.params.get_bool("KisaBlindSpotDetect")

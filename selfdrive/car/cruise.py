@@ -545,7 +545,7 @@ class VCruiseCarrot:
         self.cruiseGap = cruiseGap + 1
         # else:
         #   self.cruiseGap = np.clip(CS.pcmCruiseGap - 1, 0, longitudinalPersonalityMax)
-        self.params.put_nonblocking('LongitudinalPersonality', cruiseGap)
+        self.params.put('LongitudinalPersonality', cruiseGap)
         #self.events.append(EventName.personalityChanged)
       elif button_type == ButtonType.lfaButton:
         if self._lfa_button_mode == 0:
@@ -577,7 +577,7 @@ class VCruiseCarrot:
         v_cruise_kph = button_kph
         self._v_cruise_kph_at_brake = 0
       elif button_type == ButtonType.gapAdjustCruise:
-        self.params.put_nonblocking("MyDrivingMode", self.params.get("MyDrivingMode") % 4 + 1) # 1,2,3,4 (1:eco, 2:safe, 3:normal, 4:high speed)
+        self.params.put("MyDrivingMode", self.params.get("MyDrivingMode") % 4 + 1) # 1,2,3,4 (1:eco, 2:safe, 3:normal, 4:high speed)
       elif button_type == ButtonType.lfaButton:
         useLaneLineSpeed = max(1, self.useLaneLineSpeed)
         self.useLaneLineSpeedApply = useLaneLineSpeed if self.useLaneLineSpeedApply == 0 else 0
@@ -586,7 +586,7 @@ class VCruiseCarrot:
         self._cruise_cancel_state = True
         self._lat_enabled = False
         self._paddle_decel_active = False
-        #self.params.put_bool_nonblocking("ExperimentalMode", not self.params.get_bool("ExperimentalMode"))
+        #self.params.put_bool("ExperimentalMode", not self.params.get_bool("ExperimentalMode"))
         self._add_log("Lateral " + "enabled" if self._lat_enabled else "disabled")
 
     if self._paddle_mode > 0 and button_type in [ButtonType.paddleLeft, ButtonType.paddleRight]:  # paddle button
@@ -694,7 +694,7 @@ class VCruiseCarrot:
         self._cruise_control(1, -1, "Cruise on (soft hold)")
       # GM: autoResume
       elif self.params.get_bool("ActivateCruiseAfterBrake"):
-        self.params.put_bool_nonblocking("ActivateCruiseAfterBrake", False)
+        self.params.put_bool("ActivateCruiseAfterBrake", False)
         self._cruise_control(1, -1, "Cruise on (brake)")
       elif self.v_cruise_kph < self.v_ego_kph_set:
         self.v_cruise_kph = self.v_ego_kph_set

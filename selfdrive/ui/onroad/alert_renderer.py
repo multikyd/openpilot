@@ -35,7 +35,6 @@ ALERT_COLORS = {
   AlertStatus.normal: rl.Color(0x15, 0x15, 0x15, 0xF1),      # #151515 with alpha 0xF1
   AlertStatus.userPrompt: rl.Color(0xDA, 0x6F, 0x25, 0xF1),  # #DA6F25 with alpha 0xF1
   AlertStatus.critical: rl.Color(0xC9, 0x22, 0x31, 0xF1),    # #C92231 with alpha 0xF1
-  AlertStatus.clear: rl.Color(0x22, 0x8B, 0x22, 0xF1),       # #228B22 with alpha 0xF1
 }
 
 
@@ -94,7 +93,7 @@ class AlertRenderer(Widget):
       # 1. Never received selfdriveState since going onroad
       waiting_for_startup = recv_frame < ui_state.started_frame
       if waiting_for_startup and time_since_onroad > 5:
-        return ALERT_STARTUP_PENDING if not ui_state.params.get_bool("IsOpenpilotViewEnabled") else None
+        return ALERT_STARTUP_PENDING
 
       # 2. Lost communication with selfdriveState after receiving it
       if TICI and not waiting_for_startup:
@@ -136,8 +135,8 @@ class AlertRenderer(Widget):
       return rect
 
     h = ALERT_HEIGHTS.get(size, rect.height)
-    return rl.Rectangle(rect.x + ALERT_MARGIN + 240, rect.y + rect.height - h + ALERT_MARGIN,
-                        rect.width - ALERT_MARGIN * 2 - 480, h - ALERT_MARGIN * 2)
+    return rl.Rectangle(rect.x + ALERT_MARGIN, rect.y + rect.height - h + ALERT_MARGIN,
+                        rect.width - ALERT_MARGIN * 2, h - ALERT_MARGIN * 2)
 
   def _draw_background(self, rect: rl.Rectangle, alert: Alert) -> None:
     color = ALERT_COLORS.get(alert.status, ALERT_COLORS[AlertStatus.normal])

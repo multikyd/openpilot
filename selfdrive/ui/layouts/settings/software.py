@@ -88,7 +88,7 @@ class SoftwareLayout(Widget):
 
   def _update_state(self):
     # Show/hide onroad warning
-    self._onroad_label.set_visible(False)
+    self._onroad_label.set_visible(ui_state.is_onroad())
 
     # Update current version and release notes
     current_desc = ui_state.params.get("UpdaterCurrentDescription") or ""
@@ -97,7 +97,7 @@ class SoftwareLayout(Widget):
     self._version_item.set_description(current_release_notes)
 
     # Update download button visibility and state
-    self._download_btn.set_visible(True)
+    self._download_btn.set_visible(ui_state.is_offroad())
 
     updater_state = ui_state.params.get("UpdaterState") or "idle"
     failed_count = ui_state.params.get("UpdateFailedCount") or 0
@@ -139,7 +139,7 @@ class SoftwareLayout(Widget):
     self._branch_btn.action_item.set_value(current_branch)
 
     # Update install button
-    self._install_btn.set_visible(update_available)
+    self._install_btn.set_visible(ui_state.is_offroad() and update_available)
     if update_available:
       new_desc = ui_state.params.get("UpdaterNewDescription") or ""
       new_release_notes = (ui_state.params.get("UpdaterNewReleaseNotes") or b"").decode("utf-8", "replace")
@@ -168,7 +168,7 @@ class SoftwareLayout(Widget):
   def _on_uninstall(self):
     def handle_uninstall_confirmation(result: DialogResult):
       if result == DialogResult.CONFIRM:
-        ui_state.params.put_bool("DoUninstall", True)
+        ui_state.params.put_bool("DoUninstall", True, block=True)
 
     dialog = ConfirmDialog(tr("Are you sure you want to uninstall?"), tr("Uninstall"), callback=handle_uninstall_confirmation)
     gui_app.push_widget(dialog)
@@ -176,9 +176,7 @@ class SoftwareLayout(Widget):
   def _on_install_update(self):
     # Trigger reboot to install update
     self._install_btn.action_item.set_enabled(False)
-    os.system("rm -f /data/openpilot/prebuilt")
-    os.system("touch /data/ks")
-    ui_state.params.put_bool("DoReboot", True)
+    ui_state.params.put_bool("DoReboot", True, block=True)
 
   def _on_select_branch(self):
     # Get available branches and order
@@ -197,7 +195,7 @@ class SoftwareLayout(Widget):
       # Confirmed selection
       if result == DialogResult.CONFIRM and self._branch_dialog is not None and self._branch_dialog.selection:
         selection = self._branch_dialog.selection
-        ui_state.params.put("UpdaterTargetBranch", selection)
+        ui_state.params.put("UpdaterTargetBranch", selection, block=True)
         self._branch_btn.action_item.set_value(selection)
         os.system("pkill -SIGUSR1 -f system.updated.updated")
       self._branch_dialog = None

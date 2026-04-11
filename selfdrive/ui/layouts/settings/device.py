@@ -1,6 +1,5 @@
 import os
 import math
-import subprocess
 
 from cereal import messaging, log
 from openpilot.common.basedir import BASEDIR
@@ -15,7 +14,7 @@ from openpilot.system.ui.lib.multilang import multilang, tr, tr_noop
 from openpilot.system.ui.widgets import Widget, DialogResult
 from openpilot.system.ui.widgets.confirm_dialog import ConfirmDialog, alert_dialog
 from openpilot.system.ui.widgets.html_render import HtmlModal
-from openpilot.system.ui.widgets.list_view import text_item, button_item, triple_button_item
+from openpilot.system.ui.widgets.list_view import text_item, button_item, dual_button_item
 from openpilot.system.ui.widgets.option_dialog import MultiOptionDialog
 from openpilot.system.ui.widgets.scroller_tici import Scroller
 
@@ -23,7 +22,6 @@ from openpilot.system.ui.widgets.scroller_tici import Scroller
 DESCRIPTIONS = {
   'pair_device': tr_noop("Pair your device with comma connect (connect.comma.ai) and claim your comma prime offer."),
   'driver_camera': tr_noop("Preview the driver facing camera to ensure that driver monitoring has good visibility. (vehicle must be off)"),
-  'onroad_camera': tr_noop("Preview the onroad camera to check ui and visibility. (vehicle must be off)"),
   'reset_calibration': tr_noop("openpilot requires the device to be mounted within 4° left or right and within 5° up or 9° down."),
   'review_guide': tr_noop("Review the rules, features, and limitations of openpilot"),
 }
@@ -52,9 +50,8 @@ class DeviceLayout(Widget):
                                         callback=self._reset_calibration_prompt)
     self._reset_calib_btn.set_description_opened_callback(self._update_calib_description)
 
-    self._power_off_btn = triple_button_item(lambda: tr("Refresh"), lambda: tr("Reboot"), lambda: tr("Power Off"), left_callback=self._refresh_prompt, mid_callback=self._reboot_prompt, right_callback=self._power_off_prompt)
-
-    self._onroad_btn = button_item(lambda: tr("Onroad Camera"), lambda: tr("PREVIEW"), DESCRIPTIONS['onroad_camera'], callback=self._show_onroad_camera, enabled=True)
+    self._power_off_btn = dual_button_item(lambda: tr("Reboot"), lambda: tr("Power Off"),
+                                           left_callback=self._reboot_prompt, right_callback=self._power_off_prompt)
 
     items = [
       text_item(lambda: tr("Dongle ID"), self._params.get("DongleId") or (lambda: tr("N/A"))),
@@ -62,7 +59,6 @@ class DeviceLayout(Widget):
       self._pair_device_btn,
       button_item(lambda: tr("Driver Camera"), lambda: tr("PREVIEW"), lambda: tr(DESCRIPTIONS['driver_camera']),
                   callback=lambda: gui_app.push_widget(DriverCameraDialog()), enabled=ui_state.is_offroad),
-      self._onroad_btn,
       self._reset_calib_btn,
       button_item(lambda: tr("Review Training Guide"), lambda: tr("REVIEW"), lambda: tr(DESCRIPTIONS['review_guide']),
                   self._on_review_training_guide, enabled=ui_state.is_offroad),
@@ -94,21 +90,6 @@ class DeviceLayout(Widget):
                                                      option_font_weight=FontWeight.UNIFONT, callback=handle_language_selection)
     gui_app.push_widget(self._select_language_dialog)
 
-  def _show_onroad_camera(self):
-    current = getattr(self, "_onroad_running", False)
-
-    if not current:
-      self._ui_view_proc = subprocess.Popen(["python3", "/data/openpilot/selfdrive/debug/uiview.py"])
-      self._onroad_running = True
-      self._onroad_btn.action_item.set_text("CLOSE")
-      self._params.put_bool_nonblocking("IsOpenpilotViewEnabled", True)
-    else:
-      self._ui_view_proc.terminate()
-      self._ui_view_proc.wait()
-      self._onroad_running = False
-      self._onroad_btn.action_item.set_text("PREVIEW")
-      self._params.put_bool_nonblocking("IsOpenpilotViewEnabled", False)
-
   def _reset_calibration_prompt(self):
     if ui_state.engaged:
       gui_app.push_widget(alert_dialog(tr("Disengage to Reset Calibration")))
@@ -124,7 +105,7 @@ class DeviceLayout(Widget):
       self._params.remove("LiveParameters")
       self._params.remove("LiveParametersV2")
       self._params.remove("LiveDelay")
-      self._params.put_bool("OnroadCycleRequested", True)
+      self._params.put_bool("OnroadCycleRequested", True, block=True)
       self._update_calib_description()
 
     dialog = ConfirmDialog(tr("Are you sure you want to reset calibration?"), tr("Reset"), callback=reset_calibration)
@@ -178,18 +159,6 @@ class DeviceLayout(Widget):
 
     self._reset_calib_btn.set_description(desc)
 
-  def _refresh_prompt(self):
-    if ui_state.engaged:
-      gui_app.push_widget(alert_dialog(tr("Disengage to Refresh")))
-      return
-
-    dialog = ConfirmDialog(tr("Are you sure you want to refresh?"), tr("Refresh"))
-    gui_app.push_widget(dialog, callback=self._perform_refresh)
-
-    def _perform_refresh(self, result: int):
-      if not ui_state.engaged and result == DialogResult.CONFIRM:
-        self._params.put_bool_nonblocking("OnRoadRefresh", True)
-
   def _reboot_prompt(self):
     if ui_state.engaged:
       gui_app.push_widget(alert_dialog(tr("Disengage to Reboot")))
@@ -197,7 +166,7 @@ class DeviceLayout(Widget):
 
     def perform_reboot(result: DialogResult):
       if not ui_state.engaged and result == DialogResult.CONFIRM:
-        self._params.put_bool_nonblocking("DoReboot", True)
+        self._params.put_bool("DoReboot", True)
 
     dialog = ConfirmDialog(tr("Are you sure you want to reboot?"), tr("Reboot"), callback=perform_reboot)
     gui_app.push_widget(dialog)
@@ -209,7 +178,7 @@ class DeviceLayout(Widget):
 
     def perform_power_off(result: DialogResult):
       if not ui_state.engaged and result == DialogResult.CONFIRM:
-        self._params.put_bool_nonblocking("DoShutdown", True)
+        self._params.put_bool("DoShutdown", True)
 
     dialog = ConfirmDialog(tr("Are you sure you want to power off?"), tr("Power Off"), callback=perform_power_off)
     gui_app.push_widget(dialog)

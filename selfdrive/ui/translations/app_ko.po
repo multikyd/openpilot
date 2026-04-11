@@ -818,22 +818,3 @@ msgstr "✓ 구독됨"
 msgid "🔥 Firehose Mode 🔥"
 msgstr "🔥 파이어호스 모드 🔥"
 
-#: selfdrive/ui/layouts/settings/settings.py
-msgid "KisaPilot"
-msgstr "기사파일럿"
-
-#: selfdrive/ui/layouts/settings/device.py
-msgid "Refresh"
-msgstr "리프레시"
-
-#: selfdrive/ui/layouts/settings/device.py
-msgid "Onroad Camera"
-msgstr "주행 카메라"
-
-#: selfdrive/ui/layouts/settings/device.py
-msgid "Disengage to Refresh"
-msgstr "해제 후 리프레시"
-
-#: selfdrive/ui/layouts/settings/device.py
-msgid "Are you sure you want to refresh?"
-msgstr "정말 리프레시 하시겠습니까?"

@@ -19,14 +19,14 @@ BUFTYPE_BUF, BUFTYPE_TEX, BUFTYPE_IBO = 0, 1, 2
 @functools.cache
 def dcache_flush():
   from tinygrad.uop.ops import UOp, Ops, KernelInfo
-  from tinygrad.codegen import get_program
+  from tinygrad.codegen import to_program
   buf, n = UOp(Ops.PARAM, dtypes.uint8.ptr(), arg=0), UOp(Ops.PARAM, dtypes.uint8.ptr(), arg=1)
   i = UOp.range(n.cast(dtypes.int), 0, dtype=dtypes.int)
   flush = UOp(Ops.CUSTOM, dtypes.void, (buf.cast(dtypes.ulong) + i.cast(dtypes.ulong) * UOp.const(dtypes.ulong, 64),),
               arg='__asm__ volatile("dc cvac, %0" :: "r"({0}) : "memory");')
   sink = UOp.sink(flush.end(i), UOp(Ops.CUSTOM, dtypes.void, (), arg='__asm__ volatile("dsb sy" ::: "memory");'), arg=KernelInfo(name="dcache_flush"))
-  ps = get_program(UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg="CPU"), UOp(Ops.LINEAR, src=tuple(sink.toposort())))), Device["CPU"].renderer)
-  return Device["CPU"].runtime(ps.function_name, ps.lib)
+  prg = to_program(UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg="CPU"), UOp(Ops.LINEAR, src=tuple(sink.toposort())))), Device["CPU"].renderer)
+  return Device["CPU"].runtime(prg.arg.function_name, prg.src[4].arg)
 
 #Parse C-style defines: <regname>_<field_x>__SHIFT and <regname>_<field_y>__MASK from the adreno module into the following format:
 # qreg.<regname>(<field_x>=..., <field_y>=..., ..., <field_n>=...)
@@ -320,24 +320,16 @@ class QCOMProgram(HCQProgram):
     reg_desc_off = _read_lib(lib, 0x34)
     self.fregs, self.hregs = _read_lib(lib, reg_desc_off + 0x14), _read_lib(lib, reg_desc_off + 0x18)
 
-class QCOMTextureInfo:
-  def __init__(self, pitch:int, real_stride:int, desc:list[int], ibo:list[int]):
-    self.pitch, self.real_stride, self.desc, self.ibo = pitch, real_stride, desc, ibo
-
 class QCOMAllocator(HCQAllocatorBase):
   def _alloc(self, size:int, opts:BufferSpec) -> HCQBuffer:
     return self.dev._gpu_map(opts.external_ptr, size) if opts.external_ptr else self.dev._gpu_alloc(size)
 
   def _do_copy(self, src_addr, dest_addr, size, prof_text):
+    self.dev.synchronize()
     with cpu_profile(prof_text, f"{self.dev.device}:COPY"): ctypes.memmove(dest_addr, src_addr, size)
 
-  def _copyin(self, dest:HCQBuffer, src:memoryview):
-    self._do_copy(mv_address(src), dest.cpu_view().addr, src.nbytes, f"TINY -> {self.dev.device}")
-
-  def _copyout(self, dest:memoryview, src:HCQBuffer):
-    self.dev.synchronize()
-
-    self._do_copy(src.cpu_view().addr, mv_address(dest), src.size, f"{self.dev.device} -> TINY")
+  def _copyin(self, dest:HCQBuffer, src:memoryview): self._do_copy(mv_address(src), dest.cpu_view().addr, src.nbytes, f"TINY -> {self.dev.device}")
+  def _copyout(self, dest:memoryview, src:HCQBuffer): self._do_copy(src.cpu_view().addr, mv_address(dest), src.size, f"{self.dev.device} -> TINY")
 
   def _as_buffer(self, src:HCQBuffer) -> memoryview:
     self.dev.synchronize()
@@ -378,9 +370,8 @@ class QCOMDevice(HCQCompiled):
     if PROFILE and self.gpu_id[:2] < (7, 3):
       System.write_sysfs("/sys/class/kgsl/kgsl-3d0/idle_timer", value="4000000000", msg="Failed to disable suspend mode", expected="4294967276")
 
-    super().__init__(device, QCOMAllocator(self),
-                     [functools.partial(QCOMCLRenderer, info.chip_id), functools.partial(IR3Renderer, "a%d%d%d" % self.gpu_id)],
-                     functools.partial(QCOMProgram, self), QCOMSignal, functools.partial(QCOMComputeQueue, self), None)
+    super().__init__(device, QCOMAllocator(self), [QCOMCLRenderer, IR3Renderer], functools.partial(QCOMProgram, self), QCOMSignal,
+                     functools.partial(QCOMComputeQueue, self), arch="a%d%d%d" % self.gpu_id)
 
   def _gpu_alloc(self, size:int, flags:int=0, uncached=False, fill_zeroes=False) -> HCQBuffer:
     flags |= flag("KGSL_MEMALIGN", alignment_hint:=12) | kgsl.KGSL_MEMFLAGS_USE_CPU_MAP

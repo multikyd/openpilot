@@ -24,7 +24,6 @@ from openpilot.common.realtime import Ratekeeper, set_core_affinity
 from openpilot.common.params import Params
 from openpilot.common.filter_simple import MyMovingAverage
 from openpilot.system.hardware import PC, TICI
-from openpilot.selfdrive.navd.helpers import Coordinate
 from openpilot.common.constants import CV
 
 from openpilot.selfdrive.carrot.carrot_serv import CarrotServ
@@ -194,8 +193,8 @@ class CarrotMan:
     self.params = Params()
     self.params_memory = Params("/dev/shm/params")
     self.gps_location_service = get_gps_location_service(self.params)
-    self.sm = messaging.SubMaster(['deviceState', 'carState', 'controlsState', 'radarState', 'longitudinalPlan', 'modelV2', 'selfdriveState', 'carControl', self.gps_location_service, 'navInstruction'])
-    self.pm = messaging.PubMaster(['carrotMan', "navRoute", "navInstructionCarrot"])
+    self.sm = messaging.SubMaster(['deviceState', 'carState', 'controlsState', 'radarState', 'longitudinalPlan', 'modelV2', 'selfdriveState', 'carControl', self.gps_location_service])
+    self.pm = messaging.PubMaster(['carrotMan'])
 
     self.carrot_serv = CarrotServ()
 
@@ -293,7 +292,7 @@ class CarrotMan:
             if ip_address != self.ip_address:
               self.ip_address = ip_address
               self.remote_addr = None
-            self.params_memory.put_nonblocking("NetworkAddress", self.ip_address)
+            self.params_memory.put("NetworkAddress", self.ip_address)
 
             msg = self.make_send_message()
             if self.broadcast_ip is not None:
@@ -788,32 +787,6 @@ class CarrotMan:
     float_data = self.recvall(sock, 4)  # Float은 4바이트
     return struct.unpack('!f', float_data)[0]
 
-
-  def send_routes(self, coords, from_navd=False):
-    if from_navd:
-      if len(coords) > 0:
-        self.navi_points = [(c.longitude, c.latitude) for c in coords]
-        self.navi_points_start_index = 0
-        self.navi_points_active = True
-        print("Received points from navd:", len(self.navi_points))
-        self.navd_active = True
-
-        # 경로수신 -> carrotman active되고 약간의 시간지연이 발생함..
-        if not from_navd:
-          self.carrot_serv.active_count = 80
-          self.carrot_serv.active_sdi_count = self.carrot_serv.active_sdi_count_max
-          self.carrot_serv.active_carrot = 2
-
-        coords = [{"latitude": c.latitude, "longitude": c.longitude} for c in coords]
-        #print("navdNaviPoints=", self.navi_points)
-      else:
-        print("Received points from navd: 0")
-        self.navd_active = False
-
-    msg = messaging.new_message('navRoute', valid=True)
-    msg.navRoute.coordinates = coords
-    self.pm.send('navRoute', msg)
-
   def carrot_route(self):
     host = '0.0.0.0'  # 혹은 다른 호스트 주소
     port = 7709  # 포트 번호
@@ -842,42 +815,6 @@ class CarrotMan:
               if all_data is None:
                   print("Connection closed or incomplete data received")
                   continue
-
-              self.navi_points = []
-              points = []
-              for i in range(0, len(all_data), 8):
-                x, y = struct.unpack('!ff', all_data[i:i+8])
-                self.navi_points.append((x, y))
-                coord = Coordinate.from_mapbox_tuple((x, y))
-                points.append(coord)
-              coords = [c.as_dict() for c in points]
-              self.navi_points_start_index = 0
-              self.navi_points_active = True
-              print("Received points:", len(self.navi_points))
-              #print("Received points:", self.navi_points)
-
-              self.send_routes(coords)
-              """
-              try:
-                module_name = "route_engine"
-                class_name = "RouteEngine"
-                moduel = importlib.import_module(module_name)
-                cls = getattr(moduel, class_name)
-                route_engine_instance = cls(name="Loaded at Runtime")
-
-                route_engine_instance.send_route_coords(coords, True)
-              except Exception as e:
-                print(f"route_engine error: {e}")
-
-              #msg = messaging.new_message('navRoute', valid=True)
-              #msg.navRoute.coordinates = coords
-              #self.pm.send('navRoute', msg)
-              """
-
-              if len(coords):
-                dest = coords[-1]
-                dest['place_name'] = "External Navi"
-                self.params.put("NavDestination", json.dumps(dest))
 
             except Exception as e:
               print(e)
@@ -968,8 +905,6 @@ class CarrotMan:
     self.navd_active = True
 
     print("Received points:", len(self.navi_points))
-
-    self.send_routes(coords)
 
     if coords:
       dest = dict(coords[-1])

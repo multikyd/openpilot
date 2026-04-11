@@ -9,6 +9,7 @@ class Optimizer:
   Base class for all optimizers.
   """
   def __init__(self, params: list[Tensor], lr: float, device=None, fused=FUSE_OPTIM):
+    if lr < 0: raise ValueError(f"Invalid learning rate: {lr}")
     # if requires_grad is None, but being put into an optimizer, set it to True
     for x in params:
       if x.requires_grad is None: x.requires_grad_(True)
@@ -93,7 +94,7 @@ def Muon(params: list[Tensor], lr=0.001, momentum=0.95, weight_decay=0.1, ns_ste
   """
   assert not fused, "FUSE_OPTIM not allowed for Muon optimizer"
   return LARS(params, lr, momentum, weight_decay, ns_steps, ns_coefficients, nesterov,
-              classic=False, pre_wd=False, tcoef=0.0, device=None, fused=fused)
+              classic=False, pre_wd=False, tcoef=0.0, device=device, fused=fused)
 
 class LARS(Optimizer):
   """
@@ -103,6 +104,7 @@ class LARS(Optimizer):
   """
   def __init__(self, params:list[Tensor], lr=0.001, momentum=0.9, weight_decay=1e-4, ns_steps=0, ns_coefficients=None,
                nesterov=False, classic=True, pre_wd=True, tcoef=0.001, device=None, fused=FUSE_OPTIM):
+    if momentum < 0: raise ValueError(f"Invalid momentum value: {momentum}")
     super().__init__(params, lr, device, fused)
     self.momentum, self.wd, self.ns_steps, self.ns_coefficients  = momentum, weight_decay, ns_steps, ns_coefficients
     self.nesterov, self.classic, self.pre_wd, self.tcoef = nesterov, classic, pre_wd, tcoef
@@ -153,6 +155,7 @@ class LAMB(Optimizer):
   - Paper: https://arxiv.org/abs/1904.00962
   """
   def __init__(self, params: list[Tensor], lr=0.001, b1=0.9, b2=0.999, eps=1e-6, weight_decay=0.0, adam=False, device=None, fused=FUSE_OPTIM):
+    if weight_decay < 0: raise ValueError(f"Invalid weight_decay value: {weight_decay}")
     super().__init__(params, lr, device, fused)
     self.b1, self.b2, self.eps, self.wd, self.adam = b1, b2, eps, weight_decay, adam
     self.b1_t, self.b2_t = (Tensor.ones((1,), dtype=dtypes.float32, device=self.device, requires_grad=False) for _ in [b1, b2])

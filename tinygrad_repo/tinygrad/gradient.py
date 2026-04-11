@@ -8,7 +8,7 @@ def reduce_gradient(ctx:UOp, ret:UOp, op:Ops):
   def broadcast_to_input(x): return x.reshape(x.shape+(1,)*(len(ret.src[0].shape)-len(x.shape))).expand(ret.src[0].shape)
   if op == Ops.ADD: return (broadcast_to_input(ctx),)
   if op == Ops.MAX:
-    assert ret.op is Ops.REDUCE_AXIS, "only works on REDUCE_AXIS"
+    assert ret.op is Ops.REDUCE, "only works on REDUCE"
     mask = ret.src[0].eq(broadcast_to_input(ret)).cast(ctx.dtype)
     count = mask._rop(Ops.ADD, ret.arg[1])
     return ((mask/broadcast_to_input(count)) * broadcast_to_input(ctx),)
@@ -29,7 +29,7 @@ def call_gradient(ctx:UOp, k:UOp, needed:set[int]) -> tuple[UOp|None, ...]:
   assert fxn.op is Ops.TUPLE, f"expected TUPLE body for gradient, got {fxn.op}"
   params = {x.arg:x for x in fxn.toposort(enter_calls=False) if x.op == Ops.PARAM}
   grad_args = ctx.src
-  root_grad = UOp(Ops.TUPLE, src=tuple(fxn.src[i].const_like(0) if g.op is Ops.NOOP else g.param_like(len(args)+i) for i,g in enumerate(grad_args)))
+  root_grad = UOp(Ops.TUPLE, src=tuple(UOp(Ops.NOOP) if g.op is Ops.NOOP else g.param_like(len(args)+i) for i,g in enumerate(grad_args)))
   grads = compute_gradient(fxn, root_grad, set(params.values()))
   # for precompiled calls, substitute forward outputs with params so intermediates aren't recomputed
   fwd_subs = {src: src.param_like(len(args)+len(grad_args)+i) for i, src in enumerate(fxn.src)} if k.arg.precompile else {}
@@ -61,7 +61,7 @@ pm_gradient = PatternMatcher([
     ((x>y).where(ctx, (x.eq(y)).where(ctx * 0.5, 0)), (x<y).where(ctx, (x.eq(y)).where(ctx * 0.5, 0)))),
   (UPat(Ops.MUL, name="ret"), lambda ctx, ret: (ret.src[1]*ctx, ret.src[0]*ctx)),
   (UPat(Ops.WHERE, name="ret"), lambda ctx, ret: (None, ret.src[0].where(ctx, ctx.const_like(0)), ret.src[0].where(ctx.const_like(0), ctx))),
-  (UPat(Ops.REDUCE_AXIS, name="ret"), lambda ctx, ret: reduce_gradient(ctx, ret, ret.arg[0])),
+  (UPat(Ops.REDUCE, name="ret"), lambda ctx, ret: reduce_gradient(ctx, ret, ret.arg[0])),
   (UPat(Ops.CONTIGUOUS), lambda ctx: (ctx,)),
   (UPat(Ops.CONTIGUOUS_BACKWARD), lambda ctx: (ctx.contiguous(),)),
   (UPat(Ops.RESHAPE, name="ret"), lambda ctx, ret: (ctx.reshape(ret.src[0].shape), None)),
@@ -75,8 +75,8 @@ pm_gradient = PatternMatcher([
   (UPat(Ops.COPY, name="ret"), lambda ctx, ret: (ctx.copy_to_device(ret.src[0].device), None)),
   (UPat(Ops.MULTI, name="ret"), lambda ctx, ret: ctx.shard(ret.device, ret.axis).src),
   (UPat(Ops.TUPLE), lambda ctx: ctx.src),
-  # NOTE: this is only correct when the KERNEL has a single output
-  (UPat(Ops.AFTER), lambda ctx: (ctx, ctx)),
+  (UPat(Ops.AFTER, src=(UPat.var("d"), UPat(Ops.CALL, name="k"))), lambda ctx, d, k:
+    (ctx, UOp.maketuple(*(ctx if i == k.src.index(d)-1 else UOp(Ops.NOOP) for i in range(len(k.src)-1))))),
   # there's no gradient for bitcast
   (UPat(Ops.BITCAST), lambda: (None,)),
 ])
@@ -84,26 +84,27 @@ pm_gradient = PatternMatcher([
 def _deepwalk(root:UOp, targets:set[UOp]) -> tuple[list[UOp], dict[UOp, bool]]:
   # compute the target path (top down)
   in_target_path: dict[UOp, bool] = {}
-  for u in root.toposort(): in_target_path[u] = any(x in targets or in_target_path[x] for x in u.src)
+  root.topovisit(lambda u: any(in_target_path[x] or x in targets for x in u.src), in_target_path)
   # don't flow through DETACH or anything not in target path
-  return list(root.toposort(lambda node: node.op is not Ops.DETACH and in_target_path[node])), in_target_path
+  return [node for node in in_target_path if node.op is not Ops.DETACH and in_target_path[node]], in_target_path
 
 def compute_gradient(root:UOp, root_grad:UOp, targets:set[UOp]) -> dict[UOp, UOp]:
   walk, in_target_path = _deepwalk(root, targets)
   grads: dict[UOp, UOp] = {root: root_grad}
   for t0 in reversed(walk):
-    if t0 not in grads: continue
-    # GETTUPLE: accumulate gradient into a TUPLE UOp on the CALL, process when we hit the CALL
+    if t0 not in grads or grads[t0].op is Ops.NOOP: continue
+    # GETTUPLE: accumulate gradient into a TUPLE UOp on the FUNCTION, process when we hit the FUNCTION
     if t0.op is Ops.GETTUPLE:
-      k = t0.src[0]  # the CALL
-      assert k.op is Ops.CALL and k.src[0].op is Ops.TUPLE
+      k = t0.src[0]  # the FUNCTION
+      assert k.op is Ops.FUNCTION and k.src[0].op is Ops.TUPLE
       n_outputs = len(k.src[0].src)
       prev = grads[k].src if k in grads else tuple(UOp(Ops.NOOP) for _ in range(n_outputs))
       grads[k] = UOp.maketuple(*(prev[i] + grads[t0] if i == t0.arg and prev[i].op is not Ops.NOOP else
                                  grads[t0] if i == t0.arg else prev[i] for i in range(n_outputs)))
       continue
-    # CALL: pass needed param set so backward only computes required gradients
-    if t0.op is Ops.CALL:
+    # FUNCTION/CALL: pass needed param set so backward only computes required gradients
+    # (FUNCTION uses implicit TUPLE gradient or grad_fxn; CALL requires an explicit grad_fxn)
+    if t0.op in {Ops.FUNCTION, Ops.CALL}:
       needed = {i for i, arg in enumerate(t0.src[1:]) if arg in targets or in_target_path.get(arg, False)}
       lgrads:tuple[UOp|None, ...]|None = call_gradient(grads[t0], t0, needed)
     else:
@@ -112,7 +113,11 @@ def compute_gradient(root:UOp, root_grad:UOp, targets:set[UOp]) -> dict[UOp, UOp
     assert len(lgrads) == len(t0.src), f"got {len(lgrads)} gradient, expected {len(t0.src)}"
     for k,v in zip(t0.src, lgrads):
       if v is None: continue
-      if k in grads: grads[k] = grads[k] + v
+      if k in grads and grads[k].op is not Ops.NOOP:
+        if v.op is Ops.TUPLE and grads[k].op is Ops.TUPLE:
+          grads[k] = UOp.maketuple(*(p + n if (p.op is not Ops.NOOP and n.op is not Ops.NOOP) else
+                                     n if p.op is Ops.NOOP else p for p, n in zip(grads[k].src, v.src)))
+        else: grads[k] = grads[k] + v
       else: grads[k] = v
       if len(forward_metadata:=all_metadata.get(t0, ())):
         backward_metadata = tuple(dataclasses.replace(x, backward=True) for x in forward_metadata)

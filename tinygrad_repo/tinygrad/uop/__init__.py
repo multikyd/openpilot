@@ -26,7 +26,8 @@ class Ops(FastEnum):
 
   # uops that aren't rendered
   NOOP = auto(); REWRITE_ERROR = auto()
-  PARAM = auto(); CALL = auto()
+  # FUNCTION has a TUPLE body and is gradient-able; CALL is an opaque kernel invocation
+  PARAM = auto(); FUNCTION = auto(); CALL = auto()
 
   # renderer
   # LINEAR is a list of UOps, SOURCE has a str arg that's human readable, BINARY has bytes arg that's compiled
@@ -37,7 +38,7 @@ class Ops(FastEnum):
   SINK = auto(); AFTER = auto(); GROUP = auto()
 
   # vector creation / item selection
-  GEP = auto(); VECTORIZE = auto()
+  GEP = auto(); STACK = auto()
 
   # tuple/gettuple for function with multiple returns
   TUPLE = auto(); GETTUPLE = auto()
@@ -101,7 +102,7 @@ class Ops(FastEnum):
   MULTI = auto()  # MULTI is really a movement op
 
   # reduce
-  REDUCE_AXIS = auto(); REDUCE = auto(); ALLREDUCE = auto()
+  REDUCE = auto(); ALLREDUCE = auto()
 
   # expander ops
   UNROLL = auto(); CONTRACT = auto(); VCAT = auto(); PTRCAT = auto()
