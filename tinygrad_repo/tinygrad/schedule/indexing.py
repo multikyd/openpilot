@@ -1,15 +1,15 @@
 from typing import Iterator
 import functools, itertools
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from tinygrad.dtype import dtypes, AddrSpace
 from tinygrad.uop.ops import PatternMatcher, UPat, Ops, UOp, resolve, GroupOp, graph_rewrite, sint, AxisType, profile_matches
 from tinygrad.uop.ops import consumer_map_from_toposort, gate_kernel_sink
 from tinygrad.uop.symbolic import symbolic, pm_simplify_valid, pm_drop_and_clauses
 from tinygrad.helpers import argsort, all_same, cpu_profile, PCONTIG, colored, Context, SPEC
 
-ALWAYS_CONTIGUOUS: set[Ops] = {Ops.CONTIGUOUS, Ops.AFTER, Ops.COPY, Ops.BUFFER, Ops.BUFFER_VIEW,
-                     Ops.CONST, Ops.BIND, Ops.DEVICE, Ops.MSELECT, Ops.MSTACK, Ops.PARAM,
-                     Ops.DEFINE_LOCAL, Ops.DEFINE_REG, Ops.LOAD, Ops.CALL, Ops.FUNCTION}
+ALWAYS_CONTIGUOUS: set[Ops] = {Ops.CONTIGUOUS, Ops.AFTER, Ops.COPY, Ops.BUFFER, Ops.SLICE,
+                      Ops.CONST, Ops.BIND, Ops.MSELECT, Ops.MSTACK, Ops.PARAM,
+                      Ops.LOAD, Ops.CALL, Ops.FUNCTION}
 
 def realize(ctx:dict[UOp, None], tr:UOp) -> None: ctx[tr] = None
 
@@ -18,8 +18,8 @@ def realize_srcs(ctx:dict[UOp, None], rb:UOp) -> None:
     if s.base.op not in ALWAYS_CONTIGUOUS: ctx[s] = None
 
 def realize_store_after_src(ctx:dict[UOp, None], dest:UOp, src:UOp):
-  # don't realize COPY/BUFFER_VIEW when they are the direct source of STORE+AFTER — the target buffer is the output
-  if src.op in {Ops.COPY, Ops.BUFFER_VIEW} and src in ctx \
+  # don't realize COPY/SLICE when they are the direct source of STORE+AFTER — the target buffer is the output
+  if src.op in {Ops.COPY, Ops.SLICE} and src in ctx \
      and not dest.op_in_backward_slice_with_self(Ops.SHRINK, Ops.PERMUTE, Ops.FLIP, Ops.PAD):
     del ctx[src]
   # you don't usually have to do this for assign unless there's a WAR hazard like TestAssign.test_assign_double_diamond_reduce
@@ -54,12 +54,13 @@ class IndexingContext:
     return UOp.range(s, next(self.range_idx), axistype) if resolve(s!=1) else UOp.const(dtypes.weakint, 0)
 
 def create_bufferize_and_index_based_on_ranges(ctx:IndexingContext, x:UOp):
-  if x.op in {Ops.BUFFERIZE, Ops.INDEX}: return None
+  if x.op in {Ops.STAGE, Ops.INDEX}: return None
   new_srcs = []
-  for s in x.src:
+  for i, s in enumerate(x.src):
     new_src = s
-    if s.op in {Ops.PARAM, Ops.BUFFER_VIEW, Ops.MSTACK, Ops.MSELECT, Ops.AFTER}:
-      if x in ctx.range_map: new_src = new_src.index(*ctx.range_map[x][0])
+    # shape args of movement ops are at src[1:] and should not be indexed
+    if s.op in {Ops.PARAM, Ops.BUFFER, Ops.SLICE, Ops.MSTACK, Ops.MSELECT, Ops.AFTER}:
+      if x in ctx.range_map and not (x.op in GroupOp.Movement and i > 0): new_src = new_src.index(*ctx.range_map[x][0])
     elif s in ctx.realize_map:
       realized_ranges = ctx.realize_map[s]
       assert isinstance(realized_ranges, list), "realize map must contain range list"
@@ -71,29 +72,26 @@ def create_bufferize_and_index_based_on_ranges(ctx:IndexingContext, x:UOp):
       else:
         # the Bufferize before a COPY is not removable. there should be a better way to do this
         removable = x.op is not Ops.COPY and s.op not in ALWAYS_CONTIGUOUS
-        # None in the device assigns it a number later
+        # LOCAL: None in the device assigns it a number later
         opts = BufferizeOpts(device=s.device, removable=removable) if len(ctx.range_map[s][1]) == len(realized_ranges) else \
                BufferizeOpts(device=s.device, addrspace=AddrSpace.LOCAL, removable=removable)
-        new_src = UOp(Ops.BUFFERIZE, s.dtype, src=(new_src,)+closed_ranges, arg=opts)
+        new_src = UOp(Ops.STAGE, s.dtype, src=(new_src,)+closed_ranges, arg=opts)
         if x in ctx.range_map: new_src = new_src.index(*[r for i,r in enumerate(ctx.range_map[x][0]) if i in realized_ranges])
     new_srcs.append(new_src)
-  # NOTE: do we need this?
-  return x.replace(src=tns) if x.src != (tns:=tuple(new_srcs)) else None
+  return x.replace(src=tuple(new_srcs))
 
 def convert_pad_to_where_to_keep_behavior_local(ctx:IndexingContext, x:UOp):
   if x not in ctx.range_map: return None
+  bx = create_bufferize_and_index_based_on_ranges(ctx, x)
   valid: UOp = UOp.const(dtypes.bool, True).uprod([r.get_valid() for r in ctx.range_map[x][0]])
-  ret = valid.where(x.src[0], UOp.const(x.dtype, 0))
-  ctx.range_map[ret] = ctx.range_map[x]
-  return ret
+  return valid.where(bx.src[0], UOp.const(x.dtype, 0))
 
 def convert_reduce_to_reduce_with_ranges(ctx:IndexingContext, x:UOp):
   if len(x.arg[1]) == 0: return None
+  bx = create_bufferize_and_index_based_on_ranges(ctx, x)
   # input ranges
   new_ranges = [r for i,r in enumerate(ctx.range_map[x][0]) if i in x.arg[1]]
-  ret = UOp(Ops.REDUCE, x.dtype, src=(x.src[0],)+tuple(new_ranges), arg=(x.arg[0], ()))
-  ctx.range_map[ret] = ctx.range_map[x]
-  return ret
+  return UOp(Ops.REDUCE, x.dtype, src=(bx.src[0],)+tuple(new_ranges), arg=(x.arg[0], ()))
 
 def remove_movement_op_after_rangeify(ctx:IndexingContext, x:UOp):
   if x in ctx.range_map or x.src[0].op is Ops.INDEX: return x.src[0]
@@ -107,6 +105,11 @@ pm_apply_rangeify = PatternMatcher([
   (UPat(GroupOp.All, name="x"), create_bufferize_and_index_based_on_ranges),
   # remove movement op
   (UPat(GroupOp.Movement, name="x"), remove_movement_op_after_rangeify),
+])
+
+pm_fix_deviceless = PatternMatcher([
+  (UPat(Ops.STAGE, name="b"),
+    lambda ctx,b: b.replace(arg=replace(b.arg, device=ctx)) if b.arg.addrspace is AddrSpace.GLOBAL and b.arg.device is None else None),
 ])
 
 @functools.cache
@@ -128,18 +131,18 @@ def _apply_reshape(in_shape:tuple[sint,...], out_shape:tuple[sint, ...], urngs:U
 @functools.cache
 def apply_movement_op(op:Ops, in_shape:tuple[sint,...], arg:tuple, rngs:tuple[UOp, ...]) -> tuple[UOp, ...]:
   match op:
-    case Ops.SHRINK:  rngs = tuple(a if ss == 0 else a+ss for a,(ss,_) in zip(rngs, arg))
+    case Ops.SHRINK:  rngs = tuple(a if off == 0 else a+off for a,(off,_) in zip(rngs, arg))
     case Ops.PERMUTE: rngs = tuple(rngs[p] for p in argsort(arg))
     case Ops.FLIP:    rngs = tuple(((s-1)-a) if f else a for a,s,f in zip(rngs, in_shape, arg))
     case Ops.EXPAND:  rngs = tuple(a if in_sh == out_sh else a.const_like(0) for a,in_sh,out_sh in zip(rngs, in_shape, arg))
     case Ops.PAD:
       # NOTE: the .where(r-s, i) is not inside the graph_rewrite so that `convert_pad_to_where_to_keep_behavior_local`
       #       wraps the pad with only the newly added valid
-      rngs = tuple(r if (s == 0 and e == 0) else graph_rewrite((r >= s) & (r < (sh+s)),
-        symbolic+pm_simplify_valid, name="pad").where(r-s, UOp.invalid()) for r,sh,(s,e) in zip(rngs, in_shape, arg))
+      rngs = tuple(r if (sz == sh and off == 0) else graph_rewrite((r >= off) & (r < (sh+off)),
+        symbolic+pm_simplify_valid, name="pad").where(r-off, UOp.invalid()) for r,sh,(off,sz) in zip(rngs, in_shape, arg))
     case Ops.RESHAPE:
       sink = UOp.sink(*rngs).simplify() # NOTE: this applies any commutative flips to the rngs early
-      sub_array = {r:UOp.range(r.src[0], i, AxisType.PLACEHOLDER) for i,r in enumerate(sink.ranges)}
+      sub_array = {r:UOp.range(r.src[0], i, AxisType.PLACEHOLDER, dtype=r.dtype) for i,r in enumerate(sink.ranges)}
       rngs = _apply_reshape(in_shape, arg, sink.substitute(sub_array)).substitute({v:k for k,v in sub_array.items()}).src
     case _: raise RuntimeError(f"{op} is not a MovementOp")
   return rngs
@@ -159,8 +162,6 @@ def run_rangeify(tsink:UOp, debug:bool=False) -> tuple[UOp, IndexingContext]:
   # explicit rangeify
   ending_ranges: dict[UOp, list[UOp]] = {}
   for x in reversed(tsink_toposort):
-    if x.op in {Ops.DEVICE, Ops.UNIQUE}: continue
-
     # no ranges on kernels, they are internal
     if x.op in {Ops.CALL, Ops.FUNCTION, Ops.LINEAR}: continue
 
@@ -268,6 +269,8 @@ def run_rangeify(tsink:UOp, debug:bool=False) -> tuple[UOp, IndexingContext]:
   # NOTE: SPEC=3 is broken here with shape
   with Context(SPEC=min(SPEC.value, 2)):
     tsink = graph_rewrite(tsink, pm_apply_rangeify, ctx=rctx, bottom_up=True, name="apply rangeify")
+  # if a deviceless value must materialize, place it on the sink device
+  tsink = graph_rewrite(tsink, pm_fix_deviceless, ctx=tsink.device, name="add device to deviceless")
   return tsink, rctx
 
 def render_ranges(*rngs_list, realized) -> str:

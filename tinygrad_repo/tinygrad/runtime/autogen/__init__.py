@@ -10,6 +10,9 @@ linux_headers_deb = "https://snapshot.debian.org/archive/debian/20260207T145350Z
 linux_headers_kern_deb = "https://snapshot.debian.org/archive/debian/20260207T145350Z/pool/main/l/linux/linux-headers-6.18.9+deb14-common_6.18.9-1_all.deb"
 liburing_src = "https://raw.githubusercontent.com/axboe/liburing/refs/tags/liburing-2.14/src/include/liburing.h"
 ggml_common_src = "https://raw.githubusercontent.com/ggml-org/ggml/d4fcfe88a8bcf5c9840be14be6c2fbf1f5b3b2db/src/ggml-common.h"
+cudart_src = "https://developer.download.nvidia.com/compute/cuda/redist/cuda_cudart/linux-x86_64/cuda_cudart-linux-x86_64-12.0.146-archive.tar.xz"
+nvrtc_src = "https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvrtc/linux-x86_64/cuda_nvrtc-linux-x86_64-12.0.140-archive.tar.xz"
+opencl_src = "https://github.com/KhronosGroup/OpenCL-Headers/archive/2e30669d48718fd460f085b4b35b160dad51ce9d.tar.gz"
 macossdk = "/var/db/xcode_select_link/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
 
 llvm_lib = (
@@ -19,6 +22,7 @@ llvm_lib = (
 clang_lib = win_llvm.replace("LLVM-C", "libclang") + (mac_llvm + other_llvm).replace("LLVM", "clang")
 
 webgpu_lib = "os.path.join(sysconfig.get_paths()['purelib'], 'pydawn', 'lib', 'libwebgpu_dawn.dll') if WIN else 'webgpu_dawn'"
+tinymesa_path = "os.path.join(sysconfig.get_paths()['platlib'], 'tinymesa')"
 nv_lib_path = ("[f'/{pre}/cuda/targets/{tgt}/lib' for pre in ['opt', 'usr/local'] for tgt in "
                "[sysconfig.get_config_vars().get(\"MULTIARCH\", \"\").rsplit(\"-\", 1)[0], 'sbsa-linux']]")
 
@@ -46,13 +50,14 @@ def load(name, files, **kwargs):
 
 def __getattr__(nm):
   match nm:
-    case "libc": return load("libc", lambda: (
-      [i for i in system("dpkg -L libc6-dev").split() if 'sys/mman.h' in i or 'sys/syscall.h' in i] +
-      ["/usr/include/string.h", "/usr/include/elf.h", "/usr/include/unistd.h", "/usr/include/asm-generic/mman-common.h"]), dll="'c'", errno=True)
+    case "libc":
+      return load("libc", lambda: ([i for i in system("dpkg -L libc6-dev").split() if 'sys/mman.h' in i or 'bits/mman-shared.h' in i] +
+                                   ["/usr/include/string.h", "/usr/include/elf.h", "/usr/include/unistd.h", "/usr/include/stdio.h", "/usr/include/asm-generic/mman-common.h"]),
+                  args=["-D__USE_GNU", "-D_GNU_SOURCE"], dll="'c'", errno=True, recsym=True, rules=[(r'([a-z]+) = \1', '')]) # removes stdin = stdin
     case "avcodec": return load("avcodec", ["{}/libavcodec/hevc/hevc.h", "{}/libavcodec/cbs_h265.h"], srcs=ffmpeg_src)
-    case "opencl": return load("opencl", ["/usr/include/CL/cl.h"], dll="'OpenCL'")
-    case "cuda": return load("cuda", ["/usr/include/cuda.h"], dll="'cuda'", args=["-D__CUDA_API_VERSION_INTERNAL"], macros=False)
-    case "nvrtc": return load("nvrtc", ["/usr/include/nvrtc.h"], dll="'nvrtc'", paths=nv_lib_path, prolog=["import sysconfig"])
+    case "opencl": return load("opencl", ["{}/CL/cl.h"], dll="'OpenCL'", args=["-I{}"], srcs=opencl_src)
+    case "cuda": return load("cuda", ["{}/include/cuda.h"], dll="'nvcuda' if WIN else 'cuda'", args=["-D__CUDA_API_VERSION_INTERNAL"], srcs=cudart_src, macros=False, prolog=["from tinygrad.helpers import WIN"])
+    case "nvrtc": return load("nvrtc", ["{}/include/nvrtc.h"], dll="'nvrtc'", paths=nv_lib_path, srcs=nvrtc_src, prolog=["import sysconfig"])
     case "nvjitlink": load("nvjitlink", [root/"extra/nvJitLink.h"], dll="'nvJitLink'", paths=nv_lib_path, prolog=["import sysconfig"])
     case "kfd": return load("kfd", [root/"extra/hip_gpu_driver/kfd_ioctl.h"])
     case "nv_570" | "nv_580":
@@ -78,7 +83,7 @@ def __getattr__(nm):
       *[f"{{}}/src/nvidia/inc/kernel/vgpu/{s}.h" for s in ["rpc_headers", "rpc_global_enums"]],
       "{}/src/common/uproc/os/common/include/libos_init_args.h", "{}/src/common/shared/msgq/inc/msgq/msgq_priv.h",
       "{}/src/nvidia/generated/g_rpc-structures.h", root/"extra/nv_gpu_driver/g_rpc-message-header.h", root/"extra/nv_gpu_driver/gsp_static_config.h",
-      root/"extra/nv_gpu_driver/vbios.h", root/"extra/nv_gpu_driver/pci_exp_table.h"
+      *[root/f"extra/nv_gpu_driver/{s}.h" for s in ["vbios", "pci_exp_table", "fw", "hs"]]
     ], args=[
       "-DRPC_MESSAGE_STRUCTURES", "-DRPC_STRUCTURES", "-include", "{}/src/common/sdk/nvidia/inc/nvtypes.h", "-I{}/src/nvidia/generated",
       "-I{}/src/common/inc", "-I{}/src/nvidia/inc", "-I{}/src/nvidia/interface/", "-I{}/src/nvidia/inc/kernel", "-I{}/src/nvidia/inc/libraries",
@@ -93,8 +98,6 @@ def __getattr__(nm):
       return load("io_uring", ["{}/liburing.h", "{}/usr/include/linux/io_uring.h", "{}/usr/include/asm-generic/unistd.h"],
                   args=["-I{}/usr/include"], srcs=[linux_headers_deb, liburing_src], rules=[('__NR', 'NR')],
                   preprocess=lambda path: subprocess.run(f"ar x {linux_headers_deb.split('/')[-1]} && tar xf data.tar.xz", cwd=path, shell=True, check=True))
-    case "ib": return load("ib", ["/usr/include/infiniband/verbs.h", "/usr/include/infiniband/verbs_api.h",
-                                  "/usr/include/infiniband/ib_user_ioctl_verbs.h", "/usr/include/rdma/ib_user_verbs.h"], dll="'ibverbs'", errno=True)
     case "llvm": return load("llvm", lambda: [system("llvm-config-20 --includedir")+"/llvm-c/**/*.h"], dll=llvm_lib,
                              args=lambda: system("llvm-config-20 --cflags").split(), recsym=True, prolog=["from tinygrad.helpers import WIN, OSX"])
     case "pci": return load("pci", ["{}/usr/include/linux/pci_regs.h"], srcs=linux_headers_deb,
@@ -117,7 +120,6 @@ def __getattr__(nm):
                                     *[f"{{}}/projects/rocr-runtime/runtime/hsa-runtime/inc/{s}.h" for s in [
                                         "hsa", "hsa_ext_amd", "amd_hsa_signal", "amd_hsa_queue", "amd_hsa_kernel_code",
                                         "hsa_ext_finalize", "hsa_ext_image", "hsa_ven_amd_aqlprofile"]]],
-      dll="[os.getenv('ROCM_PATH', '/opt/rocm')+'/lib/libhsa-runtime64.so', 'hsa-runtime64']",
       srcs=rocr_src, args=["-DLITTLEENDIAN_CPU"], prolog=["import os"])
     case "amdgpu_kd": return load("amdgpu_kd", lambda: [f"{system('llvm-config-20 --includedir')}/llvm/Support/AMDHSAKernelDescriptor.h"],
                                   args=lambda: system("llvm-config-20 --cflags").split() + ["-x", "c++"], recsym=True, macros=False)
@@ -152,8 +154,8 @@ def __getattr__(nm):
           *[f"python3 src/compiler/{s}_h.py > gen/{s.split('/')[-1]}.h" for s in ["nir/nir_opcodes", "nir/nir_builder_opcodes"]],
           *[f"python3 src/compiler/nir/nir_{s}_h.py --outdir gen" for s in ["intrinsics", "intrinsics_indices"]]]), cwd=path, shell=True, check=True),
   srcs="https://gitlab.freedesktop.org/mesa/mesa/-/archive/mesa-25.2.7/mesa-25.2.7.tar.gz",
-  dll="([] if DEV.renderer == 'LVP' else ['tinymesa']) + ['tinymesa_cpu']",
-  prolog=["from tinygrad.helpers import DEV", "import gzip, base64"],
+  dll=f"'tinymesa_cpu' if DEV.renderer == 'LVP' else 'tinymesa', {tinymesa_path}, emsg='pip install tinymesa==25.2.7.2'",
+  prolog=["from tinygrad.helpers import DEV", "import gzip, base64, platform, sysconfig, os"],
   epilog=lambda path: [system(f"{root}/extra/mesa/lvp_nir_options.sh {path}")])
     case "libclang":
       return load("libclang",

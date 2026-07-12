@@ -4,7 +4,7 @@ import os, multiprocessing, logging, pickle, sqlite3, difflib, warnings, functoo
 from dataclasses import replace
 from typing import Callable, Any
 
-ASSERT_DIFF = int((flag:="[pr]") in os.getenv("COMMIT_MESSAGE", flag) or flag in os.getenv("PR_TITLE", flag))
+ASSERT_DIFF = int((flag:="[PR]") in os.getenv("COMMIT_MESSAGE", flag) or flag in os.getenv("PR_TITLE", flag))
 if not int(os.getenv("ASSERT_PROCESS_REPLAY", "1")): ASSERT_DIFF = 0
 
 try:
@@ -48,9 +48,9 @@ def replay_to_program(p:UOp, ast:UOp, renderer:Renderer) -> tuple[str, str, tupl
     if sink_arg.beam: sink_arg = replace(sink_arg, opts_to_apply=p.src[0].arg.applied_opts)
     input_ast = ast.replace(arg=replace(sink_arg, name=p.src[0].arg.name))
   p2 = to_program(input_ast, renderer=renderer)
-  device = p.src[1].arg
+  device = renderer.target.device
   def to_str(ret:UOp) -> str:
-    src = ret.src[3].arg
+    src = next(x.arg for x in ret.src if x.op is Ops.SOURCE)
     # PYTHON renderer pickles UOps, first unpickle and decode here
     if device.startswith("PYTHON"): return "\n".join([str(x) for x in pickle.loads(base64.b64decode(src))])
     return src

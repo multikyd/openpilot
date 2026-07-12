@@ -133,7 +133,7 @@ For our loss function we will be using sparse categorical cross entropy loss. Th
 ```python
 def sparse_categorical_crossentropy(self, Y, ignore_index=-1) -> Tensor:
     loss_mask = Y != ignore_index
-    y_counter = Tensor.arange(self.shape[-1], dtype=dtypes.int32, requires_grad=False, device=self.device).unsqueeze(0).expand(Y.numel(), self.shape[-1])
+    y_counter = Tensor.arange(self.shape[-1], dtype=dtypes.int32).unsqueeze(0).expand(Y.numel(), self.shape[-1])
     y = ((y_counter == Y.flatten().reshape(-1, 1)).where(-1.0, 0) * loss_mask.reshape(-1, 1)).reshape(*Y.shape, self.shape[-1])
     return self.log_softmax().mul(y).sum() / loss_mask.sum()
 ```
@@ -165,17 +165,18 @@ from extra.datasets import fetch_mnist
 Now we have everything we need to start training our neural network.
 We will be training for 1000 steps with a batch size of 64.
 
-We use `with Tensor.train()` to set the internal flag `Tensor.training` to `True` during training.
+We use `with Context(TRAINING=1)` to enable training mode.
 Upon exit, the flag is restored to its previous value by the context manager.
 
 ```python
+from tinygrad import Context
 X_train, Y_train, X_test, Y_test = fetch_mnist()
 
-with Tensor.train():
+with Context(TRAINING=1):
   for step in range(1000):
     # random sample a batch
     samp = np.random.randint(0, X_train.shape[0], size=(64))
-    batch = Tensor(X_train[samp], requires_grad=False)
+    batch = Tensor(X_train[samp])
     # get the corresponding labels
     labels = Tensor(Y_train[samp])
 
@@ -213,7 +214,7 @@ with Timing("Time: "):
   for step in range(1000):
     # random sample a batch
     samp = np.random.randint(0, X_test.shape[0], size=(64))
-    batch = Tensor(X_test[samp], requires_grad=False)
+    batch = Tensor(X_test[samp])
     # get the corresponding labels
     labels = Y_test[samp]
 
@@ -257,7 +258,7 @@ with Timing("Time: "):
   for step in range(1000):
     # random sample a batch
     samp = np.random.randint(0, X_test.shape[0], size=(64))
-    batch = Tensor(X_test[samp], requires_grad=False)
+    batch = Tensor(X_test[samp])
     # get the corresponding labels
     labels = Y_test[samp]
 

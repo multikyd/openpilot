@@ -3,11 +3,12 @@ import hashlib, random, unittest
 from tinygrad import Tensor, Device, dtypes
 from tinygrad.helpers import DEV
 from test.helpers import slow
-from tinygrad.device import is_dtype_supported
 from tinygrad.uop.ops import UOp
 from tinygrad.engine.jit import TinyJit
 
-@unittest.skipUnless(is_dtype_supported(dtypes.uint8) and is_dtype_supported(dtypes.uint64), "Device must support uint8 and uint64")
+supported_dtypes = Device[Device.DEFAULT].renderer.supported_dtypes()
+
+@unittest.skipUnless(dtypes.uint8 in supported_dtypes and dtypes.uint64 in supported_dtypes, "Device must support uint8 and uint64")
 @unittest.skipIf(DEV.interface.startswith("MOCK") and Device.DEFAULT == "NV", "crashes in NV CI")
 class TestHashing(unittest.TestCase):
   def _python_hash_1mb(self, data:bytes):
@@ -21,7 +22,7 @@ class TestHashing(unittest.TestCase):
     out = Tensor(b"abc").hash()
     self.assertEqual(bytes(out.data()), expected)
 
-@unittest.skipUnless(is_dtype_supported(dtypes.uint8) and is_dtype_supported(dtypes.uint64), "Device must support uint8 and uint64")
+@unittest.skipUnless(dtypes.uint8 in supported_dtypes and dtypes.uint64 in supported_dtypes, "Device must support uint8 and uint64")
 @unittest.skipIf(DEV.interface.startswith("MOCK") and Device.DEFAULT == "NV", "crashes in NV CI")
 class TestKeccak(unittest.TestCase):
   def setUp(self) -> None: random.seed(1337)
@@ -32,11 +33,11 @@ class TestKeccak(unittest.TestCase):
       out_shape = Tensor.randint(*s[i:], high=255, dtype=dtypes.uint8).keccak().shape
       self.assertTupleEqual(s[i:-1], out_shape[:-1])
 
-  @unittest.skipUnless(Device.DEFAULT=="METAL", "slow")
+  @slow
   def test_sha3_224(self): self._test_preset("sha3_224", [143, 144])
-  @unittest.skipUnless(Device.DEFAULT=="METAL", "slow")
+  @slow
   def test_sha3_256(self): self._test_preset("sha3_256", [135, 136])
-  @unittest.skipUnless(Device.DEFAULT=="METAL", "slow")
+  @slow
   def test_shake_128(self): self._test_preset("shake_128", [167, 168], lambda d: hashlib.shake_128(d).digest(16))
 
   def _test_preset(self, name: str, special_sizes: list[int], hasher: Callable[[bytes], bytes] | None = None):

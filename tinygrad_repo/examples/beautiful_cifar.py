@@ -67,8 +67,8 @@ class ConvGroup:
     self.conv2 = nn.Conv2d(channels_out, channels_out, kernel_size=3, padding=1, bias=False)
     self.norm1 = nn.BatchNorm(channels_out, track_running_stats=False, eps=1e-12, momentum=hyp['net']['batch_norm_momentum'])
     self.norm2 = nn.BatchNorm(channels_out, track_running_stats=False, eps=1e-12, momentum=hyp['net']['batch_norm_momentum'])
-    cast(Tensor, self.norm1.weight).requires_grad = False
-    cast(Tensor, self.norm2.weight).requires_grad = False
+    cast(Tensor, self.norm1.weight).is_param_(False)
+    cast(Tensor, self.norm2.weight).is_param_(False)
   def __call__(self, x:Tensor) -> Tensor:
     x =    self.norm1(self.conv1(x).max_pool2d().float()).cast(dtypes.default_float).quick_gelu()
     return self.norm2(self.conv2(x).float()).cast(dtypes.default_float).quick_gelu() + x
@@ -122,7 +122,7 @@ if __name__ == "__main__":
     return ret.mul(hyp['opt']['loss_scale_scaler']*loss_batchsize_scaler).sum().div(hyp['opt']['loss_scale_scaler'])
 
   @TinyJit
-  @Tensor.train()
+  @Context(TRAINING=1)
   def train_step(idxs:Tensor) -> Tensor:
     X, Y = X_train[idxs], Y_train[idxs]
     if len(GPUS) > 1:

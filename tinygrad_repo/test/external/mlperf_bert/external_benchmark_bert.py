@@ -41,8 +41,8 @@ class BenchmarkBertTrain(unittest.TestCase):
     with Context(TRACK_MATCH_STATS=0): Tensor.realize(*[t.assign(t.detach().contiguous()) for t in get_parameters(optim)])
 
     JITCNT = getenv("JITCNT", 1)
-    Tensor.training = True
     @TinyJit
+    @Context(TRAINING=1)
     def step(inputs):
       optim.zero_grad()
       for i in inputs: i.grad = None
@@ -59,7 +59,7 @@ class BenchmarkBertTrain(unittest.TestCase):
     best_tm = None
     flops, mem_used, mem, kernels = None, None, None, None
     for _ in range(CNT):
-      with Context(TRACK_MATCH_STATS=0): inputs = [Tensor.randn(*shape, requires_grad=False).realize() for shape in input_shapes]
+      with Context(TRACK_MATCH_STATS=0): inputs = [Tensor.randn(*shape).realize() for shape in input_shapes]
       GlobalCounters.reset()
 
       st = time.perf_counter()

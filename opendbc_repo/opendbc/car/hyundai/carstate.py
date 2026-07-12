@@ -11,7 +11,7 @@ from opendbc.car.hyundai.hyundaicanfd import CanBus
 from opendbc.car.hyundai.values import HyundaiFlags, CAR, DBC, Buttons, CarControllerParams, HyundaiExtFlags
 from opendbc.car.interfaces import CarStateBase
 
-from cereal import car
+from opendbc.car.structs import car
 from openpilot.common.params import Params
 
 from datetime import datetime
@@ -252,8 +252,6 @@ class CarState(CarStateBase):
 
       ret.pcmCruiseGap = cp_cruise.vl["SCC11"]["TauGapSet"]
 
-    # TODO: Find brake pressure
-    ret.brake = 0
     if not self.CP.flags & HyundaiFlags.CC_ONLY_CAR:
       ret.brakePressed = cp.vl["TCS13"]["DriverOverride"] == 2  # 2 includes regen braking by user on HEV/EV
       ret.brakeHoldActive = cp.vl["TCS15"]["AVH_LAMP"] == 2  # 0 OFF, 1 ERROR, 2 ACTIVE, 3 READY

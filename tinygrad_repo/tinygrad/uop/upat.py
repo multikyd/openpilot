@@ -21,11 +21,15 @@ def _get_clause(self:UPat, base:UOp, depth=0) -> UOp:
     else: and_clause.append(UOp(Ops.CUSTOM, src=(base, UOp(Ops.BIND, arg=self.arg)), arg="{0}.arg == {1}"))
   if self.strict_length or self.required_len > 0:
     and_clause.append(UOp(Ops.CUSTOM, src=(base,), arg=("len({0}.src)"+(" == " if self.strict_length else " >= ")+str(self.required_len))))
-  if self.name is not None: and_clause.append(UOp(Ops.STORE, src=(UOp(Ops.DEFINE_VAR, arg=self.name), base)))
+  if self.name is not None: and_clause.append(UOp(Ops.STORE, src=(UOp(Ops.CUSTOMI, arg=self.name), base)))
   if self.match_dtype is not None:
     if len(self.match_dtype) > 1:
       and_clause.append(UOp(Ops.CUSTOM, src=(base, UOp(Ops.BIND, arg=tuple(self.match_dtype))), arg="({0}.dtype in {1} or {0}.dtype._scalar in {1})"))
     else: and_clause.append(UOp(Ops.CUSTOM, src=(base, UOp(Ops.BIND, arg=self.match_dtype[0])), arg="({0}.dtype == {1} or {0}.dtype._scalar == {1})"))
+  if self.match_tag is not None:
+    if len(self.match_tag) > 1:
+      and_clause.append(UOp(Ops.CUSTOM, src=(base, UOp(Ops.BIND, arg=tuple(self.match_tag))), arg="{0}.tag in {1}"))
+    else: and_clause.append(UOp(Ops.CUSTOM, src=(base, UOp(Ops.BIND, arg=self.match_tag[0])), arg="{0}.tag == {1}"))
   if self.src is not None:
     # single match
     if len(self.src) == 1 and isinstance(self.src[0], tuple):
@@ -122,7 +126,7 @@ def _final_render(x:UOp, has_ctx:bool, depth=1) -> list[str]:
       assert len(or_pieces) == 0 and len(s.src) >= 1
       for ss in s.src: or_pieces.extend(_final_render(ss, has_ctx, depth+1))
     elif s.op is Ops.STORE:
-      assert s.src[0].op is Ops.DEFINE_VAR and s.src[1].op is Ops.NOOP
+      assert s.src[0].op is Ops.CUSTOMI and s.src[1].op is Ops.NOOP
       store_pieces.append(f"{s.src[0].arg}={s.src[1].arg}")
     elif s.op is Ops.NOOP: and_pieces.append(s.arg)
     else: raise UPatCompileError(f"can't compile this {s}")

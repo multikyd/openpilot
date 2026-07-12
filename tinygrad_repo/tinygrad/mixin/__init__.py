@@ -1,97 +1,175 @@
 from __future__ import annotations
-import functools, itertools
+import functools, itertools, math, string
 from typing import TYPE_CHECKING, Callable, Self, Sequence, Literal, get_args
 from tinygrad.mixin.elementwise import ElementwiseMixin
 from tinygrad.mixin.movement import MovementMixin
 from tinygrad.mixin.reduce import ReduceMixin
 from tinygrad.uop import Ops
 from tinygrad.uop.ops import _broadcast_shape, resolve, smax, smin, identity_element
-from tinygrad.dtype import ConstType, DType, DTypeLike, Invalid, InvalidType, PtrDType, PyConst, dtypes, least_upper_dtype, sum_acc_dtype, to_dtype
-from tinygrad.helpers import all_int, argfix, ceildiv, flatten, flat_to_grouped, make_tuple, prod, resolve_pool_pads, round_up
+from tinygrad.dtype import ConstType, DType, DTypeLike, Invalid, PtrDType, PyConst, dtypes, least_upper_dtype, sum_acc_dtype, to_dtype
+from tinygrad.helpers import all_int, argfix, argsort, ceildiv, flatten, flat_to_grouped, fully_flatten, get_shape, make_tuple, merge_dicts, prod
+from tinygrad.helpers import resolve_pool_pads, round_up, IMAGE, FLOAT16, WINO
 
 if TYPE_CHECKING:
-  from tinygrad.uop.ops import sint
+  from tinygrad.uop.ops import sint, UOp
 
 ReductionStr = Literal["mean", "sum", "none"]
 
 
 class OpMixin(ElementwiseMixin, ReduceMixin):
-  @staticmethod
-  def unique_const(fill_value:ConstType, **kwargs): raise NotImplementedError("creation helpers are only supported on Tensor and UOp")
+  def data(self) -> memoryview: raise NotImplementedError("data requires Tensor realization to host memory")
+
+  def item(self) -> PyConst:
+    """
+    Returns the value of this tensor as a standard Python number.
+
+    ```python exec="true" source="above" session="tensor" result="python"
+    t = Tensor(42)
+    print(t.item())
+    ```
+    """
+    assert self.numel() == 1, "must have one element for item"
+    return self.data()[(0,) * len(self.shape)]
+
+  def __getitem__(self, indices) -> Self:
+    """
+    Retrieves a sub-tensor using indexing.
+
+    Supported Index Types: `int | slice | Tensor | None | list | tuple | Ellipsis`
+
+    Examples:
+    ```python exec="true" source="above" session="tensor" result="python"
+    t = Tensor.arange(12).reshape(3, 4)
+    print(t.numpy())
+    ```
+
+    - Int Indexing: Select an element or sub-tensor using integers for each dimension.
+      ```python exec="true" source="above" session="tensor" result="python"
+      print(t[1, 2].numpy())
+      ```
+
+    - Slice Indexing: Select a range of elements using slice notation (`start:end:stride`).
+      ```python exec="true" source="above" session="tensor" result="python"
+      print(t[0:2, ::2].numpy())
+      ```
+
+    - Tensor Indexing: Use another tensor as indices for advanced indexing. Using `tuple` or `list` here also works.
+      ```python exec="true" source="above" session="tensor" result="python"
+      print(t[Tensor([2, 0, 1]), Tensor([1, 2, 3])].numpy())
+      ```
+
+    - `None` Indexing: Add a new dimension to the tensor.
+      ```python exec="true" source="above" session="tensor" result="python"
+      print(t[:, None].shape)
+      ```
+
+    NOTE: Out-of-bounds indexing results in a value of `0`.
+    ```python exec="true" source="above" session="tensor" result="python"
+    t = Tensor([1, 2, 3])
+    print(t[Tensor([4, 3, 2])].numpy())
+    ```
+    """
+    return self._getitem(indices)
+
+  def _getitem(self, indices, v=None) -> Self:
+    from tinygrad.uop.ops import UOp
+    def is_adv(i): return isinstance(i,(list,tuple)) or (isinstance(i,type(self)) and (not isinstance(i,UOp) or i.shape != ()))
+    # wrap single index into a list
+    if (isinstance(indices, list) and all_int(indices)) or not isinstance(indices, (tuple, list)): indices = [indices]
+    indices_parsed, dim = [], 0
+    for index in self._normalize_indices(list(indices)):
+      size = 1 if index is None else self.shape[dim]
+      parsed = {"size":size, "boundary":(0, size), "stride":1, "collapse_dim":False}
+      if isinstance(index,(list,tuple)):
+        flat = fully_flatten(index)
+        inferred = dtypes.bool if (flat and all(isinstance(s,bool) for s in flat)) else \
+          (dtypes.default_int if flat and all_int(flat) else dtypes.default_float)
+        if not dtypes.is_int(inferred): raise IndexError(f"{index=} contains non-int element")
+        index = self._wrap_uop(UOp._frompy([i+size if i<0 else i for i in flat], inferred, self.device)).reshape(get_shape(index))
+      elif is_adv(index):
+        if not dtypes.is_int(index.dtype): raise IndexError(f"index dtype {index.dtype} is not supported")
+        if index.device is not None and self.device is not None and index.device != self.device:
+          raise RuntimeError(f"expected index and self on the same device, {index.device=}, {self.device=}")
+        assert isinstance(size, int), "size must be an int"
+        index = (index < 0).where(index+size, index)  # treat negative index values
+      else: parsed = self._parse_view_index(index, size)
+      indices_parsed.append({**parsed, "index":index})
+      if index is not None: dim += 1
+
+    # apply view ops then dim injection (None) and collapse (int)
+    x = self._apply_view_ops(mops := [p for p in indices_parsed if p["index"] is not None])
+    x_dims = [p for p in indices_parsed if not p["collapse_dim"]]
+    x = x.reshape(tuple(p["size"] for p in x_dims))
+
+    # tensor indexing
+    if tops := [(d, p) for d, p in enumerate(x_dims) if is_adv(p['index'])]:
+      dims, tensors, masks = [d for d, _ in tops], [p['index'] for _, p in tops], []
+      big_shape = _broadcast_shape(*(t.shape for t in tensors))
+
+      # consecutive tensor indices with int shapes: use linear indexing instead of one-hot masks
+      consecutive = dims == list(range(dims[0], dims[0] + len(dims)))
+      if v is None and len(dims) > 1 and consecutive and all_int(ishp := tuple(x.shape[d] for d in dims)):
+        strides = tuple(prod(ishp[i+1:]) for i in range(len(dims)))
+        try: linear_idx = type(self).usum(*[t._broadcast_to(big_shape) * s for t, s in zip(tensors, strides)])
+        except ValueError as err: raise IndexError(f"cannot broadcast indices: {err}") from err
+        valid = type(self).uprod(*[(t >= 0) & (t < s) for t, s in zip(tensors, ishp)])
+        pre, post = x.shape[:dims[0]], x.shape[dims[-1]+1:]
+        x = x.reshape(pre + (prod(ishp),) + post)[tuple([slice(None)] * len(pre)) + (valid.where(linear_idx, 0),)]
+        return valid.reshape((1,) * len(pre) + big_shape + (1,) * len(post)).where(x, 0)
+
+      pre_reduce_shape = x.shape[:dims[0]] + big_shape + x.shape[dims[0]:]
+
+      # create index masks
+      for dim, tensor in zip(dims, tensors):
+        try: i = tensor.reshape(tensor.shape + (1,)*(x.ndim - dims[0])).expand(pre_reduce_shape)
+        except ValueError as err: raise IndexError(f"cannot broadcast indices: {err}") from err
+        masks.append(i._one_hot_along_dim(num_classes=x.shape[dim], dim=(dim - x.ndim)))
+
+      # reduce masks to 1 mask
+      mask = type(self).uprod(*masks)
+
+      # inject 1's for the extra dims added in create masks
+      reshape_arg = x.shape[:dims[0]] + (1,) * len(big_shape) + x.shape[dims[0]:]
+      # sum reduce the extra dims introduced in create masks
+      x_pre = x  # save collapsed shape for advanced setitem
+      x = (mask.where(x.reshape(reshape_arg), 0)).sum(sum_axis:=tuple(d + len(big_shape) for d in dims), dtype=x.dtype)
+
+      # special permute case
+      if (permuted := dims[0] != 0 and len(dims) != 1 and tuple(dims) != tuple(range(dims[0], dims[-1]+1))):
+        mask, x = (y.permute(*range(dims[0], dims[0]+len(big_shape)), *range(0, dims[0]), *range(dims[0]+len(big_shape), y.ndim)) for y in (mask, x))
+
+      if v is None: return x  # advanced getitem
+      # advanced setitem: resolve tensor dims in collapsed space, then fall through to basic setitem path
+      vb = v.cast(self.dtype)._broadcast_to(_broadcast_shape(x.shape, v.shape))
+      for dim in sum_axis: vb = vb.unsqueeze(dim)  # add back reduced dims from sum
+      start = dims[0] if not permuted else 0
+      vb = x_pre._masked_merge(vb, mask, tuple(range(start, start + len(big_shape))))
+    elif v is None: return x  # basic getitem
+    # basic setitem: broadcast v, reshape to self.ndim (unsqueeze int dims, squeeze None dims)
+    else: vb = v.cast(self.dtype)._broadcast_to(x.shape)
+    vb = vb.reshape(tuple(1 if p['collapse_dim'] else p['size'] for p in indices_parsed if p['index'] is not None))
+    per_dim = []
+    for d, m in enumerate(mops):
+      (s, e), st = m['boundary'], abs(m['stride'])
+      if st != 1 and vb.shape[d] > 1:  # un-stride: interleave with zeros
+        vb = vb.unsqueeze(d+1)
+        vb = vb.pad_to(tuple(st if j == d+1 else None for j in range(vb.ndim)))
+        vb = vb.reshape(vb.shape[:d] + (vb.shape[d]*vb.shape[d+1],) + vb.shape[d+2:])
+        vb = vb.shrink_to(tuple(e-s if j == d else None for j in range(self.ndim)))
+      idx = type(self).arange(self.shape[d]).reshape([1]*d + [self.shape[d]] + [1]*(self.ndim - d - 1))
+      per_dim.append((idx >= s) & (idx < e) & (((e-1-idx) if m['stride'] < 0 else (idx-s)) % st == 0))
+    vb = vb.flip(tuple(d for d, m in enumerate(mops) if m['stride'] < 0))
+    vb = vb.pad(tuple((m['boundary'][0], self.shape[d] - m['boundary'][1]) for d, m in enumerate(mops)))
+    return (type(self).uprod(*per_dim) if per_dim else type(self).const(dtypes.bool, True)).where(vb, self)
 
   @classmethod
-  def full(cls, shape:tuple[sint, ...], fill_value:ConstType, **kwargs) -> Self:
-    """
-    Creates a tensor with the given shape, filled with the given value.
-
-    You can pass in `dtype` and `device` keyword arguments to control the data type and device of the tensor.
-    Additionally, all other keyword arguments are passed to the constructor of the tensor.
-
-    ```python exec="true" source="above" session="tensor" result="python"
-    print(Tensor.full((2, 3), 42).numpy())
-    ```
-    ```python exec="true" source="above" session="tensor" result="python"
-    print(Tensor.full((2, 3), False).numpy())
-    ```
-    """
-    return cls.unique_const(fill_value, **kwargs).reshape((1,)*len(new_shape := argfix(shape))).expand(new_shape)
-
-  @classmethod
-  def invalids(cls, *shape, **kwargs) -> Self:
-    """
-    Creates a tensor with the given shape, filled with Invalid.
-
-    This is an alternative to Tensor.empty when you want an "anonymous" buffer.
-
-    Eventually Tensor.empty will be replaced by this.
-    """
-    return cls.full(argfix(*shape), Invalid, **kwargs)
-
-  @classmethod
-  def zeros(cls, *shape, **kwargs) -> Self:
-    """
-    Creates a tensor with the given shape, filled with zeros.
-
-    You can pass in `dtype` and `device` keyword arguments to control the data type and device of the tensor.
-    Additionally, all other keyword arguments are passed to the constructor of the tensor.
-
-    ```python exec="true" source="above" session="tensor" result="python"
-    print(Tensor.zeros(2, 3).numpy())
-    ```
-    ```python exec="true" source="above" session="tensor" result="python"
-    print(Tensor.zeros(2, 3, dtype=dtypes.int32).numpy())
-    ```
-    """
-    return cls.full(argfix(*shape), 0.0, **kwargs)
-
-  @classmethod
-  def ones(cls, *shape, **kwargs) -> Self:
-    """
-    Creates a tensor with the given shape, filled with ones.
-
-    You can pass in `dtype` and `device` keyword arguments to control the data type and device of the tensor.
-    Additionally, all other keyword arguments are passed to the constructor of the tensor.
-
-    ```python exec="true" source="above" session="tensor" result="python"
-    print(Tensor.ones(2, 3).numpy())
-    ```
-    ```python exec="true" source="above" session="tensor" result="python"
-    print(Tensor.ones(2, 3, dtype=dtypes.int32).numpy())
-    ```
-    """
-    return cls.full(argfix(*shape), 1.0, **kwargs)
-
-  @classmethod
-  def arange(cls, start, stop=None, step=1, **kwargs) -> Self:
+  def arange(cls, start, stop=None, step=1, dtype:DTypeLike|None=None) -> Self:
     """
     Returns a 1-D tensor of size `ceil((stop - start) / step)` with values from `[start, stop)`, with spacing between values given by `step`.
 
     If `stop` is not specified, values are generated from `[0, start)` with the given `step`.
 
     If `stop` is specified, values are generated from `[start, stop)` with the given `step`.
-
-    You can pass in `dtype` and `device` keyword arguments to control the data type and device of the tensor.
-    Additionally, all other keyword arguments are passed to the constructor of the tensor.
 
     ```python exec="true" source="above" session="tensor" result="python"
     print(Tensor.arange(5).numpy())
@@ -107,20 +185,17 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     ```
     """
     if stop is None: stop, start = start, 0
-    dtype = kwargs.pop("dtype", dtypes.default_float if any(isinstance(x, float) for x in (start, stop, step)) else dtypes.default_int)
+    if dtype is None: dtype = dtypes.default_float if any(isinstance(x, float) for x in (start, stop, step)) else dtypes.default_int
     lo, hi = (start, stop-step) if step > 0 else (stop-step, start)
     if lo < (dt:=to_dtype(dtype)).min or dt.max < hi: raise OverflowError(f"arange [{start}, {stop}) is not representable in dtype {dtype}")
     # NOTE: this matches numpy, torch raises RuntimeError if stop-start and step have different signs
-    if (output_len:=ceildiv(stop-start, step)) <= 0: return cls.full((0,), 0, dtype=dtype, **kwargs)
-    return (cls.full((output_len,), step, dtype=dtype, **kwargs)._cumalu(0, Ops.ADD) + (start - step)).cast(dtype)
+    if (output_len:=ceildiv(stop-start, step)) <= 0: return cls.full((0,), 0, dtype=dtype, buffer=False)
+    return (cls.full((output_len,), step, dtype=dtype, buffer=False)._cumalu(0, Ops.ADD) + (start - step)).cast(dtype)
 
   @classmethod
-  def linspace(cls, start:int|float, stop:int|float, steps:int, **kwargs) -> Self:
+  def linspace(cls, start:int|float, stop:int|float, steps:int, dtype:DTypeLike|None=None) -> Self:
     """
     Returns a 1-D tensor of `steps` evenly spaced values from `start` to `stop`, inclusive.
-
-    You can pass in `dtype` and `device` keyword arguments to control the data type and device of the tensor.
-    Additionally, all other keyword arguments are passed to the constructor of the tensor.
 
     ```python exec="true" source="above" session="tensor" result="python"
     print(Tensor.linspace(0, 10, 5).numpy())
@@ -130,20 +205,31 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     ```
     """
     if steps < 0: raise ValueError("number of steps must be non-negative")
-    if (dtype := to_dtype(kwargs.pop("dtype", dtypes.default_float))) == dtypes.bool: raise ValueError("linspace with bool dtype is not supported")
-    if steps == 1: return cls.full((1,), start, dtype=dtype, **kwargs)
-    return (start + cls.arange(steps, dtype=dtypes.default_float, **kwargs) * ((stop - start) / (steps - 1))).cast(dtype)
+    if (dtype := to_dtype(dtype or dtypes.default_float)) == dtypes.bool: raise ValueError("linspace with bool dtype is not supported")
+    if steps == 1: return cls.full((1,), start, dtype=dtype, buffer=False)
+    return (start + cls.arange(steps, dtype=dtypes.default_float) * ((stop - start) / (steps - 1))).cast(dtype)
 
   @classmethod
-  def eye(cls, n:int, m:int|None=None, dtype:DTypeLike|None=None, device:str|tuple[str, ...]|None=None) -> Self:
+  def eye(cls, n:int, m:int|None=None, dtype:DTypeLike|None=None) -> Self:
+    """
+    Returns a 2-D tensor with `n` rows and `m` columns, with ones on the diagonal and zeros elsewhere.
+
+    ```python exec="true" source="above" session="tensor" result="python"
+    print(Tensor.eye(3).numpy())
+    ```
+
+    ```python exec="true" source="above" session="tensor" result="python"
+    print(Tensor.eye(2, 4).numpy())
+    ```
+    """
     m_ = n if m is None else m
     if n < 0 or m_ < 0: raise ValueError(f"cannot have negative {n=}, {m_=}")
     out_dtype = to_dtype(dtype) if dtype is not None else dtypes.default_float
-    return cls.arange(n, device=device).unsqueeze(-1).eq(cls.arange(m_, device=device)).cast(out_dtype)
+    return cls.arange(n).unsqueeze(-1).eq(cls.arange(m_)).cast(out_dtype)
 
   @classmethod
-  def _tri(cls, r:sint, c:sint, diagonal=0, device:str|tuple[str, ...]|None=None) -> Self:
-    return cls.arange(r, device=device).unsqueeze(-1) + diagonal <= cls.arange(c, device=device)
+  def _tri(cls, r:sint, c:sint, diagonal=0) -> Self:
+    return cls.arange(r).unsqueeze(-1) + diagonal <= cls.arange(c)
 
   def triu(self, diagonal:sint=0) -> Self:
     """
@@ -166,7 +252,7 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     print(t.triu(diagonal=-1).numpy())
     ```
     """
-    return self._tri(self.shape[-2], self.shape[-1], diagonal, self.device).where(self, self.zeros_like())
+    return self._tri(self.shape[-2], self.shape[-1], diagonal).where(self, self.const_like(0))
 
   def tril(self, diagonal:sint=0) -> Self:
     """
@@ -189,39 +275,9 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     print(t.tril(diagonal=-1).numpy())
     ```
     """
-    return self._tri(self.shape[-2], self.shape[-1], diagonal+1, self.device).where(self.zeros_like(), self)
+    return self._tri(self.shape[-2], self.shape[-1], diagonal+1).where(self.const_like(0), self)
 
-  # ***** random *****
-
-  @staticmethod
-  def _threefry_random_bits(key, counts0, counts1):
-    x = (counts1.cast(dtypes.uint64) << 32) | counts0.cast(dtypes.uint64)
-    x = x.threefry((key[1]._broadcast_to(x.shape).cast(dtypes.uint64) << 32) | key[0]._broadcast_to(x.shape).cast(dtypes.uint64))
-    return (x & 0xffffffff).cast(dtypes.uint32).cat(((x >> 32) & 0xffffffff).cast(dtypes.uint32))
-
-  @classmethod
-  def random_bits(cls, key:Self, counter:Self, num:int) -> Self:
-    low, high = counter[0:1], counter[1:2]
-    bits = []
-    for i in range(0, num, dtypes.uint32.max):
-      chunk_num = min(num - i, dtypes.uint32.max)
-      c_low = low + (i & 0xffffffff)
-      c_high = high + (i >> 32) + (c_low < low).cast(dtypes.uint32)
-      new_key = cls._threefry_random_bits(key, c_low, c_high)
-      counts0 = cls.arange(ceildiv(chunk_num, 2), device=key.device, dtype=dtypes.uint32)
-      counts1 = counts0 + ceildiv(chunk_num, 2)
-      bits.append(cls._threefry_random_bits(new_key, counts0, counts1)[:chunk_num])
-    return bits[0].cat(*bits[1:])
-
-  @staticmethod
-  def _bits_to_rand(bits, shape:tuple[int, ...], dtype:DType):
-    _, nmant = dtypes.finfo(dtype)
-    uint_dtype = {1: dtypes.uint8, 2: dtypes.uint16, 4: dtypes.uint32, 8: dtypes.uint64}[dtype.itemsize]
-    uint_bits = bits.bitcast(uint_dtype)
-    float_one_bits = uint_bits.ones_like(dtype=dtype).bitcast(uint_dtype)
-    return uint_bits.rshift(dtype.bitsize - nmant).bitwise_or(float_one_bits).bitcast(dtype)[:prod(shape)].sub(1).reshape(shape)
-
-  def _pad_constant(self, pX, value:float) -> Self:
+  def _pad_constant(self, pX, value:ConstType) -> Self:
     # shrink first for negative pads, then pad with only non-negative values
     pX = tuple((0, 0) if p is None else p for p in pX)
     has_neg = not all(resolve(p >= 0) for p in flatten(pX))
@@ -229,13 +285,15 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     pads = tuple((smax(pB,0), smax(pA,0)) for pB,pA in pX) if has_neg else pX
     base = MovementMixin.pad(X, pads)
     if value == 0: return base
-    base = base.cast(least_upper_dtype(base.dtype, dtypes.from_py(value)))
-    return base + MovementMixin.pad(X.ones_like(), pads).cast(dtypes.bool).where(base.zeros_like(), base.full_like(value))
+    if value is not Invalid: base = base.cast(least_upper_dtype(base.dtype, dtypes.from_py(value)))
+    return MovementMixin.pad(X.const_like(1).cast(dtypes.bool), pads).where(base, base.const_like(value))
 
   def _pad_circular(self, pX:tuple[tuple[sint, sint], ...]) -> Self:
-    if any(pB>sh or pA>sh for (pB,pA),sh in zip(pX, self.shape)): raise ValueError('Padding value causes wrapping around more than once.')
-    if any(pB<0 or pA<0 for pB,pA in pX): raise NotImplementedError("Negative pads with circular pads is not supported")
-    orig_shape, X = self.shape, self.repeat(tuple(1 + bool(pB) + bool(pA) for pB,pA in pX))
+    # shrink first for negative pads, then wrap the non-negative remainder
+    X = self.shrink(tuple((-smin(pB,0), smin(pA+sh,sh)) for (pB,pA),sh in zip(pX, self.shape)))
+    pX = tuple((smax(pB,0), smax(pA,0)) for pB,pA in pX)
+    if any(pB>sh or pA>sh for (pB,pA),sh in zip(pX, X.shape)): raise ValueError('Padding value causes wrapping around more than once.')
+    orig_shape, X = X.shape, X.repeat(tuple(1 + bool(pB) + bool(pA) for pB,pA in pX))
     return X.shrink(tuple((0 if pB == 0 else osh-pB, xsh if pA == 0 else xsh-osh+pA) for (pB,pA),osh,xsh in zip(pX, orig_shape, X.shape)))
 
   def _pad_reflect_replicate(self, pX:tuple[tuple[sint, sint], ...], mode:str) -> Self:
@@ -243,7 +301,7 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     for d,(pB,pA) in enumerate(pads):
       if mode == "reflect":
         if pB >= (s:=X.shape[d]) or pA>=s: raise ValueError(f"Padding ({pB}, {pA}) should be less than the input size={s} for dim={d}.")
-        slcB, slcA = slice(pB,0,-1), slice(s-2 if s-2>=0 else None, s-2-pA if s-2-pA>=0 else None, -1)
+        slcB, slcA = slice(pB,0,-1), slice(s-2, s-2-pA if s-2-pA>=0 else None, -1)
         xB, xA = (X[[slc if i == d else slice(None) for i in range(X.ndim)]] if p > 0 else None for slc, p in ((slcB, pB), (slcA, pA)))
       else:
         shrB, shrA = tuple((0,1) if i==d else None for i in range(X.ndim)), tuple((X.shape[i]-1,X.shape[i]) if i==d else None for i in range(X.ndim))
@@ -253,7 +311,7 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     # shrink after for negative pads (reflection/replication must see full data first)
     return X.shrink(tuple((-min(pB,0), min(pA+s,s)) for (pB,pA),s in zip(pX, X.shape)))
 
-  def pad(self, padding:Sequence[sint]|Sequence[tuple[sint, sint]|None], mode:str="constant", value:float=0.0) -> Self:
+  def pad(self, padding:Sequence[sint]|Sequence[tuple[sint, sint]|None], mode:str="constant", value:ConstType=0.0) -> Self:
     """
     Returns a tensor with padding applied based on the input `padding`.
 
@@ -299,11 +357,7 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     if mode in {"reflect", "replicate"}: return self._pad_reflect_replicate(pX, mode)
     raise NotImplementedError(f"{mode=} is not supported")
 
-  def _ufix_keep_dtype(self, x) -> bool:
-    # matches Tensor scalar-wrapping behavior: keep self.dtype for float self, or for int self with int/Invalid scalar
-    return dtypes.is_float(self.dtype) or (dtypes.is_int(self.dtype) and isinstance(x, (int, InvalidType)))
-
-  def _broadcasted(self, y, reverse=False) -> tuple[Self, Self]:
+  def _broadcasted(self, y:Self|ConstType|UOp, reverse:bool=False) -> tuple[Self, Self]:
     if not isinstance(y, type(self)): y = self.ufix(y)
     x, y = (self, y) if not reverse else (y, self)
     # ValueError: unsized ptr has shape (-1,) which can't broadcast; RuntimeError: shape mismatch
@@ -314,10 +368,6 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     # ptr dtypes aren't in the promo lattice
     if x.dtype == y.dtype or any(isinstance(d, PtrDType) for d in (x.dtype, y.dtype)): return x, y
     return x.cast(out_dtype := least_upper_dtype(x.dtype, y.dtype)), y.cast(out_dtype)
-
-  def _binop(self, op:Ops, x, reverse:bool) -> Self:
-    lhs, rhs = self._broadcasted(x, reverse)
-    return lhs.alu(op, rhs)
 
   def dot(self, w:Self, dtype:DTypeLike|None=None) -> Self:
     """
@@ -338,6 +388,7 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     print(a.dot(b).numpy())
     ```
     """
+    if IMAGE: return self.image_dot(w, dtype)
     x, dx, dw = self, self.ndim, w.ndim
     if not (dx > 0 and dw > 0): raise RuntimeError(f"both tensors need to be at least 1D, got {dx}D and {dw}D")
     if x.shape[-1] != w.shape[axis_w:=-min(w.ndim,2)]: raise RuntimeError(f"cannot dot {x.shape} and {w.shape}")
@@ -362,6 +413,69 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
 
   def __matmul__(self, x:Self) -> Self: return self.matmul(x)
   def __rmatmul__(self, x:Self) -> Self: return self.matmul(x, True)
+
+  @classmethod
+  def einsum(cls, formula:str, *operands:Self|Sequence[Self], dtype:DTypeLike|None=None) -> Self:
+    """
+    Sums the product of the elements of the input tensors according to a formula based on the Einstein summation convention.
+
+    See: https://pytorch.org/docs/stable/generated/torch.einsum.html
+
+    ```python exec="true" source="above" session="tensor" result="python"
+    x = Tensor([[1, 2], [3, 4]])
+    y = Tensor([[5, 6], [7, 8]])
+    print(Tensor.einsum("ij,ij->", x, y).numpy())
+    ```
+    """
+    xs, formula = list(argfix(*operands)), formula.replace(" ", "")
+    # expand ellipsis to letters, determine output
+    if "..." in formula:
+      ell, lhs = "".join(c for c in string.ascii_letters if c not in formula), (formula.split("->") + [""])[0]
+      ell_n = [max(0, x.ndim - len(s) + 3) if "..." in s else 0 for s, x in zip(lhs.split(","), xs)]
+      for i, (s, x) in enumerate(zip(inputs := lhs.split(","), xs)): inputs[i] = s.replace("...", ell[max(ell_n)-ell_n[i]:max(ell_n)])
+      lhs, auto = ",".join(inputs), "".join(sorted(c for c in lhs if lhs.count(c) == 1 and c.isalpha() and c not in ell))
+      formula = f"{lhs}->{formula.split('->')[1].replace('...', ell[:max(ell_n)]) if '->' in formula else ell[:max(ell_n)] + auto}"
+    lhs, rhs = formula.split("->") if "->" in formula else (formula, "".join(sorted(c for c in formula if formula.count(c)==1 and c.isalpha())))
+    inputs = lhs.split(",")
+    if len(xs) != len(inputs): raise ValueError(f"number of operands doesn't match, expected {len(inputs)}, got {len(xs)}")
+    # trace: take diagonal when letter repeats in single input
+    for i, (s, x) in enumerate(zip(inputs, xs)):
+      for c in set(s):
+        while s.count(c) > 1:
+          j, k, n = s.index(c), s.index(c, s.index(c)+1), x.shape[s.index(c)]
+          perm = [d for d in range(x.ndim) if d not in (j,k)]+[j,k]
+          x = x.permute(perm).flatten(-2).pad(((0,0),)*(x.ndim-2)+((0,n),)).unflatten(-1,(n,n+1))[...,0] if x.ndim > 2 else x.diagonal()
+          s = s[:k] + s[k+1:]
+      inputs[i], xs[i] = s, x
+    # check sizes and build sorted alphabet
+    sz = merge_dicts([dict(zip(s, x.shape)) for s, x in zip(inputs, xs)])
+    alpha = sorted(sz)
+    # align all tensors to alphabet, multiply, sum non-output, permute to output order
+    xs = [x.permute(*[s.index(c) for c in sorted(s)]).reshape([sz[c] if c in s else 1 for c in alpha]).expand([sz[c] for c in alpha]) if s else x
+          for s, x in zip(inputs, xs)]
+    return xs[0].uprod(*xs[1:]).sum([i for i,c in enumerate(alpha) if c not in rhs], dtype=dtype).permute(argsort(argsort(list(rhs))))
+
+  def gradient(self, *targets:Self, gradient:Self|None=None) -> list[Self]:
+    """
+    Computes the gradient of the targets with respect to self.
+
+    ```python exec="true" source="above" session="tensor" result="python"
+    x = Tensor.eye(3)
+    y = Tensor([[2.0,0,-2.0]])
+    z = y.matmul(x).sum()
+    dx, dy = z.gradient(x, y)
+
+    print(dx.tolist())  # dz/dx
+    print(dy.tolist())  # dz/dy
+    ```
+    """
+    assert gradient is not None or self.shape == tuple(), "when no gradient is provided, backward must be called on a scalar tensor"
+    if not (self.is_floating_point() and all(t.is_floating_point() for t in targets)): raise RuntimeError("only float Tensors have gradient")
+    from tinygrad.mixin.gradient import compute_gradient
+    if gradient is None: gradient = self.const_like(1.0)
+    target_uops = [t._uop for t in targets]
+    grads = compute_gradient(self._uop, gradient._uop, set(target_uops))
+    return [self._wrap_uop(grads[x] if x in grads else x.const_like(0)) for x in target_uops]
 
   def min(self, axis:int|Sequence[int]|None=None, keepdim=False) -> Self:
     """
@@ -644,7 +758,7 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
 
   def _split_cumalu(self, axis:int, op:Ops) -> Self:
     axis = self._resolve_dim(axis)
-    if self.ndim == 0 or 0 in self.shape: return self
+    if self.ndim == 0 or 0 in self.shape: return self.cast(self.sum().dtype) if op is Ops.ADD else self
     # TODO: someday the optimizer will find this on its own
     # for now this is a two stage cumsum
     SPLIT = 256
@@ -654,7 +768,7 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     base = ret[..., -1]._cumalu(-1, op)._pad_constant((None,)*(ret.ndim-2) + ((1, -1),), value)
     base = base.unsqueeze(-1).expand(*base.shape, ret.shape[-1])
     def fix(x: Self) -> Self: return x.flatten(start_dim=-2)[..., -s:].transpose(axis,-1)
-    return getattr(fix(ret), {Ops.ADD: "add", Ops.MAX: "maximum", Ops.MUL: "mul"}[op])(fix(base))
+    return fix(ret).alu(op, fix(base))
 
   def cumsum(self, axis:int=0) -> Self:
     """
@@ -695,11 +809,11 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     print(indices.numpy())
     ```
     """
-    if self.ndim == 0: return self._split_cumalu(axis, Ops.MAX), type(self).zeros(self.shape, dtype=dtypes.int32, device=self.device)
+    if self.ndim == 0: return self._split_cumalu(axis, Ops.MAX), type(self).zeros(self.shape, dtype=dtypes.int32, buffer=False)
     values, n = self._split_cumalu(axis, Ops.MAX), int(self.shape[axis])
     x, values_t = self.transpose(axis, -1), values.transpose(axis, -1)
-    match = x.unsqueeze(-1).eq(values_t.unsqueeze(-2)) * type(self).ones(n, n, device=self.device).triu()
-    idx = (-(match * type(self).arange(n, 0, -1, device=self.device).reshape(n, 1)).max(-2) + n).cast(dtypes.int32)
+    match = x.unsqueeze(-1).eq(values_t.unsqueeze(-2)) * type(self).ones(n, n, buffer=False).triu()
+    idx = (-(match * type(self).arange(n, 0, -1).reshape(n, 1)).max(-2) + n).cast(dtypes.int32)
     return values, idx.transpose(-1, axis)
 
   def cummin(self, axis:int=0) -> tuple[Self, Self]:
@@ -745,7 +859,7 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     last_dim_size = x.shape[-1]
     x_unsqueezed = x.unsqueeze(-2).expand((None,)*(self.ndim-1)+(last_dim_size, None))
     x_cummax, _ = x.cummax(-1)
-    mask = type(self).ones(last_dim_size, last_dim_size, device=self.device).tril()
+    mask = type(self).ones(last_dim_size, last_dim_size, buffer=False).tril()
     ret = mask.where(x_unsqueezed - x_cummax.unsqueeze(-1), self.dtype.min).exp().sum(-1).log() + x_cummax
     return ret.transpose(-1, axis)
 
@@ -773,7 +887,7 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     if axis is None: return self.flatten().argmax(0)
     axis = self._resolve_dim(axis)
     m = self.eq(self.max(axis=axis, keepdim=True))
-    idx = m * type(self).arange(self.shape[axis], 0, -1, device=self.device).reshape(self.shape[axis], *[1]*(self.ndim-axis-1))
+    idx = m * type(self).arange(self.shape[axis], 0, -1).reshape(self.shape[axis], *[1]*(self.ndim-axis-1))
     return (self.shape[axis] - idx.max(axis=axis, keepdim=keepdim)).cast(dtypes.int32)
 
   def argmin(self, axis=None, keepdim=False) -> Self:
@@ -818,7 +932,7 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     ```
     """
     x, dim = self, self._resolve_dim(dim)
-    if (orig_len := int(x.shape[dim])) <= 1: return x, x.zeros_like(dtype=dtypes.default_int)
+    if (orig_len := int(x.shape[dim])) <= 1: return x, x.const_like(0).cast(dtypes.default_int)
     # pad to power of 2
     n_stages = (orig_len-1).bit_length()
     pads = tuple((0, 2**n_stages - orig_len) if i == dim else None for i in range(x.ndim))
@@ -842,11 +956,12 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
         x = blue_box.cat(flipped_green_box.flip(flip_dims), dim=crossover_dim)
     x = x.flatten(dim, dim+n_stages-1).shrink_to(self.shape)
     # compute indices for sorted values
-    mask = type(self).ones(orig_len, orig_len, dtype=dtypes.bool, device=self.device).tril().reshape((None, None) + (1,)*(self.ndim-dim-1))
+    mask = type(self).ones(orig_len, orig_len, dtype=dtypes.bool, buffer=False).tril()
+    mask = mask.reshape((None, None) + (1,)*(self.ndim-dim-1))
     def compute_counts(t:Self): return (mask & t.unsqueeze(dim).eq(t.unsqueeze(dim+1))).sum(dim+1)
     count_orig, count_sorted = compute_counts(self), compute_counts(x)
     cond = self.unsqueeze(dim+1).eq(x.unsqueeze(dim)) & count_orig.unsqueeze(dim+1).eq(count_sorted.unsqueeze(dim))
-    idx = type(self).arange(orig_len, device=self.device).reshape(tuple(orig_len if i == dim else 1 for i in range(x.ndim)))
+    idx = type(self).arange(orig_len).reshape(tuple(orig_len if i == dim else 1 for i in range(x.ndim)))
     idx = (cond * idx.unsqueeze(dim+1)).sum(dim)
     return x, idx
 
@@ -895,7 +1010,7 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     if not dtypes.is_int(self.dtype): raise RuntimeError(f"_one_hot_along_dim expects int index tensor, getting {self.dtype}")
     offset = self.ndim - self._resolve_dim(dim) - 1
     dt = dtypes.int64 if sint_to_uop(num_classes).overflows(dtypes.int32) else dtypes.int32
-    return self.eq(type(self).arange(num_classes, dtype=dt, device=self.device).reshape((num_classes,) + (1,) * offset))
+    return self.eq(type(self).arange(num_classes, dtype=dt).reshape((num_classes,) + (1,) * offset))
 
   def one_hot(self, num_classes:int) -> Self:
     """
@@ -922,8 +1037,9 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     print(t.gather(1, Tensor([[0, 0], [1, 0]])).numpy())
     ```
     """
-    if index.device != self.device: raise RuntimeError(f"expected index and self on the same device, {index.device=}, {self.device=}")
-    assert index.ndim == self.ndim, f"self.ndim must equal index.ndim, {self.ndim=}, {index.ndim=}"
+    if index.device is not None and self.device is not None and index.device != self.device:
+      raise RuntimeError(f"expected index and self on the same device, {index.device=}, {self.device=}")
+    if index.ndim != self.ndim: raise RuntimeError(f"self.ndim must equal index.ndim, {self.ndim=}, {index.ndim=}")
     dim = self._resolve_dim(dim)
     assert all(s >= i for d,(s,i) in enumerate(zip(self.shape, index.shape)) if d != dim), "requires self.shape[d] >= index.shape[d] for all d != dim"
     x = self.shrink_to(tuple(i if d != dim else None for d,i in enumerate(index.shape))).unsqueeze(-1).transpose(-1, dim)
@@ -950,7 +1066,7 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     x, expand = self, list(self.shape)
     for i in range(-1,-len(size)-1,-1):
       scale = (int(self.shape[i]) - int(align_corners)) / (size[i] - int(align_corners))
-      arr, reshape = type(self).arange(size[i], dtype=dtypes.float32, device=self.device), [1] * self.ndim
+      arr, reshape = type(self).arange(size[i], dtype=dtypes.float32), [1] * self.ndim
       reshape[i] = expand[i] = size[i]
       if mode == "linear":
         index = (scale*arr if align_corners else (scale*(arr+0.5))-0.5).clip(0, self.shape[i]-1)
@@ -962,8 +1078,10 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     return x.cast(self.dtype)
 
   def _pre_scatter(self, dim:int, index:Self, src:Self) -> tuple[Self, Self]:
-    if index.device != self.device: raise RuntimeError(f"expected index and self on the same device, {index.device=}, {self.device=}")
-    if src.device != self.device: raise RuntimeError(f"expected src and self on the same device, {src.device=}, {self.device=}")
+    if index.device is not None and self.device is not None and index.device != self.device:
+      raise RuntimeError(f"expected index and self on the same device, {index.device=}, {self.device=}")
+    if src.device is not None and self.device is not None and src.device != self.device:
+      raise RuntimeError(f"expected src and self on the same device, {src.device=}, {self.device=}")
     dim = self._resolve_dim(dim)
     assert index.ndim == self.ndim == src.ndim, f"self.ndim, index.ndim and src.ndim must all equal, {self.ndim=} {index.ndim=} {src.ndim=}"
     assert all((d == dim or self_ >= index_) and src_ >= index_ for d,(self_,index_,src_) in enumerate(zip(self.shape, index.shape, src.shape))), \
@@ -1045,7 +1163,7 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     ```
     """
     if reduce not in {None, "add", "multiply"}: raise TypeError(f"{reduce=} must be one of None, 'multiply', or 'add'")
-    if isinstance(src, (int, float, bool)): src = type(self).full(index.shape, src, dtype=self.dtype, device=self.device)
+    if isinstance(src, (int, float, bool)): src = type(self).full(index.shape, src, dtype=self.dtype, buffer=False)
     elif reduce: raise TypeError("non-scalar src is not supported with reduce arg. use scatter_reduce")
     if reduce == "add": return self.scatter_reduce(dim, index, src, "sum", include_self=True)
     if reduce == "multiply": return self.scatter_reduce(dim, index, src, "prod", include_self=True)
@@ -1060,6 +1178,68 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     for dim in reversed(axes): mask, values = mask.squeeze(dim), values.squeeze(dim)
     # select from values for each True element in mask else select from self
     return mask.where(values, self)
+
+  def masked_select(self, mask, size:int|None=None, fill_value:ConstType=0):
+    """
+    Selects elements from `self` based on the boolean `mask`.
+
+    With `size=None` (default), output length equals the number of `True` values (not jittable).
+    With `size=N`, output length is `N`, padded with `fill_value` or truncated (jittable).
+
+    ```python exec="true" source="above" session="tensor" result="python"
+    t = Tensor([[0, 1, 2], [3, 4, 5], [6, 7, 8]])
+    mask = Tensor([[True, False, True], [False, True, False], [False, False, True]])
+    print(t.numpy())
+    print(mask.numpy())
+    ```
+    ```python exec="true" source="above" session="tensor" result="python"
+    print(t.masked_select(mask).numpy())
+    ```
+    ```python exec="true" source="above" session="tensor" result="python"
+    print(t.masked_select(mask, size=6, fill_value=-1).numpy())
+    ```
+    """
+    if not dtypes.is_bool(mask.dtype): raise RuntimeError(f"masked_select expects bool mask tensor, got {mask.dtype}")
+    x, mask = self.flatten(), mask._broadcast_to(self.shape).flatten()
+    mask_cumsum = mask.cumsum()
+    if size is None:
+      counts = type(self).zeros(mask_cumsum[-1].item() if mask.numel() else 0, dtype=dtypes.int32, buffer=False)
+      return x[counts.scatter(0, mask_cumsum, 1, reduce='add').cumsum()]
+    counts = type(self).zeros(size, dtype=dtypes.int32, buffer=False).scatter(0, mask_cumsum, 1, reduce='add')
+    return (type(self).arange(size) < mask.sum()).where(x[counts.cumsum()], fill_value).cast(self.dtype)
+
+  def nonzero(self, size:int|None=None, fill_value:ConstType=0) -> Self:
+    """
+    Returns the indices of the elements that are non-zero.
+
+    With `size=None` (default), output shape is `(n_nonzero, ndim)` (not jittable).
+    With `size=N`, output shape is `(N, ndim)`, padded with `fill_value` or truncated (jittable).
+
+    ```python exec="true" source="above" session="tensor" result="python"
+    t = Tensor([1, 0, 2, 0, 3])
+    print(t.numpy())
+    ```
+    ```python exec="true" source="above" session="tensor" result="python"
+    print(t.nonzero().numpy())
+    ```
+    ```python exec="true" source="above" session="tensor" result="python"
+    t = Tensor([[1, 0], [0, 2]])
+    print(t.numpy())
+    ```
+    ```python exec="true" source="above" session="tensor" result="python"
+    print(t.nonzero().numpy())
+    ```
+    ```python exec="true" source="above" session="tensor" result="python"
+    print(t.nonzero(size=3, fill_value=-1).numpy())
+    ```
+    """
+    if self.ndim == 0:
+      return type(self).zeros(size if size is not None else int(self.ne(0).item()), 0, dtype=dtypes.int32, device=self.device)
+    mask = self.ne(0).flatten()
+    indices = type(self).stack(*[type(self).arange(s).reshape(*[1]*i, s, *[1]*(self.ndim-i-1)).expand(self.shape).flatten()
+                             for i, s in enumerate(self.shape)], dim=-1)
+    return indices.masked_select(mask.unsqueeze(-1).expand(*mask.shape, self.ndim),
+                                 size=size*self.ndim if size is not None else None, fill_value=fill_value).reshape(-1, self.ndim)
 
   # ***** functional nn ops *****
 
@@ -1144,16 +1324,16 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     ```
     """
     axis = tuple(range(-len(k_ := make_tuple(kernel_size, 2)), 0))
+    s_ = stride if stride is not None else k_
     def pool(x:Self, padding_:Sequence[int]) -> Self:
-      return x._pad_constant(((0,0),)*(x.ndim-len(k_)) + flat_to_grouped(padding_), 0.0)._pool(k_, stride if stride is not None else k_, dilation)
+      return x._pad_constant(((0,0),)*(x.ndim-len(k_)) + flat_to_grouped(padding_), 0.0)._pool(k_, s_, dilation)
     reg_pads = resolve_pool_pads(padding, len(k_))
-    ceil_pads = self._apply_ceil_mode(reg_pads, k_, stride if stride is not None else k_, dilation)
+    pads = self._apply_ceil_mode(reg_pads, k_, s_, dilation) if ceil_mode else reg_pads
     if not count_include_pad:
-      pads = ceil_pads if ceil_mode else reg_pads
-      return pool(self, pads).sum(axis) / pool(self.ones_like(), pads).sum(axis)
-    if not ceil_mode: return pool(self, reg_pads).mean(axis)
-    return pool(self, ceil_pads).sum(axis) / pool(self._pad_constant(((0,0),)*(self.ndim-len(k_)) + flat_to_grouped(reg_pads), 0.0).ones_like(),
-                                                  tuple(cp-rp for cp,rp in zip(ceil_pads, reg_pads))).sum(axis)
+      return pool(self, pads).sum(axis) / pool(self.const_like(1), pads).sum(axis)
+    if not ceil_mode: return pool(self, pads).mean(axis)
+    return pool(self, pads).sum(axis) / pool(self._pad_constant(((0,0),)*(self.ndim-len(k_)) + flat_to_grouped(reg_pads), 0.0).const_like(1),
+                                              tuple(cp-rp for cp,rp in zip(pads, reg_pads))).sum(axis)
 
   def max_pool2d(self, kernel_size:tuple[int, ...]=(2,2), stride=None, dilation=1, padding:int|tuple[int, ...]=0,
                  ceil_mode=False, return_indices=False) -> Self | tuple[Self, Self]:
@@ -1189,13 +1369,13 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     ```
     """
     axis = tuple(range(-len(k_ := make_tuple(kernel_size, 2)), 0))
-    pads = resolve_pool_pads(padding, len(k_))
-    if ceil_mode: pads = self._apply_ceil_mode(pads, k_, stride if stride is not None else k_, dilation)
     s_ = stride if stride is not None else k_
+    pads = resolve_pool_pads(padding, len(k_))
+    if ceil_mode: pads = self._apply_ceil_mode(pads, k_, s_, dilation)
     pooled = self._pad_constant(((0,0),)*(self.ndim-len(k_)) + flat_to_grouped(pads), self.dtype.min)._pool(k_, s_, dilation)
     if not return_indices: return pooled.max(axis)
     spatial_sz = int(prod(spatial_shape := self.shape[-len(k_):]))
-    idx = type(self).arange(spatial_sz, 0, -1, device=self.device).reshape(spatial_shape)
+    idx = type(self).arange(spatial_sz, 0, -1).reshape(spatial_shape)
     m = pooled.eq(pooled.max(axis, keepdim=True))
     idx = m * idx._pad_constant(((0,0),)*(idx.ndim-len(k_)) + flat_to_grouped(pads), idx.dtype.min)._pool(k_, s_, dilation)
     return pooled.max(axis), spatial_sz - idx.max(axis)
@@ -1232,8 +1412,191 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     ret = (indices.reshape(bs,c,1,-1)._one_hot_along_dim(prod(output_size), 2).where(self.reshape(bs,c,1,-1), 0)).sum(3)
     return ret.reshape(bs,c,*output_size)
 
+  @classmethod
+  def _get_winograd_matcols(cls, mat, dims:int, shp:tuple[sint, ...], dtype:DType) -> list[list[Self]]:
+    return [[cls.cat(*[cls.full(shp[:dim] + (1,) + shp[dim+1:], float(m[k]), dtype=dtype, buffer=False) for m in mat], dim=dim)
+             for k in range(len(mat[0]))] for dim in range(dims)]
+
+  # winograd conv 3 kernel f(4x4,3x3) see: http://arxiv.org/abs/1509.09308
+  def _apply_winograd_matrix(self, mat, dims:int) -> Self:
+    # multiply mat_1 @ mat_2 @ t with foldable constants, where mat_i acts on vector t along dimension i; roughly kron(mat, mat) @ t
+    # due to realize-before-expand rule in lazy.py, we must operate in this order: reshape -> expand -> arithmetic
+    t_ = self.reshape(self.shape[:dims] + (1,) * dims + self.shape[dims:]).expand(
+      self.shape[:dims] + (len(mat),) * dims + self.shape[dims:])  # add output dims
+    # precalculate mat columns for each dim; prod(itertools.product(matcols)) gives the columns of kron(mat, mat, ...)
+    matcols = type(self)._get_winograd_matcols(mat, dims, t_.shape[dims:], t_.dtype)
+    # multiply each element of t_ by the corresponding stacked column of kron(mat, mat), producing only one view for each element of t
+    ret = sum(prod(col[idx] for col, idx in zip(matcols, mat_is)) * t_[mat_is] for mat_is in itertools.product(range(len(mat[0])), repeat=dims))
+    assert not isinstance(ret, int), "sum over empty winograd matrix"
+    return ret
+
+  # TODO: winograd can be a rewrite rule like split_reduceop
+  def _conv2d_winograd(self, weight:Self, bias:Self|None, groups:int, padding:int|Sequence[int], dtype:DTypeLike|None) -> Self:
+    (bs,cin_), (cout,cin), HW = self.shape[:2], weight.shape[:2], weight.shape[2:]
+    padding_ = resolve_pool_pads(padding, len(HW))
+    assert groups*cin == cin_ and len(self.shape) == len(weight.shape),\
+        f"Input Tensor shape {self.shape} does not match the shape of the weights {weight.shape}. ({groups*cin} vs. {cin_})"
+    rcout, oyx = cout//groups, self.pad(padding_)._pool(HW, 1, 1).shape[2:-len(HW)]
+    HWI, HWO = (6,) * len(HW), (4,) * len(HW)  # F(4x4,3x3) winograd tiles
+    winograd_G = [[1/4, 0, 0], [-1/6, -1/6, -1/6], [-1/6, 1/6, -1/6], [1/24, 1/12, 1/6], [1/24, -1/12, 1/6], [0, 0, 1]]
+    winograd_Bt = [[4, 0, -5, 0, 1, 0], [0, -4, -4, 1, 1, 0], [0, 4, -4, -1, 1, 0], [0, -2, -1, 2, 1, 0], [0, 2, -1, -2, 1, 0], [0, 4, 0, -5, 0, 1]]
+    winograd_At = [[1, 1, 1, 1, 1, 0], [0, 1, -1, 2, -2, 0], [0, 1, 1, 4, 4, 0], [0, 1, -1, 8, -8, 1]] # applying At in pre-order doubles compile time
+
+    # TODO: stride == dilation
+    # use padding to round up to 4x4 output tiles
+    # (bs, cin_, tyx, HWI)
+    pads = [(pB, pA + (-(s + pB + pA - 2) % 4)) for (pB, pA), s in zip(flat_to_grouped(padding_), self.shape[-len(HW):])]
+    d = self.pad(flatten(reversed(pads)))._pool(HWI, HWO)
+    # move HW to the front: # (HWI, bs, cin_, tyx)
+    d = d.permute(*range(len(d.shape)-len(HW),len(d.shape)), *range(len(d.shape)-len(HW)))
+    tyx = d.shape[-len(HWI):]  # dim of tiling
+
+    g = weight.permute(*range(len(weight.shape)-len(HW),len(weight.shape)), *range(len(weight.shape)-len(HW)))  # move HW to the front
+
+    # compute 6x6 winograd tiles: GgGt, BtdB. contiguous so the transforms are materialized once
+    # (HWI, groups * rcout, cin) -> (HWI, bs=1, groups, rcout, cin, tyx=(1,1))
+    gfactors = g._apply_winograd_matrix(winograd_G, len(HW)).contiguous().reshape(*HWI, 1, groups, rcout, cin, *([1]*len(tyx)))
+    # (HWI, bs, cin_, tyx) -> (HWI, bs, groups, 1 ,cin, *tyx)
+    dfactors = d._apply_winograd_matrix(winograd_Bt, len(HW)).contiguous().reshape(*HWI, bs, groups, 1, cin, *tyx)
+
+    # matmul; sum across cin: (HWI, bs, groups, rcout, *tyx); then HWI -> HWO: (HWO, bs, groups, rcout, *tyx)
+    ret = (gfactors * dfactors).sum(axis=-1-len(HW), dtype=dtype)._apply_winograd_matrix(winograd_At, len(HW))
+
+    # interleave tyx and HWO: (bs, groups, rcout, oy, HO, ox, WO)
+    ret = ret.permute([*range(len(HW), len(ret.shape)-len(HW)), *[i+o for i in range(len(HW)) for o in [len(ret.shape)-len(HW),0]]])
+    # merge groups and rcout, tyx and HWO: (bs, groups, cout, *yx), shrink to final
+    ret = ret.reshape(bs, cout, *[c * HWO[i] for i, c in enumerate(tyx)]).shrink_to(bs, cout, *oyx)
+
+    return (ret if bias is None else ret.add(bias.reshape(1, -1, *[1 for _ in range(len(HW))]))).contiguous().contiguous_backward()
+
+  # *** image function replacements (used when IMAGE is set) ***
+
+  def image_dot(self, w:Self, dtype:DTypeLike|None=None) -> Self:
+    # NOTE: we use a 1x1 conv2d to do the matmul. mxk @ kxn = (1,k,m,1).conv2d(n,k,1,1)
+    if not (self.ndim > 0 and w.ndim > 0): raise RuntimeError(f"both tensors need to be at least 1D, got {self.ndim=}, {w.ndim=}")
+    if self.shape[-1] != w.shape[-min(w.ndim, 2)]: raise RuntimeError(f"cannot image_dot {self.shape} and {w.shape}")
+
+    bs, groups, cin, cout = prod(self.shape[0:-2]), prod(w.shape[0:-2]), w.shape[-2], w.shape[-1]
+    out_shape_t = self.shape[0:-2] + (cout,-1) if len(self.shape) > 1 else (cout,)
+
+    # NOTE: with NHWC we can remove the transposes
+    # bs x groups*cin x H x W
+    cx = self.transpose(self.ndim-1, self.ndim-2).reshape(bs//groups, groups*cin, -1, 1)
+    # groups*cout x cin x H, W
+    cw = w.transpose(w.ndim-1, w.ndim-2).reshape(groups*cout, cin, 1, 1)
+    return cx.image_conv2d(cw, groups=groups, dtype=dtype).reshape(out_shape_t).transpose(self.ndim-1, self.ndim-2)
+
+  def image_conv2d(self, weight:Self, bias:Self|None=None, groups=1, stride=1, dilation=1, padding=0, dtype=None) -> Self:
+    dtsz = 2 if FLOAT16 else 4
+
+    (bs,_,_,_), (cout,cin,H,W) = self.shape, weight.shape
+    assert isinstance(cin, int) and isinstance(cout, int)
+    x, w = self, weight.reshape(groups, (rcout := cout//groups), cin, H, W)
+
+    padding_neg, padding_pos = [min(0, p) for p in resolve_pool_pads(padding, 2)], [max(0, p) for p in resolve_pool_pads(padding, 2)]
+    x = x.pad(padding_neg)
+    iy, ix = x.shape[2:]
+
+    # hack for non multiples of 4 on cin
+    if cin % 4 != 0 and not (cin == 1 and groups%4 == 0):
+      new_cin = round_up(cin, 4)
+      w = w.pad_to(None, None, new_cin, None, None)
+      x = x.reshape(bs, groups, cin, iy, ix)
+      x = x.pad_to(None, None, new_cin, None, None).reshape(bs, groups*new_cin, iy, ix)
+      cin = new_cin
+
+    # hack for non multiples of 4 on rcout
+    added_output_channels = 0
+    if rcout % 4 != 0 and not (rcout == 1 and groups%4 == 0):
+      added_output_channels = 4 - (rcout % 4)
+      rcout += added_output_channels
+      cout = groups * rcout
+      w = w.pad_to(None, rcout, None, None, None)
+
+    # packed (note: flipping bs and iy would make the auto-padding work)
+    x = x.permute(0,2,3,1)
+    cin_last = iy == 1 and ix == 1
+    if cin == 1: w = w.reshape(cout//4,4,H,W).permute(0,2,3,1)
+    elif cin_last: w = w.reshape(cout//4,4,cin//4,4,H,W).permute(0,4,2,5,1,3)
+    else: w = w.reshape(cout//4,4,cin//4,4,H,W).permute(0,4,2,5,3,1)
+
+    def is_pow2(v): return v > 0 and v & (v - 1) == 0
+    # pad dimension i to amt with invalids
+    def ipad(t, i, amt):
+      return t.pad(tuple(None if d != i else (0, amt-s) for d,s in enumerate(t.shape)), value=Invalid) if amt != t.shape[i] else t
+    # align a dimension, use at to specify the dimension to pad in, defaults to first
+    def pad_align(t, dim, at=None, force=False):
+      # align to 64 pixels when height is real, otherwise 64 bytes is sufficient
+      align = (64 // dtsz) if prod(t.shape[:dim]) == 1 or prod(t.shape) < 16384 * 4 else 256
+      return ipad(t, at:=at or dim, round_up(t.shape[at] + int(force), align // math.gcd(prod(t.shape[dim:]) // t.shape[at], align)))
+
+    # bank conflicts
+    bank_conflict = cin >= 8 and is_pow2(cin // 4)
+    if bank_conflict:
+      x, w = pad_align(x.reshape(bs, iy, ix, groups, cin // 4, 4), 2, at=4, force=True), pad_align(w, 1, at=2, force=True)
+    else: x, w = pad_align(x, 2), pad_align(w, 1)
+
+    # contiguous creates the image, and early realize static weights (TODO: test for the static weight)
+    if FLOAT16: x, w = x.cast(dtypes.half).contiguous().cast(dtypes.float), w.cast(dtypes.half).contiguous().cast(dtypes.float)
+    else: x, w = x.contiguous(), w.contiguous()
+
+    # undo alignment hacks
+    if bank_conflict: x, w = x[:, :, :, :, :cin // 4, :], w[:, :, :cin // 4, ...]
+    else: x, w = x[:, :, :ix, :], w[:, :H, ...]
+
+    # expand out
+    rcin_hi, rcin_lo = (cin//4, 4) if cin >= 4 else (1, 1)
+    group_shape, rcout_expand = (groups//4, 4) if cin == 1 else (groups, 1), (rcout//4, 4) if rcout >= 4 else (1, 1)
+    x = x.reshape(bs, iy, -1, groups, rcin_hi, rcin_lo)
+    if cin_last: w = w.reshape(cout//4, H, rcin_hi, W, 4, rcin_lo)
+    else: w = w.reshape(cout//4, H, rcin_hi, W, rcin_lo, 4).permute(0,1,2,3,5,4)
+
+    # prepare input
+    x = x.permute(0,3,4,5,1,2).pad(padding_pos)._pool((H,W), stride, dilation)# -> (bs, groups, rcin_hi, rcin_lo, oy, ox, H, W)
+    x = x.permute(0,4,5,1,2,3,6,7).reshape(bs, (oy := x.shape[4]), (ox := x.shape[5]), *group_shape, 1, 1, rcin_hi, rcin_lo, H, W)
+
+    # prepare weights
+    w = w.permute(0,4,2,5,1,3).reshape((1, 1, 1, *group_shape, *rcout_expand, rcin_hi, rcin_lo, H, W))
+
+    # the conv!
+    ret = (x*w).cast(dtypes.float32).sum((-4, -3, -2, -1), dtype=dtype)
+
+    ret = ret.reshape(bs, oy, ox, groups, rcout)
+    # undo hack for non multiples of 4 on C.rcout
+    if added_output_channels: ret = ret[:, :, :, :, :-added_output_channels]
+    # NCHW output
+    ret = ret.reshape(bs, oy, ox, groups * (rcout - added_output_channels)).permute(0,3,1,2)
+    return ret if bias is None else ret.add(bias.reshape(1, -1, 1, 1))
+
   def conv2d(self, weight:Self, bias:Self|None=None, groups=1, stride=1, dilation=1, padding:int|Sequence[int]=0,
              dtype:DTypeLike|None=None) -> Self:
+    """
+    Applies a convolution over a tensor with a given `weight` and optional `bias`.
+
+    This function supports three different types of `padding`
+
+    1. `int` (single value):
+      Applies the same padding value uniformly to all spatial dimensions.
+
+    2. `tuple[int, ...]` (length = number of spatial dimensions):
+      Specifies a distinct padding value for each spatial dimension in the form `(padding_height, padding_width, ...)`.
+
+    3. `tuple[int, ...]` (length = 2 * number of spatial dimensions):
+      Specifies explicit padding for each side of each spatial dimension in the form
+      `(padding_left, padding_right, padding_top, padding_bottom, ...)`.
+
+    NOTE: unlike PyTorch, this implementation is not limited to only 2d convolutions and instead works for any number of dimensions.
+
+    See: https://pytorch.org/docs/stable/generated/torch.nn.Conv2d.html
+
+    ```python exec="true" source="above" session="tensor" result="python"
+    t = Tensor.arange(9).reshape(1, 1, 3, 3)
+    w = Tensor.ones(1, 1, 2, 2)
+    print(t.conv2d(w).numpy())
+    ```
+    """
+    if IMAGE: return self.image_conv2d(weight, bias, groups, stride, dilation, padding, dtype)
+    if WINO and all(x == 3 for x in weight.shape[2:]) and stride == dilation == 1: return self._conv2d_winograd(weight, bias, groups, padding, dtype)
     (bs,cin_), (cout,cin), HW = self.shape[:2], weight.shape[:2], weight.shape[2:]
     padding_ = resolve_pool_pads(padding, len(HW))
     assert groups*cin == cin_ and len(self.shape) == len(weight.shape),\
@@ -1380,9 +1743,10 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     ```
     """
     assert 0.0 <= label_smoothing <= 1.0, "label_smoothing must be in [0.0, 1.0]"
-    if Y.device != self.device: raise RuntimeError(f"expected Y and self on the same device, {Y.device=}, {self.device=}")
+    if Y.device is not None and self.device is not None and Y.device != self.device:
+      raise RuntimeError(f"expected Y and self on the same device, {Y.device=}, {self.device=}")
     log_probs = self.log_softmax()
-    loss_mask = Y.ne(ignore_index) if ignore_index != -1 else Y.ones_like(dtype=dtypes.bool)
+    loss_mask = Y.ne(ignore_index) if ignore_index != -1 else Y.const_like(1).cast(dtypes.bool)
     y = Y.unsqueeze(-1)._one_hot_along_dim(self.shape[-1], dim=-1) * loss_mask.unsqueeze(-1)
     smoothing = label_smoothing * (log_probs.mean(-1) * loss_mask)
     unreduced = ((1 - label_smoothing) * (log_probs * y).sum(-1) + smoothing)
@@ -1434,12 +1798,86 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     print(t.log_softmax().nll_loss(Y, reduction='none').numpy())
     ```
     """
-    weight = Y.ones_like() if weight is None else weight.gather(0, Y.flatten()).reshape(Y.shape)
+    weight = Y.const_like(1) if weight is None else weight.gather(0, Y.flatten()).reshape(Y.shape)
     masked_weight = weight if ignore_index is None else weight * Y.ne(ignore_index)
     nll = -self.gather(1, Y.unsqueeze(1)).squeeze(1) * masked_weight
     return nll.sum() / masked_weight.sum() if reduction == "mean" else nll._do_reduction(reduction)
 
   # ***** matrix ops *****
+
+  def qr(self) -> tuple[Self, Self]:
+    assert self.ndim > 1, f"expected two or more dimensions, got {self.ndim}"
+    b_shape, m, n = self.shape[:-2], int(self.shape[-2]), int(self.shape[-1])
+    R, Q = self, type(self).eye(m, dtype=self.dtype).expand(b_shape + (m, m))
+    idx = type(self).arange(m)
+    for i in range(min(m, n)):
+      # full-length Householder reflector v with zeros above row i; w = tau*v is the rank-1 update factor
+      at_i, x = idx.eq(i), (idx >= i).where(R[..., :, i], 0)
+      norm = x.square().sum(-1, keepdim=True).sqrt()
+      x0 = at_i.where(x, 0).sum(-1, keepdim=True)
+      sgn, active = x0.ne(0).where(x0.sign(), 1), norm.ne(0)
+      u0 = x0 + sgn * norm
+      v = (at_i.where(u0, x) / active.where(u0, 1)).unsqueeze(-1)
+      w = active.where(sgn * u0 / active.where(norm, 1), 0).unsqueeze(-1) * v
+      R = R - w @ (v.transpose(-2, -1) @ R)
+      Q = Q - (Q @ v) @ w.transpose(-2, -1)
+    return Q, R
+
+  def svd(self, full_matrices = True) -> tuple[Self, Self, Self]:
+    #partial implementation of https://www.netlib.org/lapack/lawnspdf/lawn169.pdf , pg 26
+    assert self.ndim > 1, f"expected two or more dimensions, got {self.ndim}"
+    b_shape, m, n = self.shape[:-2], int(self.shape[-2]), int(self.shape[-1])
+    #preprocess the matrix
+    Q, R = (self if m >= n else self.transpose(-2, -1)).qr()
+    num, q_num = min(m, n), max(m, n)
+    # TODO: codegen infinite loop without contiguous
+    U = R[..., :num, :num].contiguous()
+    V = type(self).eye(num, dtype=self.dtype).expand(b_shape + (num, num)).contiguous()
+    #prepare round robin pairing: identity on first half, reversed on second half
+    permute = type(self).arange(num//2, dtype=dtypes.int).cat(
+                type(self).arange(num//2, num, dtype=dtypes.int).flip(0))
+    cols, h = type(self).arange(num, dtype=dtypes.int), num // 2
+    eye_num = type(self).eye(num, dtype=self.dtype).expand(b_shape + (num, num))
+    def one_round_jacobi(U, V, permute):
+      # permutation matrix P with P[a,b] = (a == permute[b]); first 2h columns are paired-column selectors
+      P = cols.unsqueeze(1).eq(permute.unsqueeze(0)).cast(U.dtype)
+      P_pair = P[..., :2*h]  # drops the runoff column for odd num
+      # extract paired columns to compute Jacobi rotation params
+      U_pair = U @ P_pair
+      U_left, U_right = U_pair.split(h, -1)
+      gamma = (U_left * U_right).sum(-2).reshape(b_shape + (1, h))
+      alpha, beta = U_pair.square().sum(-2).unsqueeze(-2).split(h, -1)
+      rot = gamma.ne(0)
+      tau = (beta - alpha) / (2 * rot.where(gamma, 1))
+      t = tau.ne(0).where(tau.sign(), 1) / (tau.abs() + (1 + tau.square()).sqrt())
+      t = rot.where(t, 0)
+      c = 1 / (1 + t.square()).sqrt()
+      s = c * t
+      # build rotation matrix R: identity + sum over pairs of 2x2 rotation deltas at (i_k, j_k) positions
+      Mi, Mj = P_pair.transpose(-2, -1).split(h, -2)  # paired-column selectors, each shape (h, num)
+      Mi_a, Mi_b = Mi.unsqueeze(-1), Mi.unsqueeze(-2)
+      Mj_a, Mj_b = Mj.unsqueeze(-1), Mj.unsqueeze(-2)
+      cc, ss = (c - 1).reshape(b_shape + (h, 1, 1)), s.reshape(b_shape + (h, 1, 1))
+      R = eye_num + (cc * (Mi_a * Mi_b + Mj_a * Mj_b) + ss * (Mi_a * Mj_b - Mj_a * Mi_b)).sum(-3)
+      U, V = U @ R, V @ R
+      #prepare the next round robin pairings
+      if num % 2 == 1: permute = (permute - 1) % num
+      else: permute = permute[0].reshape(1).cat(((permute[1:num] - 2) % (num - 1)) + 1)
+      return U, V, permute
+    # classical Jacobi converges in ~4 sweeps; one full sweep is (num-1) rounds for even num
+    for _ in range(4 * num): U, V, permute = one_round_jacobi(U, V, permute)
+    #extract singular values and sort. construct U from Q
+    S, indices = U.square().sum(-2).sqrt().sort(dim=-1, descending=True)
+    new_indices = indices.unsqueeze(-2).expand(b_shape + (num, num))
+    U = U.gather(-1, new_indices) / S.ne(0).where(S, 1).unsqueeze(-2)
+    V = V.gather(-1, new_indices)
+    # place U into the top-left num×num block of a q_num×q_num identity matrix
+    pad_arg = (None,) * len(b_shape) + ((0, q_num - num), (0, q_num - num))
+    eye_q = type(self).eye(q_num, dtype=U.dtype).expand(b_shape + (q_num, q_num))
+    eye_n = type(self).eye(num, dtype=U.dtype).expand(b_shape + (num, num)).pad(pad_arg)
+    U = Q @ (U.pad(pad_arg) + eye_q - eye_n)
+    if not full_matrices: U = U[..., 0:num]
+    return (U, S, V.transpose(-2, -1)) if m >= n else (V, S, U.transpose(-2, -1))
 
   def newton_schulz(self, steps:int, params:tuple[int, ...], eps:float=1.0e-7) -> Self:
     """
@@ -1454,7 +1892,7 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     if self.shape[-2] > self.shape[-1]: return self.transpose(-2, -1).newton_schulz(steps, params, eps).transpose(-2, -1)
     G = self / (self.square().sum(axis=(-2, -1), keepdim=True).sqrt() + eps)
     for _ in range(steps):
-      G = functools.reduce(lambda a, b: a + b, (p * functools.reduce(lambda x, y: (y @ y.transpose(-2, -1)) @ x, [G]*i, G)  # type: ignore[operator]
+      G = functools.reduce(lambda a, b: a + b, (p * functools.reduce(lambda x, y: (y @ y.transpose(-2, -1)) @ x, [G]*i, G)
                                                  for i,p in enumerate(params)))
     return G
 

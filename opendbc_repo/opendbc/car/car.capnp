@@ -1,4 +1,4 @@
-using Cxx = import "./include/c++.capnp";
+using Cxx = import "/include/c++.capnp";
 $Cxx.namespace("cereal");
 
 @0x8e2af1e708af8b8d;
@@ -176,8 +176,6 @@ struct CarState {
 
   gasPressed @4 :Bool;    # this is user pedal only
 
-  # brake pedal, 0.0-1.0
-  brake @5 :Float32;      # this is user pedal only
   brakePressed @6 :Bool;  # this is user pedal only
   regenBraking @45 :Bool; # this is user pedal only
   parkingBrake @39 :Bool;
@@ -231,33 +229,32 @@ struct CarState {
   charging @43 :Bool;
 
   vCluRatio @61 :Float32;
-  logCarrot @62 :Text;
-  softHoldActive @63 :Int16;    #0: not active, 1: active ready, 2: activated
-  activateCruise @64 :Int16;
-  latEnabled @65 :Bool;
-  pcmCruiseGap @66 :Int16;      #0: can't read, 1,2,3,4: gap setting
-  speedLimit @67 :Float32;
-  speedLimitDistance @68 :Float32;
-  gearStep @69 :Int16;          
-  tpms @70 :TPMS;
-  useLaneLineSpeed @71 : Float32;
-  leftLatDist @72 : Float32;  # distance to left lane line
-  rightLatDist @73 : Float32; # distance to right lane line
-  leftLongDist @74 : Float32; # distance to left lane line in the direction of travel
-  rightLongDist @75 : Float32; # distance to right lane line in the direction of travel
-  carrotCruise @76 : Int16;
-  leftLaneLine @77 : Int16; # -1: no lane, 0: dashed, 1: solid, +10: white, +20: yellow, ex) 21: solid yellow
-  rightLaneLine @78 : Int16; # -1: no lane, 0: dashed, 1: solid, +10: white, +20: yellow, ex) 21: solid yellow
-  datetime @79 :UInt64; # timestamp in milliseconds since epoch
-  roadLimitSpeed @80 :Float32;
-  steerTouch @81 :Bool;
-  aReqValue @82 :Float32;
-  radarDRel @83 :Float32;
-  radarVRel @84 :Float32;
-  vSetDis @85 :Float32;
-  cruiseGap @86 :Int8;
-  cruiseButtons @87 :Float32;
-  gasTok @88 :Bool;
+  softHoldActive @62 :Int16;    #0: not active, 1: active ready, 2: activated
+  activateCruise @63 :Int16;
+  latEnabled @64 :Bool;
+  pcmCruiseGap @65 :Int16;      #0: can't read, 1,2,3,4: gap setting
+  speedLimit @66 :Float32;
+  speedLimitDistance @67 :Float32;
+  gearStep @68 :Int16;          
+  tpms @69 :TPMS;
+  useLaneLineSpeed @70 : Float32;
+  leftLatDist @71 : Float32;  # distance to left lane line
+  rightLatDist @72 : Float32; # distance to right lane line
+  leftLongDist @73 : Float32; # distance to left lane line in the direction of travel
+  rightLongDist @74 : Float32; # distance to right lane line in the direction of travel
+  carrotCruise @75 : Int16;
+  leftLaneLine @76 : Int16; # -1: no lane, 0: dashed, 1: solid, +10: white, +20: yellow, ex) 21: solid yellow
+  rightLaneLine @77 : Int16; # -1: no lane, 0: dashed, 1: solid, +10: white, +20: yellow, ex) 21: solid yellow
+  datetime @78 :UInt64; # timestamp in milliseconds since epoch
+  roadLimitSpeed @79 :Float32;
+  steerTouch @80 :Bool;
+  aReqValue @81 :Float32;
+  radarDRel @82 :Float32;
+  radarVRel @83 :Float32;
+  vSetDis @84 :Float32;
+  cruiseGap @85 :Int8;
+  cruiseButtons @86 :Float32;
+  gasTok @87 :Bool;
 
   struct TPMS {
     unit @0 :Int8;
@@ -327,6 +324,7 @@ struct CarState {
   # deprecated
   errorsDEPRECATED @0 :List(OnroadEventDEPRECATED.EventName);
   gas @3 :Float32;        # this is user pedal only
+  brakeDEPRECATED @5 :Float32;
   brakeLights @19 :Bool;
   steeringRateLimitedDEPRECATED @29 :Bool;
   canMonoTimesDEPRECATED @12: List(UInt64);
@@ -401,10 +399,12 @@ struct CarControl {
   angularVelocity @14 :List(Float32);
   currentCurvature @17 :Float32;  # From vehicle model
 
+  driverMonitoringEscalation @18 :Bool; # trigger the car's stock driver monitoring escalation
+
   cruiseControl @4 :CruiseControl;
   hudControl @5 :HUDControl;
 
-  e2eStandstill @18: Bool;
+  e2eStandstill @19: Bool;
   struct Actuators {
     # lateral commands, mutually exclusive
     torque @2: Float32;  # [0.0, 1.0]

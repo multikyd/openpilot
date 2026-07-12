@@ -1,72 +1,70 @@
-from typing import Literal, Callable, cast
+from typing import Literal, Callable
 import math, sys, struct
 from collections import defaultdict, Counter
 from tinygrad.codegen.opt import tc
 from tinygrad.uop.ops import GroupOp, Ops, UOp, PatternMatcher, UPat, range_str, axis_letters
-from tinygrad.helpers import strip_parens, getenv, prod, dedup, Target, CPU_COUNT
+from tinygrad.helpers import strip_parens, getenv, prod, dedup, Target, CPU_COUNT, IMAGE, FLOAT16
 from tinygrad.dtype import ImageDType, dtypes, DType, PtrDType, AddrSpace, truncate, float_to_bf16
 from tinygrad.renderer import Renderer
-from tinygrad.codegen.late.devectorizer import no_vectorized_alu
 
 
 base_rewrite = PatternMatcher([
-  (UPat(Ops.DEFINE_REG, name="x"), lambda ctx,x: f"{ctx.render_dtype(x.dtype.base)} {ctx[x]}[{x.dtype.size}];"),
-  (UPat(Ops.IF, name="x"), lambda ctx,x: f"if ({ctx[x.src[0]]}) {{"),
-  (UPat((Ops.ENDIF, Ops.END)), lambda ctx: "}"),
-  (UPat(Ops.WMMA, name="x"), lambda ctx,x: f"__{x.arg[0]}({ctx[x.src[0]]}, {ctx[x.src[1]]}, {ctx[x.src[2]]})"),
-  # r method accesses
+  # local/reg buffers
+  (UPat(Ops.BUFFER, name="x"), lambda ctx,x: ctx.render_buffer(x)),
+
+  # range/if/endif
   (UPat(Ops.RANGE, name="x"),
    lambda ctx,x: f"for ({ctx.render_dtype(x.dtype)} {ctx[x]} = 0; {ctx[x]} < {ctx[x.src[0]]}; {ctx[x]}++) {{"),
-  (UPat(Ops.STACK, name="x"),
-   lambda ctx,x: f"{ctx.float4.replace('float4', ctx.render_dtype(x.dtype))}" + \
-    f"{ctx.float4_style[0]}{','.join([ctx[y] for y in x.src])}{ctx.float4_style[1]}"),
-  (UPat(Ops.CAST, name="x"), lambda ctx,x:
-    f"__builtin_convertvector({ctx[x.src[0]]}, {ctx.render_dtype(x.dtype)})" if x.dtype.count > 1 and not isinstance(x.dtype, PtrDType) else None),
-  (UPat(Ops.CAST, name="x"), lambda ctx,x: f"({ctx.render_cast(x.dtype, ctx[x.src[0]])})"),
-  (UPat(Ops.BITCAST, name="x"), lambda ctx,x:
-    f"__builtin_bit_cast({ctx.render_dtype(x.dtype)}, ({ctx.render_dtype(x.src[0].dtype)})({ctx[x.src[0]]}))"),
-  (UPat(Ops.DEFINE_LOCAL, name="x"), lambda ctx,x: f"{ctx.smem_align}{ctx.smem_prefix}{ctx.render_dtype(x.dtype.base)} {ctx[x]}[{x.dtype.size}];"),
+  (UPat(Ops.IF, name="x"), lambda ctx,x: f"if ({ctx[x.src[0]]}) {{"),
+  (UPat((Ops.ENDIF, Ops.END)), lambda ctx: "}"),
+
+  # casting
+  (UPat(Ops.CAST, name="x"), lambda ctx,x: f"__builtin_convertvector({ctx[x.src[0]]}, {ctx.render_type(x)})" \
+    if x.max_numel() > 1 and x.addrspace is AddrSpace.REG else None),
+  (UPat(Ops.CAST, name="x"), lambda ctx,x: f"({ctx.render_cast(x, ctx[x.src[0]])})"),
+  (UPat(Ops.BITCAST, name="x"), lambda ctx,x: ctx[x.src[0]] if x.addrspace in (AddrSpace.GLOBAL, AddrSpace.LOCAL) else None),
+  (UPat(Ops.BITCAST, name="x"), lambda ctx,x: f"__builtin_bit_cast({ctx.render_type(x)}, ({ctx.render_type(x.src[0])})({ctx[x.src[0]]}))"),
+
+  # GPU stuff
   (UPat(Ops.BARRIER), lambda ctx: ctx.barrier),
   (UPat(Ops.SPECIAL, name="x"), lambda ctx,x: f"{ctx.code_for_workitem[x.arg[0]](x.arg[-1])}; /* {(x.src[0]).render()} */"),
+
   # const
-  (UPat(Ops.CONST, arg=math.inf, name="x"), lambda ctx, x: f"({ctx.render_cast(x.dtype, ctx.infinity)})"),
-  (UPat(Ops.CONST, arg=-math.inf, name="x"), lambda ctx, x: f"({ctx.render_cast(x.dtype, f'-{ctx.infinity}')})"),
-  (UPat(Ops.CONST, dtype=dtypes.floats, name="x"), lambda ctx,x: f"({ctx.render_cast(x.dtype, ctx.nan)})" if math.isnan(x.arg) else None),
+  (UPat(Ops.CONST, arg=math.inf, name="x"), lambda ctx, x: f"({ctx.render_cast(x, ctx.infinity)})"),
+  (UPat(Ops.CONST, arg=-math.inf, name="x"), lambda ctx, x: f"({ctx.render_cast(x, f'-{ctx.infinity}')})"),
+  (UPat(Ops.CONST, dtype=dtypes.floats, name="x"), lambda ctx,x: f"({ctx.render_cast(x, ctx.nan)})" if math.isnan(x.arg) else None),
   (UPat(Ops.CONST, dtype=dtypes.float, name="x"), lambda ctx,x: f"{x.arg}f"),
   (UPat(Ops.CONST, dtype=dtypes.int64, name="x"), lambda ctx,x: f"{x.arg}ll"),
   (UPat(Ops.CONST, dtype=dtypes.uint64, name="x"), lambda ctx,x: f"{truncate[x.dtype](x.arg)}ull"),
   (UPat(Ops.CONST, dtype=dtypes.uint32, name="x"), lambda ctx,x: f"{truncate[x.dtype](x.arg)}u"),
   (UPat(Ops.CONST, dtype=dtypes.bool, name="x"), lambda ctx,x: "1" if x.arg else "0"),
   # consts are rendered to larger type and casted
-  (UPat(Ops.CONST, (*dtypes.fp8s, dtypes.bfloat16, dtypes.half), name="x"), lambda ctx,x: f"({ctx.render_cast(x.dtype, f'{x.arg}f')})"),
-  (UPat(Ops.CONST, (dtypes.uint8, dtypes.uint16), name="x"), lambda ctx,x: f"({ctx.render_cast(x.dtype, f'{x.arg}u')})"),
-  (UPat(Ops.CONST, (dtypes.int8, dtypes.int16), name="x"), lambda ctx,x: f"({ctx.render_cast(x.dtype, str(x.arg))})"),
+  (UPat(Ops.CONST, (*dtypes.fp8s, dtypes.bfloat16, dtypes.half), name="x"), lambda ctx,x: f"({ctx.render_cast(x, f'{x.arg}f')})"),
+  (UPat(Ops.CONST, (dtypes.uint8, dtypes.uint16), name="x"), lambda ctx,x: f"({ctx.render_cast(x, f'{x.arg}u')})"),
+  (UPat(Ops.CONST, (dtypes.int8, dtypes.int16), name="x"), lambda ctx,x: f"({ctx.render_cast(x, str(x.arg))})"),
   # default const render
   (UPat(Ops.CONST, name="x"), lambda ctx,x: str(x.arg)),
-  # new load/store
-  (UPat(Ops.INDEX, src=(UPat.var("buf"), UPat.var('idx')), allow_any_len=True),
-   lambda ctx,buf,idx: f"({ctx[buf]}+{strip_parens(ctx[idx]) if idx.arg == Ops.ADD else ctx[idx]})"),
-  (UPat(Ops.LOAD, src=(UPat(Ops.INDEX, src=(UPat(), UPat(), UPat.var("gate"))).or_casted("bidx"), UPat.var("var"))),
-   lambda ctx,bidx,var,gate: f"({ctx[gate]}?*{ctx[bidx]}:{ctx[var]})"),
-  (UPat(Ops.LOAD, src=(UPat.var('bidx'),)), lambda ctx,bidx: f"(*{ctx[bidx]})"),
-  (UPat(Ops.STORE, src=(UPat.var('bidx'), UPat.var("var"))), lambda ctx,bidx,var: f"*{ctx[bidx]} = {ctx[var]};"),
+
+  # SHRINK/INDEX
+  (UPat(Ops.INDEX, src=(UPat.var("buf"), UPat.var('idx')), name="x"), lambda ctx,**kwargs: ctx.render_index(**kwargs)),
+  (UPat(Ops.SHRINK, src=(UPat.var("buf"), UPat.var('idx'), UPat.cvar()), name="x"), lambda ctx,**kwargs: ctx.render_index(**kwargs)),
+  (UPat(Ops.STACK, name="x"),
+   lambda ctx,x: f"{ctx.float4.replace('float4', ctx.render_type(x))}" + \
+                 f"{ctx.float4_style[0]}{','.join([ctx[y] for y in x.src])}{ctx.float4_style[1]}"),
+
+  # load/store
+  (UPat(Ops.LOAD, src=(UPat.var('bidx'),)), lambda ctx,bidx: f"({ctx.render_access(bidx)})"),
+  (UPat(Ops.LOAD, src=(UPat.var("bidx"), UPat.var("var"), UPat.var("gate"))),
+   lambda ctx,bidx,var,gate: f"({ctx[gate]}?{ctx.render_access(bidx)}:{ctx[var]})"),
+  (UPat(Ops.STORE, src=(UPat.var('bidx'), UPat.var("var"))), lambda ctx,bidx,var: f"{ctx.render_access(bidx)} = {ctx[var]};"),
+
   # alu/gep
-  # TODO: look for left-associative
+  (UPat(Ops.WMMA, name="x"), lambda ctx,x: f"__{x.arg[0]}({ctx[x.src[0]]}, {ctx[x.src[1]]}, {ctx[x.src[2]]})"),
   (UPat(GroupOp.ALU, name="x"), lambda ctx,x: ctx.code_for_op[x.op](
     *([strip_parens(ctx[v]) if v.op == x.op and x.op in {Ops.ADD, Ops.MUL, Ops.XOR, Ops.OR, Ops.AND} else ctx[v] for v in x.src]), x.dtype)),
-  (UPat(Ops.GEP, name="x"), lambda ctx,x: ctx[x.src[0]] + \
-    (f"[{x.arg[0]}]" if x.src[0].dtype.count > ctx.gep_arr_threshold else f".{'xyzwabcd'[x.arg[0]]}")),
+
   # custom passes through with format
   (UPat((Ops.CUSTOM, Ops.CUSTOMI), name="x"), lambda ctx,x: x.arg.format(*[ctx[y] for y in x.src])),
-])
-
-extra_pm = PatternMatcher([
-  # devectorize any bools
-  (UPat((*GroupOp.ALU, Ops.CAST, Ops.BITCAST, Ops.INDEX), dtype=dtypes.bool, name="alu"), no_vectorized_alu),
-  # CAST (from bool) can't be vectorized
-  (UPat(Ops.CAST, src=(UPat(dtype=dtypes.bool),), name="alu"), no_vectorized_alu),
-  # WHERE can't be vectorized
-  (UPat(Ops.WHERE, name="alu"), no_vectorized_alu),
 ])
 
 def create_non_native_float_pats(dts:tuple[DType, ...], casting:bool=True):
@@ -97,7 +95,15 @@ pm_manual_bf16_cast = PatternMatcher([
   (UPat(Ops.CAST, dtype=dtypes.bfloat16, src=(UPat.var("x", dtype=dtypes.float),)), cast_float_to_bf16),
 ])
 
-def uops_to_dtypes(uops:list[UOp]) -> list[DType]: return dedup(u.dtype for u in uops if not isinstance(u.dtype, (ImageDType, PtrDType)))
+def uops_to_dtypes(uops:list[UOp]) -> list[DType]:
+  ret = []
+  seen = set()
+  for u in uops:
+    if u.addrspace in (AddrSpace.ALU, None) and u.dtype != dtypes.void and u._shape is not None and (key:=(u.dtype, u.max_numel())) not in seen:
+      # TODO: this eventually needs to be removed
+      ret.append(u.dtype.vec(u.max_numel()))
+      seen.add(key)
+  return ret
 
 # (name, dims, dtype_in, dtype_out, device, threads, upcast_axes, reduce_axes)
 def wmma_args(uops:list[UOp]):
@@ -126,19 +132,18 @@ class CStyleLanguage(Renderer):
     Ops.TRUNC: lambda x,dtype: f"trunc({x})",
     Ops.AND: lambda a,b,dtype: f"({a}&{b})", Ops.XOR: lambda a,b,dtype: f"({a}^{b})", Ops.OR: lambda a,b,dtype: f"({a}|{b})",
     Ops.ADD: lambda a,b,dtype: f"({a}+{b})", Ops.SUB: lambda a,b,dtype: f"({a}-{b})", Ops.MUL: lambda a,b,dtype: f"({a}*{b})",
-    Ops.MOD: lambda a,b,dtype: f"({a}%{b})", Ops.IDIV: lambda a,b,dtype: f"({a}/{b})", Ops.CMPNE: lambda a,b,dtype: f"({a}!={b})",
+    Ops.CMOD: lambda a,b,dtype: f"({a}%{b})", Ops.CDIV: lambda a,b,dtype: f"({a}/{b})", Ops.CMPNE: lambda a,b,dtype: f"({a}!={b})",
     Ops.SHR: lambda a,b,dtype: f"({a}>>{b})", Ops.SHL: lambda a,b,dtype: f"({a}<<{b})", Ops.CMPLT: lambda a,b,dtype: f"({a}<{b})",
     Ops.WHERE: lambda a,b,c,dtype: f"({a}?{b}:{c})", Ops.CMPEQ: lambda a,b,dtype: f"({a}=={b})"}
 
   string_rewrite = base_rewrite
-  extra_matcher = extra_pm
 
-  def render_kernel(self, function_name:str, kernel:list[str], bufs:list[tuple[str,tuple[DType,bool]]], uops:list[UOp], prefix=None) -> str:
+  def render_kernel(self, function_name:str, kernel:list[str], bufs:list[tuple[str,tuple[UOp,bool]]], uops:list[UOp], prefix=None) -> str:
     tmp = ""
-    if any(isinstance(dtype, ImageDType) for _,(dtype,_) in bufs):
+    if any(isinstance(u.dtype, ImageDType) for _,(u,_) in bufs):
       tmp = "const sampler_t smp = CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP | CLK_FILTER_NEAREST;\n"
-    buftypes = [(name, self.render_dtype(dtype, mutable)+self.buffer_suffix if isinstance(dtype, (ImageDType, PtrDType)) else
-                self.arg_int_prefix if dtype == dtypes.int else None) for name,(dtype,mutable) in bufs]
+    buftypes = [(name, self._render_dtype(u.dtype, sz=1, addrspace=u.addrspace, mutable=mutable)+self.buffer_suffix \
+                 if u.addrspace == AddrSpace.GLOBAL else self.arg_int_prefix if u.dtype == dtypes.int else None) for name,(u,mutable) in bufs]
     local_dims = [u.src[0] for u in uops if u.op is Ops.SPECIAL and u.arg[0] == "l"]
     launch_bounds = prod([d.vmax for d in local_dims])
     prg = ''.join([f"{self.kernel_typedef.format(launch_bounds=launch_bounds)} {function_name}(",] +
@@ -146,43 +151,67 @@ class CStyleLanguage(Renderer):
     [") {\n" + tmp] + ['\n'.join(kernel), "\n}"])
     return prg if prefix is None else "\n".join(prefix)+f"\n{prg}"
 
-  def render_cast(self, dt:DType, val: str) -> str: return f"({self.render_dtype(dt)})({val})"
+  def render_index(self, x:UOp, buf:UOp, idx:UOp):
+    if buf.addrspace == AddrSpace.ALU:
+      # this is lane access in C
+      assert idx.op is Ops.CONST, f"{idx.op} must be CONST"
+      return self[buf]+(f"[{idx.arg}]" if buf.max_numel() > self.gep_arr_threshold else f".{'xyzwabcd'[idx.arg]}")
+    return f"({self[buf]}+{strip_parens(self[idx]) if idx.arg == Ops.ADD else self[idx]})"
+
+  def render_buffer(self, x:UOp):
+    lanes = 1
+    prefix = f"{self.smem_align}{self.smem_prefix}" if x.addrspace == AddrSpace.LOCAL else ""
+    suffix = f"[{x.max_numel()}]"
+    return f"{prefix}{self._render_dtype(x.dtype, sz=lanes)} {self[x]}{suffix};"
+
+  def _render_dtype(self, dtype:DType, sz:int=1, addrspace=AddrSpace.ALU, mutable=True, override_ptr=False):
+    if isinstance(dtype, ImageDType): return f"{'write_only' if mutable else 'read_only'} image2d_t"
+    prefix, suffix = "", ""
+    if addrspace in (AddrSpace.LOCAL, AddrSpace.GLOBAL):
+      if addrspace == AddrSpace.LOCAL and self.smem_prefix_for_cast: prefix = self.smem_prefix
+      if addrspace == AddrSpace.GLOBAL: prefix = self.buffer_prefix
+    if addrspace in (AddrSpace.LOCAL, AddrSpace.GLOBAL) or override_ptr:
+      suffix = "*"
+    if sz > 1:
+      return prefix + self.type_map.get(scalar:=dtype.scalar(), scalar.name).replace(" ", "_") + str(sz) + suffix
+    return prefix + self.type_map.get(scalar:=dtype.scalar(), scalar.name) + suffix
+
+  def render_type(self, u:UOp): return self._render_dtype(u.dtype, u.max_numel(), u.addrspace)
+  def render_access(self, u:UOp):
+    if u.max_numel() > 1 or u.dtype != u.src[0].dtype:
+      return f"*(({self._render_dtype(u.dtype, u.max_numel(), u.addrspace, override_ptr=True)})({self[u]}))"
+    else: return f"*{self[u]}"
+  def render_cast(self, u:UOp, val:str) -> str: return f"({self.render_type(u)})({val})"
+
+  # LEGACY
   def render_dtype(self, dt:DType, mutable=True) -> str:
-    if isinstance(dt, ImageDType): return f"{'write_only' if mutable else 'read_only'} image2d_t"
-    if isinstance(dt, PtrDType):
-      prefix = ""
-      if dt.addrspace == AddrSpace.LOCAL and self.smem_prefix_for_cast: prefix = self.smem_prefix
-      if dt.addrspace == AddrSpace.GLOBAL: prefix = self.buffer_prefix
-      return prefix + self.render_dtype(dt.base) + "*"
-    if dt.count > 1: return self.type_map.get(scalar:=dt.scalar(), scalar.name).replace(" ", "_") + str(dt.count)
-    return self.type_map.get(scalar:=dt.scalar(), scalar.name)
+    return self._render_dtype(dt, dt.count, dt.addrspace if isinstance(dt, PtrDType) else AddrSpace.REG)
 
   def __getitem__(self, key): return self.r[key]  # hacky helper
-  def _render(self, uops:list[UOp]) -> tuple[str, list[str], list[tuple[str,tuple[DType,bool]]]]:
+  def _render(self, uops:list[UOp]) -> tuple[str, list[str], list[tuple[str,tuple[UOp,bool]]]]:
     r: dict[UOp, str] = {}
     self.r = r
 
     child_count = Counter(v for ru in uops for v in ru.src)
     # find which PARAMs are stored to with a single toposort
     writable_params = {u for u in UOp.sink(*[u.src[0] for u in uops if u.op is Ops.STORE]).toposort(lambda u: u.op != Ops.END) if u.op is Ops.PARAM}
-    bufs: dict[UOp, tuple[str, tuple[DType, bool]]] = {}
+    bufs: dict[UOp, tuple[str, tuple[UOp, bool]]] = {}
     kernel = []
     depth = 1
     c: defaultdict[str, int] = defaultdict(int)
     name = "test"
     for u in uops:
       if u.op in {Ops.NOOP, Ops.GROUP}: continue
+      if u.op == Ops.STACK and len(u.src) == 0: continue
       if u.op is Ops.AFTER:
         r[u] = r[u.src[0]]
         continue
       if u.op is Ops.SINK:
         if u.arg is not None: name = u.arg.function_name
         continue
-      if u.op in (Ops.PARAM, Ops.DEFINE_VAR):
-        if u.op is not Ops.PARAM: r[u] = u.arg[0]
-        elif isinstance(u.dtype, ImageDType): r[u] = f"data{u.arg}_{u.dtype.shape[0]}x{u.dtype.shape[1]}"
-        else: r[u] = f"data{u.arg}_{sz}" if (sz:=u.ptrdtype.size) > 0 else f"data{u.arg}"
-        bufs[u] = (r[u], (u.dtype, u in writable_params))
+      if u.op is Ops.PARAM:
+        r[u] = f"data{u.arg.slot}_" + '_'.join([str(x) for x in u.shape])
+        bufs[u] = (r[u], (u, u in writable_params))
         continue
 
       # naming
@@ -190,23 +219,22 @@ class CStyleLanguage(Renderer):
       if u.op is Ops.SPECIAL: r[u] = u.arg
       elif u.op is Ops.RANGE: r[u] = f"{axis_letters[u.arg[-1]]}idx"+range_str(u)
       else:
-        prefix = {Ops.WMMA: "wmma", Ops.DEFINE_LOCAL: "temp", Ops.CONST: "const",
-                  Ops.CAST: "cast", Ops.BITCAST: "cast", Ops.GEP: "gep", Ops.STACK: "cast",
-                  Ops.INDEX: "bidx", Ops.DEFINE_REG: "acc", Ops.LOAD: "val"}.get(u.op, "alu")
+        prefix = {Ops.WMMA: "wmma", Ops.CONST: "const", Ops.BUFFER: "buf", Ops.CAST: "cast", Ops.BITCAST: "cast", Ops.STACK: "cast",
+                  Ops.INDEX: "bidx", Ops.LOAD: "val"}.get(u.op, "alu")
         r[u] = f"{prefix}{c[prefix]}"
 
-      l = cast(str, self.string_rewrite.rewrite(u, ctx=self))
+      l: str|None = self.string_rewrite.rewrite(u, ctx=self)
       assert l is not None, f"failed to render {u.op} {u.dtype} {[(x.op,x.dtype) for x in u.src]} {u.arg}"
 
       if u.op in {Ops.ENDIF, Ops.END}: depth -= 1
-      if (u.op is not Ops.CAST or u.dtype.vcount == 1) and (u.op in {Ops.CONST, Ops.GEP, Ops.INDEX, Ops.CUSTOMI} or \
-        (u.op is Ops.LOAD and u.src[0].ptrdtype.addrspace == AddrSpace.REG) or \
-        (u.op is Ops.CAST and isinstance(u.dtype, PtrDType)) or \
+      if (u.op is not Ops.CAST or u.dtype.vcount == 1) and (u.op in {Ops.CONST, Ops.INDEX, Ops.SHRINK, Ops.CUSTOMI} or \
+        (u.op is Ops.LOAD and u.src[0].addrspace == AddrSpace.REG) or \
+        (u.op is Ops.CAST and u.addrspace in (AddrSpace.GLOBAL, AddrSpace.LOCAL)) or \
         (u.op in {Ops.STACK, *(GroupOp.ALU-{Ops.WHERE}), Ops.CAST, Ops.BITCAST} and child_count[u] == 1 and not getenv("EXPAND_SSA"))):
         r[u] = l
       else:
-        if u.op not in {Ops.RANGE, Ops.DEFINE_LOCAL, Ops.STORE, Ops.DEFINE_REG} and u.dtype != dtypes.void:
-          l = f"{self.render_dtype(u.dtype)} {r[u]} = {l}" + (";" if u.op is not Ops.SPECIAL else "")
+        if u.op not in {Ops.RANGE, Ops.STORE, Ops.BUFFER} and u.dtype != dtypes.void:
+          l = f"{self.render_type(u)} {r[u]} = {l}" + (";" if u.op is not Ops.SPECIAL else "")
         kernel.append("  "*depth + l)
         if prefix: c[prefix] += 1  # if it was used, increment
       if u.op in {Ops.IF, Ops.RANGE}: depth += 1
@@ -238,9 +266,8 @@ class ClangRenderer(CStyleLanguage):
   # there is also no native bfl16 <-> fp16 conversion on those CPUs
   extra_matcher = PatternMatcher([(UPat.var("x", dtypes.float64).cast(dtypes.float16), lambda x: x.cast(dtypes.float32).cast(dtypes.float16)),
                                  (UPat.var("x", dtypes.float64).cast(dtypes.bfloat16), lambda x: x.cast(dtypes.float32).cast(dtypes.bfloat16)),
-                                 (UPat.var("x", dtypes.bfloat16).cast(dtypes.float16), lambda x: x.cast(dtypes.float32).cast(dtypes.float16)),
-    (UPat((Ops.SQRT, Ops.TRUNC), name="alu"), no_vectorized_alu)]) + create_non_native_float_pats((dtypes.bfloat16,)) + pm_manual_bf16_cast + \
-    CStyleLanguage.extra_matcher
+                                 (UPat.var("x", dtypes.bfloat16).cast(dtypes.float16), lambda x: x.cast(dtypes.float32).cast(dtypes.float16))]) \
+    + create_non_native_float_pats((dtypes.bfloat16,)) + pm_manual_bf16_cast
 
   if sys.platform == 'win32':
     kernel_typedef = "__attribute__((ms_abi)) void"
@@ -249,37 +276,21 @@ class ClangRenderer(CStyleLanguage):
     alignment = 2**int(math.log2(dt.itemsize)) if getenv("ALIGNED", 1) and not dtypes.is_bool(dt) else 1
     return f"typedef {self.render_dtype(dt.scalar())} {self.render_dtype(dt)} __attribute__((aligned({alignment}),ext_vector_type({dt.count})));"
 
-  def _render_defines(self, uops) -> list[str]:
-    prefix = [self.render_vector_prefix(dt) for dt in uops_to_dtypes(uops) if dt.count > 1]
-    # https://github.com/corsix/amx
-    for name, (N, M, _), dtype_in, _, _, _, _, _ in wmma_args(uops):
-      prefix += [
-        '#define AMX_SET(imm5) __asm("nop\\nnop\\nnop\\n.word (0x201000+(%0<<5)+%1)" : : "i"(17), "i"(imm5) : "memory")',
-        '#define AMX(op, gpr, btf) __asm(".word (0x201000+(%0 << 5)+0%1-((0%1>>4)*6))" : : "i"(op), "r"((unsigned long long)(gpr)+(btf)) : "memory")',
-      ]
-      # 'static' in C roughly means that function symbol isn't exported. LLVM puts those symbols at the end of object file which allows Clang JIT
-      # to just jump at the start of a shellcode without having to deal with symbols or trampolines at all. This is better than having to inline
-      # wmma function every time it is called or wasting complexity on a symbol parsing and a memory page on trampoline.
-      out, dt1, dt2 = self.render_dtype(dtype_in.vec(N*N)), self.render_dtype(dtype_in.vec(N)), self.render_dtype(dtype_in.vec(M))
-      prefix += [f"""static {out} __{name}({dt1} data1, {dt2} data2, {out} data0){{
-  AMX_SET(0);\n  for(int ridx0 = 0; ridx0 < 16; ridx0++){{ AMX(4, (int *)(&data0), 0ull<<62 | (ridx0*4ull)<<56 | ridx0*64ull); }}
-  AMX(0, (int *)(&data2), 0ull<<62); AMX(1, (int *)(&data1), 0ull<<62); AMX(12, 0, 0ull);
-  for(int ridx0 = 0; ridx0 < 16; ridx0++){{ AMX(5, (int *)(&data0), 0ull<<62 | (ridx0*4ull)<<56 | ridx0*64ull); }}
-  AMX_SET(1);\n  return data0;\n}}"""]
-    return prefix
+  def _render_defines(self, uops) -> list[str]: return [self.render_vector_prefix(dt) for dt in uops_to_dtypes(uops) if dt.count > 1]
   def _render_body(self, function_name, kernel, bufs, uops, pref=None) -> str: return super().render_kernel(function_name, kernel, bufs, uops, pref)
-  def _render_entry(self, function_name:str, bufs:list[tuple[str,tuple[DType,bool]]]) -> str: return ""
+  def _render_entry(self, function_name:str, bufs:list[tuple[str,tuple[UOp,bool]]]) -> str: return ""
 
   def render_kernel(self, function_name, kernel, bufs, uops, prefix=None) -> str:
     defines = '\n'.join(self._render_defines(uops))
     return defines + "\n" + self._render_body(function_name, kernel, bufs, uops, prefix) + "\n" + self._render_entry(function_name, bufs)
 
-class ClangJITRenderer(ClangRenderer):
+  def supported_dtypes(self):
+    return {d for d in super().supported_dtypes() if (d != dtypes.bfloat16 or self.target.arch.startswith(("x86", "arm"))) and d not in dtypes.fp8s}
+
   def __init__(self, target:Target):
     super().__init__(target)
-    from tinygrad.runtime.support.compiler_cpu import ClangJITCompiler
-    if "AMX" in target.arch: self.tensor_cores = tc.amx
-    self.compiler = ClangJITCompiler([x for x in target.arch.split(",") if x != "AMX"])
+    from tinygrad.runtime.support.compiler_cpu import ClangCompiler
+    self.compiler = ClangCompiler(target.arch.split(","))
 
 class OpenCLRenderer(CStyleLanguage):
   has_aux = True
@@ -294,7 +305,7 @@ class OpenCLRenderer(CStyleLanguage):
   code_for_workitem = {"g": lambda x: f"get_group_id({x})", "l": lambda x: f"get_local_id({x})", "i": lambda x: f"get_global_id({x})"}
   type_map = { dtypes.int8: "char", dtypes.uint8: "uchar", dtypes.uint32: "uint", dtypes.uint16: "ushort", dtypes.uint64: "ulong",
               dtypes.bfloat16: "ushort" }
-  extra_matcher = create_non_native_float_pats((dtypes.bfloat16,)) + pm_manual_bf16_cast + extra_pm
+  extra_matcher = create_non_native_float_pats((dtypes.bfloat16,)) + pm_manual_bf16_cast
 
   string_rewrite = PatternMatcher([
     (UPat(Ops.BITCAST, name="x"), lambda ctx,x: f"as_{ctx.render_dtype(x.dtype)}(({ctx.render_dtype(x.src[0].dtype)})({ctx[x.src[0]]}))"),
@@ -302,13 +313,13 @@ class OpenCLRenderer(CStyleLanguage):
     (UPat(Ops.CONST, dtypes.bfloat16, name="x"),
       lambda ctx,x: f"{(struct.unpack('I', struct.pack('f', float_to_bf16(x.arg)))[0] >> 16)}u"),
     # load/store image (OpenCL)
-    (UPat(Ops.LOAD, dtype=dtypes.float.vec(4), src=(UPat.var('buf').index(UPat.var('idx', dtypes.int.vec(2)), UPat.var("gate")), UPat.var("var"))),
-      lambda ctx,buf,idx,var,gate: f"({ctx[gate]}?read_imagef({ctx[buf]}, smp, {ctx[idx]}):{ctx[var]})"),
-    (UPat(Ops.LOAD, dtype=dtypes.float.vec(4), src=(UPat.var('buf').index(UPat.var('idx', dtypes.int.vec(2))),)),
-      lambda ctx,buf,idx: f"read_imagef({ctx[buf]}, smp, {ctx[idx]})"),
-    (UPat(Ops.STORE, src=(UPat.var('buf').index(UPat.var('idx', dtypes.int.vec(2)), allow_any_len=True),
-                          UPat.var("var", dtypes.float.vec(4)))),
-      lambda ctx,buf,idx,var: f"write_imagef({ctx[buf]}, {ctx[idx]}, {ctx[var]});"),
+    (UPat.var('buf').index(UPat.var('idx_y'), UPat.var('idx_x')), lambda ctx,buf,idx_y,idx_x: f"IMAGE<{ctx[buf]}, {ctx[idx_y]}, {ctx[idx_x]}>"),
+    (UPat(Ops.LOAD, dtype=dtypes.float, src=(UPat.var('buf').index(UPat.var('idx_y'), UPat.var('idx_x')), UPat.var("var"), UPat.var("gate"))),
+      lambda ctx,buf,idx_y,idx_x,var,gate: f"({ctx[gate]}?read_imagef({ctx[buf]}, smp, (int2)({ctx[idx_x]},{ctx[idx_y]})):{ctx[var]})"),
+    (UPat(Ops.LOAD, dtype=dtypes.float, src=(UPat.var('buf').index(UPat.var('idx_y'), UPat.var('idx_x')),)),
+      lambda ctx,buf,idx_y,idx_x: f"read_imagef({ctx[buf]}, smp, (int2)({ctx[idx_x]},{ctx[idx_y]}))"),
+    (UPat(Ops.STORE, src=(UPat.var('buf').index(UPat.var('idx_y'), UPat.var('idx_x')), UPat.var("var", dtypes.float))),
+      lambda ctx,buf,idx_y,idx_x,var: f"write_imagef({ctx[buf]}, (int2)({ctx[idx_x]},{ctx[idx_y]}), {ctx[var]});"),
   ]) + base_rewrite
 
   def render_kernel(self, function_name, kernel, bufs, uops, prefix=None) -> str:
@@ -318,33 +329,20 @@ class OpenCLRenderer(CStyleLanguage):
   def aux(self, uops:list[UOp]):
     arg_dtypes:list[list[tuple[int, DType]]] = []
     for i,u in enumerate(u for u in uops if u.op is Ops.PARAM):
-      if len(arg_dtypes) >= u.arg: arg_dtypes.append([])
-      arg_dtypes[u.arg].append((i, u.dtype))
+      while len(arg_dtypes) <= u.arg.slot: arg_dtypes.append([])
+      arg_dtypes[u.arg.slot].append((i, u.dtype))
     return tuple(tuple(a) for a in arg_dtypes),
 
-class IntelRenderer(OpenCLRenderer):
-  suffix, kernel_typedef = "INTEL", "__attribute__((intel_reqd_sub_group_size(8)))\n" + "__kernel void"
-  tensor_cores = tc.intel
-
-  string_rewrite = PatternMatcher([
-    (UPat(Ops.CAST, dtype=dtypes.bfloat16, src=(UPat.var('x', dtype=dtypes.float),)), lambda ctx,x: f"intel_convert_bfloat16_as_ushort({ctx[x]})"),
-    (UPat(Ops.CAST, dtype=dtypes.float, src=(UPat.var('x', dtype=dtypes.bfloat16),)), lambda ctx,x: f"intel_convert_as_bfloat16_float({ctx[x]})"),
-  ]) + OpenCLRenderer.string_rewrite
-
-  def render_kernel(self, function_name, kernel, bufs, uops, prefix=None) -> str:
-    prefix = []
-    for name, _, dtype_in, dtype_out, _, _, _, _ in wmma_args(uops):
-      dt_in = ("ushort", "bf16") if dtype_in == dtypes.bfloat16 else (dtype_in.name, "f16")
-      prefix.append(f"""{dtype_out.name}8 __{name}({dt_in[0]}16 a, {dt_in[0]}16 b, {dtype_out.name}8 c) {{
-    return intel_sub_group_{dt_in[1]}_{dt_in[1]}_matrix_mad_k16(as_int8(a), as_int8(b), c);\n}}""")
-    return super().render_kernel(function_name, kernel, bufs, uops, prefix or None)
+  def supported_dtypes(self): return {d for d in super().supported_dtypes()
+                                      if (d != dtypes.half or "cl_khr_fp16" in self.target.arch) and
+                                      (d != dtypes.double or "cl_khr_fp64" in self.target.arch) and d not in dtypes.fp8s}
 
 class MetalRenderer(CStyleLanguage):
   shared_max = 32768
   def __init__(self, target:Target):
     super().__init__(target)
     from tinygrad.runtime.ops_metal import MetalCompiler
-    self.compiler, self.tensor_cores = MetalCompiler(), tc.metal if target.arch == "arm64" else []
+    self.compiler, self.tensor_cores = MetalCompiler(), tc.metal if target.arch.startswith("Apple") and int(target.arch[5:]) >= 7 else []
 
   # language options
   kernel_typedef = "kernel void"
@@ -366,7 +364,7 @@ class MetalRenderer(CStyleLanguage):
     # NOTE: this is copied from PTX
     (UPat((Ops.SQRT, Ops.EXP2, Ops.LOG2, Ops.SIN), dtype=dtypes.bfloat16, name="x"),
       lambda x: (UOp(x.op, dtypes.float, tuple(vv.cast(dtypes.float) for vv in x.src), x.arg).cast(dtypes.bfloat16))),
-  ]) + extra_pm
+  ])
 
   string_rewrite = PatternMatcher([
     (UPat(Ops.BITCAST, name="x"), lambda ctx,x: f"as_type<{ctx.render_dtype(x.dtype)}>(({ctx.render_dtype(x.src[0].dtype)})({ctx[x.src[0]]}))"),
@@ -382,6 +380,10 @@ class MetalRenderer(CStyleLanguage):
   mat_a.thread_elements()[1] = a[1]; mat_b.thread_elements()[1] = b[1]; mat_c.thread_elements()[1] = c[1];
   simdgroup_multiply_accumulate(mat_c, mat_a, mat_b, mat_c);\n  return {dstr_out}(mat_c.thread_elements()[0], mat_c.thread_elements()[1]);\n}}""")
     return super().render_kernel(function_name, kernel, bufs, uops, prefix)
+
+  def supported_dtypes(self):
+    return {d for d in super().supported_dtypes() if (d != dtypes.bfloat16 or ((arch:=self.target.arch).startswith("Apple") and int(arch[5:]) >= 6))
+            and d not in dtypes.fp8s+(dtypes.double,)}
 
 _nms = list("xyzwabcdefghijkl") + [f'v{i}' for i in range(16, 32)]
 
@@ -417,7 +419,7 @@ class CUDARenderer(CStyleLanguage):
   type_map = {dtypes.bfloat16: "nv_bfloat16", dtypes.fp8e4m3: "__nv_fp8_e4m3", dtypes.fp8e5m2: "__nv_fp8_e5m2"}
   extra_matcher = create_non_native_float_pats(dtypes.fp8s, casting=False) + PatternMatcher([
     (UPat(Ops.CAST, dtypes.fp8s, UPat.var("x", dtypes.fp8s), name='y'), lambda x,y: x.cast(dtypes.float).cast(y.dtype) if x.dtype!=y.dtype else None),
-  ]) + extra_pm
+  ])
   string_rewrite = PatternMatcher([
     (UPat(Ops.BITCAST, name="x"), lambda ctx,x: f"tg_bitcast<{ctx.render_dtype(x.dtype)}>(({ctx.render_dtype(x.src[0].dtype)})({ctx[x.src[0]]}))"),
   ]) + base_rewrite
@@ -457,6 +459,11 @@ class CUDARenderer(CStyleLanguage):
 
     return super().render_kernel(function_name, kernel, bufs, uops, prefix=prefix)
 
+  def supported_dtypes(self):
+    ver = int(self.target.arch[3:])
+    return {d for d in super().supported_dtypes() if (d != dtypes.half or ver >= 53) and (d != dtypes.bfloat16 or ver >= 80)
+            and (d not in dtypes.fp8_ocp or ver >= 89) and d not in dtypes.fp8_fnuz}
+
 class NVCCRenderer(CUDARenderer):
   def __init__(self, target:Target): super().__init__(target, use_nvcc=True)
 
@@ -477,12 +484,16 @@ class HIPRenderer(CStyleLanguage):
     super().__init__(target)
     from tinygrad.runtime.support.compiler_amd import HIPCompiler, HIPCCCompiler
     self.compiler, self.tensor_cores = (HIPCCCompiler if use_hipcc else HIPCompiler)(target.arch), tc.get_amd(target.arch)
-    if not self.is_cdna4(target.arch): self.extra_matcher += pm_manual_bf16_cast + extra_pm
+    if not self.is_cdna4(target.arch): self.extra_matcher += pm_manual_bf16_cast
     if self.is_cdna(target.arch):
       self.string_rewrite = PatternMatcher([
         (UPat(Ops.WMMA, name="x"), lambda ctx,x: f"__{x.arg[0]}({ctx[x.src[0]]}, {ctx[x.src[1]]}, {ctx[x.src[2]]},"
           f" {fp8_index(x.src[0].dtype)}, {fp8_index(x.src[0].dtype)}, 0, 0, 0, 0)" if x.arg[1][2] == 128 else None),
         (UPat(Ops.WMMA, name="x"), lambda ctx,x: f"__{x.arg[0]}({ctx[x.src[0]]}, {ctx[x.src[1]]}, {ctx[x.src[2]]}, 0, 0, 0)"),
+        (UPat(Ops.CONST, dtypes.fp8s, name="x"), lambda ctx,x: f"f32_to_fp8({ctx.nan}, {fp8_index(x.dtype)})" if math.isnan(x.arg) else None),
+        (UPat(Ops.CONST, dtypes.fp8s, arg=math.inf, name="x"), lambda ctx,x: f"f32_to_fp8({ctx.infinity}, {fp8_index(x.dtype)})"),
+        (UPat(Ops.CONST, dtypes.fp8s, arg=-math.inf, name="x"), lambda ctx,x: f"f32_to_fp8(-{ctx.infinity}, {fp8_index(x.dtype)})"),
+        (UPat(Ops.CONST, dtypes.fp8s, name="x"), lambda ctx,x: f"f32_to_fp8({x.arg}f, {fp8_index(x.dtype)})"),
         (UPat(Ops.CAST, dtypes.fp8s, (UPat(dtype=dtypes.float),), name="x",),
           lambda ctx,x: f"f32_to_fp8({ctx[x.src[0]]}, {fp8_index(x.dtype)})"),
         (UPat(Ops.CAST, dtypes.float, (UPat.var("y", dtypes.fp8s),), name="x",),
@@ -536,7 +547,8 @@ class HIPRenderer(CStyleLanguage):
     if any(dt.scalar() == dtypes.half for dt in used_dtypes): prefix.append("#define half _Float16")
     if any(dt.scalar() in dtypes.fp8s for dt in used_dtypes):
       prefix += ["typedef unsigned char hip_bf8;", "typedef unsigned char hip_fp8;"]
-    if any(u.op is Ops.CAST and u.dtype in dtypes.fp8s and u.src[0].dtype == dtypes.float for u in uops):
+    if any((u.op is Ops.CAST and u.dtype in dtypes.fp8s and u.src[0].dtype == dtypes.float) or
+           (u.op is Ops.CONST and u.dtype in dtypes.fp8s) for u in uops):
       prefix.append("""static inline __attribute__((device)) unsigned char f32_to_fp8(float v, int is_bf8) {
   v = (((*(unsigned*)&v)&0x7F800000)!=0x7F800000)?__builtin_amdgcn_fmed3f(v,is_bf8?57344.0f:448.0f,is_bf8?-57344.0f:-448.0f) : v;
   return (unsigned char)(is_bf8?__builtin_amdgcn_cvt_pk_bf8_f32(v,v,0,false):__builtin_amdgcn_cvt_pk_fp8_f32(v,v,0,false));\n}""")
@@ -560,6 +572,9 @@ class HIPRenderer(CStyleLanguage):
   for (int n = 0; n < 8; n++) { d[n] = c_frag[n*2]; } return d;\n}""")
     return super().render_kernel(function_name, kernel, bufs, uops, prefix)
 
+  def supported_dtypes(self): return {d for d in super().supported_dtypes()
+                                      if (d not in dtypes.fp8_ocp or self.target.arch == "gfx950") and d not in dtypes.fp8_fnuz}
+
 class HIPCCRenderer(HIPRenderer):
   def __init__(self, target:Target): super().__init__(target, use_hipcc=True)
 
@@ -568,3 +583,8 @@ class QCOMCLRenderer(OpenCLRenderer):
     super().__init__(target)
     from tinygrad.runtime.support.compiler_qcom import QCOMCompiler
     self.compiler = QCOMCompiler(target.arch)
+
+  # QCOM compiler is flaky with half
+  def supported_dtypes(self):
+    return {d for d in Renderer.supported_dtypes(self)
+            if (d != dtypes.float16 or (bool(IMAGE) and bool(FLOAT16))) and d not in dtypes.fp8s+(dtypes.bfloat16,dtypes.double)}

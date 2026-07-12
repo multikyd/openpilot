@@ -41,7 +41,7 @@ extern uint32_t rx_buffer_overflow;
 
 extern can_health_t can_health[PANDA_CAN_CNT];
 
-// Ignition detected from CAN meessages
+// Ignition detected from CAN messages
 extern bool ignition_can;
 extern uint32_t ignition_can_cnt;
 
@@ -74,7 +74,6 @@ void can_set_orientation(bool flipped);
 #ifdef PANDA_JUNGLE
 void can_set_forwarding(uint8_t from, uint8_t to);
 #endif
-void ignition_can_hook(CANPacket_t *to_push);
 bool can_tx_check_min_slots_free(uint32_t min);
 uint8_t calculate_checksum(const uint8_t *dat, uint32_t len);
 void can_set_checksum(CANPacket_t *packet);
@@ -119,9 +118,7 @@ extern FDCAN_GlobalTypeDef *cans[PANDA_CAN_CNT];
 void can_clear_send(FDCAN_GlobalTypeDef *FDCANx, uint8_t can_number);
 void update_can_health_pkt(uint8_t can_number, uint32_t ir_reg);
 
-void process_can(uint8_t can_number);
 void can_rx(uint8_t can_number);
-bool can_init(uint8_t can_number);
 
 // ******************** harness ********************
 

@@ -2,9 +2,8 @@
 import unittest
 import numpy as np
 from tinygrad import dtypes, Tensor, TinyJit, GlobalCounters, Variable
-from tinygrad.uop.ops import Ops
-from tinygrad.device import is_dtype_supported
-from tinygrad.helpers import temp, CI, DEV, Context
+from tinygrad.uop.ops import Ops, UOp
+from tinygrad.helpers import temp, DEV, Context
 
 N = 200  # has to be bigger than the cache to fail
 
@@ -45,6 +44,32 @@ class TestAssign(unittest.TestCase):
     c.realize()
     self.assertEqual(GlobalCounters.kernel_count, 1)
 
+  def test_assign_slice(self):
+    X = Tensor([1,2,3,4]).realize()
+    xs = X[2:4]
+    xs.assign(xs+1)
+    GlobalCounters.reset()
+    self.assertListEqual(X.tolist(), [1,2,4,5])
+    self.assertEqual(GlobalCounters.kernel_count, 1)
+
+  def test_assign_slice_alt(self):
+    X = Tensor([1,2,3,4]).realize()
+    xs1, xs2 = X[1:3], X[2:4]
+    xs1.assign(xs2+1)
+    GlobalCounters.reset()
+    self.assertListEqual(X.tolist(), [1,4,5,4])
+    self.assertEqual(GlobalCounters.kernel_count, 2)
+
+  def test_assign_flip(self):
+    ref = np.arange(16, dtype=np.float32)
+    X = Tensor(ref, device="CPU").contiguous().realize()
+    GlobalCounters.reset()
+    xs = X[::-1]
+    xs.assign(xs + X)
+    ref = ref + ref[::-1]
+    np.testing.assert_allclose(X.numpy(), ref)
+    self.assertEqual(GlobalCounters.kernel_count, 2)
+
   def test_assign_add(self):
     for T in (1, 2, 10):#, 100): # this crashes in CI, not sure why
       x = Tensor([0]).realize()
@@ -77,6 +102,16 @@ class TestAssign(unittest.TestCase):
     f(x)
     out = x.item()
     assert out == 1, f"expected 1, got {out}"
+
+  def test_pending_assign_chain_preserves_intermediate_reads(self):
+    x = Tensor([0.0]).contiguous().realize()
+    y0 = x + 0
+    x.assign(x + 1)
+    y1 = x + 0
+    x.assign(x + 1)
+    y2 = x + 0
+    x.assign(x + 1)
+    assert [y0.item(), y1.item(), y2.item(), x.item()] == [0.0, 1.0, 2.0, 3.0]
 
   def test_assign_add_jit(self):
     @TinyJit
@@ -140,7 +175,7 @@ class TestAssign(unittest.TestCase):
   def test_assign_changes_realized_alt(self): return self.test_assign_changes_alt(realize=True)
 
   def test_assign_changes_buffer_alt(self):
-    a, b = [Tensor(Tensor(0).contiguous().realize().uop.buf_uop) for _ in range(2)]
+    a, b = [Tensor(Tensor([0]).realize().uop.buf_uop) for _ in range(2)]
     Tensor.realize(a.contiguous().assign(1), b.contiguous().assign(2))
     self.assertEqual((a + b).item(), 3)
 
@@ -189,7 +224,7 @@ class TestAssign(unittest.TestCase):
     new = a + times_a
     np.testing.assert_allclose(new.numpy(), 8)
 
-  @unittest.skipIf(CI and DEV.renderer == "LVP", "flaky in CI")
+  @unittest.skipIf(DEV.renderer == "LVP", "flaky in CI")
   def test_double_assign(self):
     a = Tensor.ones(4).contiguous().realize()
     a += 1
@@ -281,16 +316,26 @@ class TestAssign(unittest.TestCase):
     t.assign(t + 100)
     np.testing.assert_equal(t.numpy(), [[100, 104, 108, 112], [101, 105, 109, 113], [102, 106, 110, 114], [103, 107, 111, 115]])
 
+  def test_assign_corealize_order_independent(self):
+    for order in [lambda x,y: Tensor.realize(x, y), lambda x,y: Tensor.realize(y, x)]:
+      x = Tensor([1.0]).realize()
+      y = x + 10
+      x.assign(x*2)
+      x.assign(x+3)
+      order(x, y)
+      self.assertEqual(y.tolist(), [11.0])
+      self.assertEqual(x.tolist(), [5.0])
+
   def test_assign_contiguous(self):
-    b = Tensor.arange(16).reshape(4,4).contiguous().realize()
-    a = (Tensor.arange(16).reshape(4,4).contiguous().realize() + 1)
+    b = Tensor.arange(16).reshape(4,4).clone().realize()
+    a = (Tensor.arange(16).reshape(4,4).clone().realize() + 1)
     GlobalCounters.reset()
     b.assign(a.contiguous()).realize()
     self.assertEqual(GlobalCounters.kernel_count, 2)
 
   def test_assign_contiguous_permute(self):
-    b = Tensor.arange(16).reshape(4,4).contiguous().realize()
-    a = (Tensor.arange(16).reshape(4,4).contiguous().realize() + 1).permute((1,0))
+    b = Tensor.arange(16).reshape(4,4).clone().realize()
+    a = (Tensor.arange(16).reshape(4,4).clone().realize() + 1).permute((1,0))
     GlobalCounters.reset()
     b.assign(a.contiguous()).realize()
     self.assertEqual(GlobalCounters.kernel_count, 2)
@@ -326,29 +371,29 @@ class TestAssign(unittest.TestCase):
     np.testing.assert_allclose(a.numpy(), np.arange(N*N).reshape((N,N)) + np.arange(N*N).reshape((N,N)).transpose(1,0))
 
   def test_post_permuted_assignment_alt(self):
-    a = Tensor.arange(N*N).reshape(N,N).contiguous().realize()
-    b = Tensor.arange(N*N).reshape(N,N).contiguous().realize()
+    a = Tensor.arange(N*N).reshape(N,N).clone().realize()
+    b = Tensor.arange(N*N).reshape(N,N).clone().realize()
     new_a = (a.T+b).numpy()
     a.assign(a.T+b)
     np.testing.assert_allclose(a.numpy(), new_a)
 
   def test_post_flipped_assignment(self):
-    a = Tensor.arange(N*N).reshape(N,N).contiguous().realize()
-    b = Tensor.arange(N*N).reshape(N,N).contiguous().realize()
+    a = Tensor.arange(N*N).reshape(N,N).clone().realize()
+    b = Tensor.arange(N*N).reshape(N,N).clone().realize()
     new_a = (a.flip(0)+b).numpy()
     a.assign(a.flip(0)+b)
     np.testing.assert_allclose(a.numpy(), new_a)
 
   def test_post_flipped_assignment_axis1(self):
-    a = Tensor.arange(N*N).reshape(N,N).contiguous().realize()
-    b = Tensor.arange(N*N).reshape(N,N).contiguous().realize()
+    a = Tensor.arange(N*N).reshape(N,N).clone().realize()
+    b = Tensor.arange(N*N).reshape(N,N).clone().realize()
     new_a = (a.flip(1)+b).numpy()
     a.assign(a.flip(1)+b)
     np.testing.assert_allclose(a.numpy(), new_a)
 
   def test_post_reshape_assignment_fine(self):
-    a = Tensor.arange(N*N).reshape(N, N).contiguous().realize()
-    b = Tensor.arange(N*N).reshape(N, N).contiguous().realize()
+    a = Tensor.arange(N*N).reshape(N, N).clone().realize()
+    b = Tensor.arange(N*N).reshape(N, N).clone().realize()
     rhs = a.reshape(-1).reshape(N, N)
     new_a = (rhs+b).numpy()
     a.assign(rhs+b)  # self-assign with reshape view is fine
@@ -356,7 +401,7 @@ class TestAssign(unittest.TestCase):
 
   @unittest.skip("multi output not supported anymore")
   def test_simple_assignment_multioutput(self):
-    a = Tensor.arange(32*32).reshape(32, 32).contiguous().realize()
+    a = Tensor.arange(32*32).reshape(32, 32).clone().realize()
     b = Tensor.full((32, ), 1.).contiguous().realize()
     c = Tensor.full((32, ), 2.).contiguous().realize()
     d = Tensor.full((32, ), 3.).contiguous().realize()
@@ -376,15 +421,15 @@ class TestAssign(unittest.TestCase):
   # NOTE: if the assign target is read/write in a single kernel, it should be contiguous
 
   def test_permuted_assignment_correct(self):
-    a = Tensor.arange(4 * 4).reshape(4, 4).contiguous().realize()
-    b = Tensor.arange(4 * 4).reshape(4, 4).contiguous().realize()
+    a = Tensor.arange(4 * 4).reshape(4, 4).clone().realize()
+    b = Tensor.arange(4 * 4).reshape(4, 4).clone().realize()
     a = a.permute(1, 0)
     new_val = a + b
     a.assign(new_val)
     np.testing.assert_equal(a.numpy(), np.arange(4 * 4).reshape(4, 4).transpose(1, 0) + np.arange(4 * 4).reshape(4, 4))
 
   def test_permuted_reduceop_child_dual_use(self):
-    a = Tensor.arange(32*32*32).reshape(32, 32, 32).contiguous().realize()
+    a = Tensor.arange(32*32*32).reshape(32, 32, 32).clone().realize()
     b = Tensor.ones(32, 32, dtype=dtypes.int).contiguous().realize()
     r = a.sum(axis=1)
     b.assign(r + b.permute(1, 0))
@@ -393,7 +438,7 @@ class TestAssign(unittest.TestCase):
 
   @unittest.skip("multi output not supported anymore")
   def test_permuted_reduceop_multioutput_dual_use(self):
-    a = Tensor.arange(32*32*32).reshape(32, 32, 32).contiguous().realize()
+    a = Tensor.arange(32*32*32).reshape(32, 32, 32).clone().realize()
     b = Tensor.full((32, 32), 1.).contiguous().realize()
     c = Tensor.full((32, 32), 2.).contiguous().realize()
 
@@ -406,9 +451,9 @@ class TestAssign(unittest.TestCase):
 
   @unittest.skip("multi output not supported anymore")
   def test_permuted_reduceop_multioutput_dual_use_possible(self):
-    a = Tensor.arange(32*32*32).reshape(32, 32, 32).contiguous().realize()
-    b = Tensor.arange(32 * 32).reshape(32, 32).realize()
-    c = Tensor.arange(32 * 32).reshape(32, 32).realize()
+    a = Tensor.arange(32*32*32).reshape(32, 32, 32).clone().realize()
+    b = Tensor.arange(32 * 32).reshape(32, 32).clone().realize()
+    c = Tensor.arange(32 * 32).reshape(32, 32).clone().realize()
 
     GlobalCounters.reset()
     r = a.sum(axis=1)
@@ -442,7 +487,7 @@ class TestAssign(unittest.TestCase):
     # Forward shift: read index > write index in overlap
     N = 100000
     shift = 1000
-    a = Tensor.arange(N).float().contiguous().realize()
+    a = Tensor.arange(N).float().clone().realize()
     expected = np.arange(N, dtype=np.float32)
     expected[:N-shift] = expected[shift:].copy()
     with Context(NOOPT=1): a[0:N-shift].assign(a[shift:N]).realize()
@@ -452,7 +497,7 @@ class TestAssign(unittest.TestCase):
     # Reverse shift: write index > read index in overlap
     N = 100000
     shift = 1000
-    a = Tensor.arange(N).float().contiguous().realize()
+    a = Tensor.arange(N).float().clone().realize()
     expected = np.arange(N, dtype=np.float32)
     expected[shift:] = expected[:N-shift].copy()
     with Context(NOOPT=1): a[shift:N].assign(a[0:N-shift]).realize()
@@ -460,7 +505,7 @@ class TestAssign(unittest.TestCase):
 
   def test_nonoverlapping_shrink_assignment(self):
     # TODO: non-overlapping shrinks don't actually need contiguous, could be 1 kernel with smarter range analysis
-    a = Tensor.arange(100).float().contiguous().realize()
+    a = Tensor.arange(100).float().clone().realize()
     expected = np.arange(100, dtype=np.float32)
     expected[0:10] = expected[50:60].copy()
     GlobalCounters.reset()
@@ -468,7 +513,6 @@ class TestAssign(unittest.TestCase):
     self.assertEqual(GlobalCounters.kernel_count, 2)  # currently conservative, forces contiguous
     np.testing.assert_allclose(a.numpy(), expected)
 
-  @unittest.skipUnless(is_dtype_supported(dtypes.half), "need half")
   def test_setitem_half(self):
     a = Tensor.full((8,), 1.0, dtype=dtypes.half).contiguous().realize()
     b = Tensor.full((4,), 2.0, dtype=dtypes.half).contiguous().realize()
@@ -578,7 +622,7 @@ class TestAssign(unittest.TestCase):
     """Chained pending assigns must not produce excessive kernels (tests recursive transitive processing)."""
     D, N = 4, 5
     caches = [Tensor.zeros(8, D).contiguous().realize() for _ in range(N)]
-    caches[0][0:1].assign(Tensor.ones(1, D) * 10)
+    caches[0][0:1].assign(Tensor.ones(1, D, buffer=False) * 10)
     x = caches[0][:1].sum(0, keepdim=True)
     for i in range(1, N):
       caches[i][0:1].assign(x)
@@ -608,12 +652,17 @@ class TestAssign(unittest.TestCase):
 
   def test_double_assign_from_const(self):
     a = Tensor.empty(2)
-    a.assign(Tensor.ones(2))
-    a.assign(Tensor.ones(2))
+    a.assign(Tensor.ones(2, buffer=False))
+    a.assign(Tensor.ones(2, buffer=False))
     GlobalCounters.reset()
     a.realize()
     self.assertEqual(GlobalCounters.kernel_count, 1)
     self.assertEqual(a.tolist(), [1.,1.])
+
+  def test_assign_deviceless_const(self):
+    s = Tensor.empty(4, device="CPU:1", dtype=dtypes.float)
+    s.assign(Tensor(UOp.const(dtypes.float, 2.0)))
+    np.testing.assert_equal(s.numpy(), [2, 2, 2, 2])
 
   def test_nested_after_contiguous_store(self):
     # Mirrors the nested contiguous-write-then-assign-back shape from torch backend view updates.
@@ -823,6 +872,28 @@ class TestAssignOrdering(unittest.TestCase):
       p_np = p_np - m_np / (1 - b_np)
       b_np *= 0.9
     np.testing.assert_allclose(param.item(), p_np, atol=1e-5)
+
+  def test_war_reader_already_depends_on_write(self):
+    x = Tensor([1.0]).contiguous().realize()
+    y = Tensor([2.0]).contiguous().realize()
+    x_expr = x + 10
+    x.assign(x * 2)
+    y.assign(y + x)
+    z = y + x_expr
+    Tensor.realize(x, y, z)
+    # TODO: z should be 15: x_expr means 11 (x captured at build time), but the read is fused past the assign and
+    # sees the new bytes. once stale readers are scheduled before the overwrite, update this to 15
+    np.testing.assert_allclose([x.item(), y.item(), z.item()], [2.0, 4.0, 16.0])
+
+  def test_war_multi_read_then_assign(self):
+    devices = ("CPU:0", "CPU:1")
+    for realize_reader_first in (False, True):
+      buf = Tensor([1., 2., 3., 4.], device="CPU").contiguous().realize().shard(devices, 0).realize()
+      stale = buf.to("CPU")
+      buf.assign(Tensor.full(buf.shape, 10.0, device="CPU").shard(devices, 0).contiguous().realize())
+      Tensor.realize(stale, buf) if realize_reader_first else Tensor.realize(buf, stale)
+      np.testing.assert_equal(stale.numpy(), [1., 2., 3., 4.])
+      np.testing.assert_equal(buf.numpy(), [10., 10., 10., 10.])
 
   def test_multiple_slice_assigns_then_read(self):
     """Multiple non-overlapping slice assigns then read."""

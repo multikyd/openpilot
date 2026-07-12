@@ -51,7 +51,7 @@ def do_expand(root:UOp):
         new_srcs.append(src)
       elif src.dtype.count > 1:
         # put any input dtype > 1 grouped together
-        new_srcs.append(UOp(Ops.VCAT, src.dtype.scalar().vec(expand_sz*src.dtype.count), (src,)*expand_sz))
+        new_srcs.append(src.gep(tuple(i for _ in range(expand_sz) for i in range(src.dtype.count))))
       else:
         # repeat the arg
         new_srcs.append(src.broadcast(expand_sz))
@@ -98,13 +98,13 @@ expander = PatternMatcher([
   # END on UNROLL ends the UNROLL
   (UPat(Ops.END, name="u"), end_unrolls),
   # BUFFERIZE puts UNROLLs for ranges as contract
-  (UPat(Ops.BUFFERIZE, src=(UPat(Ops.UNROLL), UPat(Ops.UNROLL)), name="x"),
+  (UPat(Ops.STAGE, src=(UPat(Ops.UNROLL), UPat(Ops.UNROLL)), name="x"),
     lambda x: x.replace(src=tuple(UOp(Ops.CONTRACT, dtype=s.dtype.vec(x.src[1].src[0].dtype.count), src=(s,), arg=x.src[1].arg) for s in x.src))),
   # double expand
   (UPat(Ops.UNROLL, name="outer", src=(UPat(Ops.UNROLL, name="inner"),)),
    lambda outer, inner: UOp(Ops.UNROLL, outer.dtype, (inner.src[0],), inner.arg+outer.arg)),
   # do expansion
-  (UPat((*GroupOp.ALU, Ops.CAST, Ops.BITCAST, Ops.GEP, Ops.WMMA, Ops.LOAD, Ops.STORE, Ops.INDEX, Ops.BUFFERIZE,
+  (UPat((*GroupOp.ALU, Ops.CAST, Ops.BITCAST, Ops.GEP, Ops.WMMA, Ops.LOAD, Ops.STORE, Ops.INDEX, Ops.STAGE,
          Ops.STACK, Ops.REDUCE, Ops.END, Ops.AFTER), name="root", custom_early_reject=set([Ops.UNROLL])), do_expand),
   (UPat(Ops.CONTRACT, name="con"), do_contract),
   # empty UNROLL is NOOP

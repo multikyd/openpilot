@@ -8,7 +8,7 @@ from tinygrad.tensor import _to_np_dtype
 from tinygrad.codegen import to_program
 from tinygrad.dtype import DType
 from tinygrad.nn.state import get_parameters
-from tinygrad.helpers import T, CI, Target
+from tinygrad.helpers import T, Target, DEV
 from tinygrad.renderer import Renderer
 from tinygrad.codegen import full_rewrite_to_sink, line_rewrite, pm_linearize_cleanups
 from tinygrad.codegen.late.linearizer import linearize
@@ -76,16 +76,16 @@ def timeit(fxn:Callable[..., T], *args, **kwargs) -> tuple[T, float]:
   ret = fxn(*args, **kwargs)
   return ret, (time.perf_counter_ns()-st)*1e-6
 
-def eval_uop(uop:UOp, inputs:list[tuple[DType, list[Any]]]|None=None):
+def eval_uop(uop:UOp, inputs:list[tuple[DType, list[Any]]]|None=None, vals:tuple[int, ...]=()):
   allocator = Device['PYTHON'].allocator
   bufs = []
   for buf_dt, data in inputs or []:
     bufs.append(buf:=allocator.alloc(len(data) * buf_dt.itemsize))
     allocator._copyin(buf, memoryview(struct.pack(str(len(data)) + (buf_dt.fmt or ""), *data)))
-  g = UOp(Ops.PARAM, uop.dtype.ptr(), arg=0, src=())
-  prg = to_program(UOp.store(g.index(UOp.const(dtypes.int, 0)), uop).sink(arg=KernelInfo()), PythonRenderer(Target("PYTHON")))
-  prog = PythonProgram("run", PythonCompiler().compile(prg.src[3].arg))
-  prog(out_buf:=allocator.alloc(uop.dtype.itemsize), *bufs)
+  g = UOp.param(0, uop.dtype.ptr(1))
+  prg = to_program(UOp.store(g.index(UOp.const(dtypes.int, 0), ptr=True), uop).sink(arg=KernelInfo()), PythonRenderer(Target("PYTHON")))
+  prog = PythonProgram("run", PythonCompiler().compile(prg.src[2].arg))
+  prog(out_buf:=allocator.alloc(uop.dtype.itemsize), *bufs, vals=vals)
   return out_buf.cast(uop.dtype.fmt or "").tolist()[0]
 
 def to_uops_list(u:list[UOp], ren=None) -> list[UOp]:
@@ -97,7 +97,7 @@ def to_uops_list(u:list[UOp], ren=None) -> list[UOp]:
 
 def not_support_multi_device():
   # CL and CUDA don't support multi device if in CI
-  return CI and Device.DEFAULT in ("CL", "CUDA")
+  return (Device.DEFAULT == "CL" and Device[Device.DEFAULT].count() < 2) or (Device.DEFAULT == "CUDA" and DEV.interface.startswith("MOCK"))
 
 def needs_second_gpu(fn):
   @functools.wraps(fn)

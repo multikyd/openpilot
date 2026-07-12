@@ -1,19 +1,18 @@
-import unittest, decimal, sys, json, contextlib, tempfile, pickle, io
+import unittest, decimal, sys, json, contextlib, tempfile, pickle, io, math
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Generator
 
 from tinygrad.uop.ops import UOp, UPat, Ops, PatternMatcher, TrackedPatternMatcher, graph_rewrite, track_rewrites, profile_matches
 from tinygrad.uop.symbolic import sym
-from tinygrad.dtype import dtypes
+from tinygrad.dtype import dtypes, AddrSpace
 from tinygrad.helpers import colored, ansistrip, flatten, TracingKey, ProfileRangeEvent, ProfileEvent, Context, cpu_events, profile_marker
-from tinygrad.helpers import cpu_profile, ProfilePointEvent, unwrap
+from tinygrad.helpers import cpu_profile, ProfilePointEvent, unwrap, VIZ, BEAM
 from tinygrad.device import Buffer
 
 from tinygrad.uop.ops import tracked_keys, tracked_ctxs, uop_fields, active_rewrites, active_group, _name_cnt, RewriteTrace
-from tinygrad.viz.serve import load_rewrites, get_full_rewrite, uop_to_json, VizData, get_render
-from tinygrad.codegen import to_program_cache
-from tinygrad.codegen import to_program
+from tinygrad.viz.serve import load_rewrites, get_full_rewrite, uop_to_json, VizData, get_render, addrspace_colors
+from tinygrad.codegen import do_to_program
 
 @track_rewrites(name=True)
 def exec_rewrite(sink:UOp, pm_lst:list[PatternMatcher], names:None|list[str]=None) -> UOp:
@@ -41,13 +40,14 @@ class VizTrace:
 @contextlib.contextmanager
 def save_viz():
   for lst in [tracked_keys, tracked_ctxs, active_rewrites, active_group, _name_cnt]: lst.clear()
-  to_program_cache.clear()
   Buffer.profile_events.clear()
   cpu_events.clear()
   viz = VizTrace()
   with Context(VIZ=-1, TRACK_MATCH_STATS=2, PROFILE=1):
     yield viz
   viz.set_data()
+
+needs_tracked_pm = unittest.skipUnless(VIZ, "using TrackedPatternMatcher requires global VIZ=1")
 
 class TestViz(unittest.TestCase):
   def test_simple(self):
@@ -215,41 +215,76 @@ class TestViz(unittest.TestCase):
     nop = UOp(Ops.NOOP, arg="infinite loop in fixed_point_rewrite")
     self.assertEqual(graphs[2], uop_to_json(VizData(), nop)[id(nop)])
 
+  def test_walk_rewrite(self):
+    from tinygrad.uop.ops import _substitute
+    with save_viz() as viz:
+      a = UOp.variable("a", 0, 10)
+      graph_rewrite(a + 4, TrackedPatternMatcher(_substitute.patterns), {a:a+1}, walk=True)
+    list(viz.get_details(0, 0))
+
+  def test_enter_calls_rewrite(self):
+    pm = PatternMatcher([(UPat(Ops.CONST, arg=3, name="x"), lambda x: x.replace(arg=4))])
+    with save_viz() as viz:
+      inner = UOp.const(dtypes.int, 3)
+      func = UOp(Ops.FUNCTION, src=(UOp(Ops.SINK, src=(inner,)),))
+      call = UOp(Ops.CALL, src=(func,))
+      graph_rewrite(call, TrackedPatternMatcher(pm.patterns), enter_calls=True)
+    details = list(viz.get_details(0, 0))
+    self.assertTrue(details[-1]["change"], "viz replay should detect change inside CALL")
+
   def test_const_node_visibility(self):
     with save_viz() as viz:
       a = UOp.variable("a", 0, 10, dtype=dtypes.int)
       z = UOp.const(a.dtype, 0)
+      y = UOp.const(dtypes.float, math.pi)
       alu = a*z
-      exec_rewrite(alu, [sym])
+      ret = exec_rewrite(sink:=UOp.sink(alu, y), [sym])
     lst = viz.list_items()
     self.assertEqual(len(lst), 1)
     graphs = [x["graph"] for x in viz.get_details(0, 0)]
-    # embed const in the parent node when possible
-    self.assertEqual(list(graphs[0]), [id(a), id(alu)])
-    self.assertEqual(list(graphs[1]), [id(z)])
+    # const is always in the graph, client side hides exclude=True nodes by default
+    self.assertEqual(list(graphs[0]), [id(a.src[0]), id(a), id(z), id(alu), id(y), id(sink)])
+    self.assertTrue(graphs[0][id(z)]["exclude"])
+    self.assertTrue(graphs[0][id(y)]["exclude"])
+    self.assertFalse(graphs[0][id(alu)]["exclude"])
+    self.assertEqual(graphs[0][id(y)]["label"].split("\n")[:2], ["CONST", "3.14159"])
+    self.assertEqual(list(graphs[1]), [id(z), id(y), id(ret)])
 
-  # TODO: DEFINE_VAR (shape ()) now gets wrapped in RESHAPE+EXPAND when broadcast against a shaped operand
-  # (due to shared OpMixin._binop using _broadcasted). Either extend viz to fold RESHAPE/EXPAND around
-  # DEFINE_VAR/RANGE/SPECIAL the way it does for CONST, or redesign scalar-compiler-op broadcasting.
-  @unittest.expectedFailure
   def test_const_reshape_expand_folded(self):
     # CONST->RESHAPE->EXPAND should be folded into the ALU node, not shown as separate RESHAPE/EXPAND nodes
-    c = UOp.const(dtypes.float, 1.0, device="CPU", shape=(3,4))  # creates CONST->RESHAPE->EXPAND chain
-    a = UOp(Ops.DEFINE_VAR, dtypes.float, arg=("a", 0.0, 10.0))
+    c = UOp.const(dtypes.float, 1.0, shape=(3,4))  # creates CONST->RESHAPE->EXPAND chain
+    a = UOp.variable("a", 0.0, 10.0, dtypes.float)
     alu = a + c
-    graph = uop_to_json(VizData(), alu)
-    # the RESHAPE and EXPAND nodes from the const should not appear in the graph
-    labels = {v["label"].split("\n")[0] for v in graph.values()}
-    self.assertNotIn("RESHAPE", labels)
-    self.assertNotIn("EXPAND", labels)
-    # the CONST should be inlined into the ALU node's label
-    alu_label = graph[id(alu)]["label"]
-    self.assertIn("CONST", alu_label)
+    with save_viz() as viz:
+      graph_rewrite(alu, PatternMatcher([]))
+    graph = [x["graph"] for x in viz.get_details(0, 0)][0]
+    excluded_nodes = {v["label"].split("\n")[0] for v in graph.values() if v["exclude"]}
+    self.assertIn("CONST", excluded_nodes)
+    self.assertIn("STACK", excluded_nodes)
+    self.assertIn("RESHAPE", excluded_nodes)
+    self.assertIn("EXPAND", excluded_nodes)
+    self.assertIn("CONST1 1", graph[id(alu)]["label"])
+
+  def test_stack_movement_not_folded_unless_all_const(self):
+    a = UOp.variable("a", 0, 10, dtype=dtypes.int)
+    c = UOp.const(dtypes.int, 1)
+    stack = a.vectorize(c)
+    reshaped = stack.reshape((1, 2))
+    graph = uop_to_json(VizData(), reshaped)
+    self.assertFalse(graph[id(stack)]["exclude"])
+
+    const_stack = c.vectorize(UOp.const(dtypes.int, 2))
+    const_reshaped = const_stack.reshape((1, 2))
+    const_graph = uop_to_json(VizData(), const_reshaped)
+    self.assertTrue(const_graph[id(const_stack)]["exclude"])
+    reshape_node = const_graph[id(const_reshaped)]
+    self.assertFalse(reshape_node["exclude"])
+    self.assertIn("STACK0 {1,2} Ops.CONST", reshape_node["label"].split("\n"))
 
 # VIZ displays nested graph_rewrites in a tree view
 
 def leaf_rewrite(x:UOp): return x.rtag(1) if x.tag is None else None
-leaf = TrackedPatternMatcher([(UPat(Ops.DEFINE_VAR, name="x"), leaf_rewrite)])
+leaf = TrackedPatternMatcher([(UPat(Ops.PARAM, name="x"), leaf_rewrite)])
 
 def branch_rewrite(x:UOp, y:UOp):
   if x.tag is not None: return
@@ -320,35 +355,35 @@ class TestVizGC(unittest.TestCase):
 
 # VIZ integrates with other parts of tinygrad
 
-from tinygrad import Tensor, Device, TinyJit, Variable
+from tinygrad import Tensor, Device, TinyJit, Variable, function
 
 class TestVizIntegration(unittest.TestCase):
-  # codegen supports rendering of code blocks
-  def test_codegen_tracing(self):
-    with save_viz() as viz:
-      ast = (Tensor.empty(4)+Tensor.empty(4)).schedule_linear().src[0].src[0]
-      prg = to_program(ast, Device[Device.DEFAULT].renderer)
-    lst = viz.list_items()
-    self.assertEqual(len(lst), 3)
-    self.assertEqual(lst[0]["name"], "Callify 1 Buffer n1")
-    self.assertEqual(lst[1]["name"], "Schedule 1 Kernel n1")
-    self.assertEqual(lst[2]["name"], prg.arg.name)
-
-  # schedule graph CALL nodes have a link to jump to codegen
   def test_link_sched_codegen(self):
+    c1 = Tensor.empty(4, device="NULL")
+    c2 = Tensor.empty(8, device="NULL")
+    # uniquely named A = B + 1 kernel
+    kernel_name = f"custom_add1_link_sched_codegen_{BEAM.value}"
+    def custom_add1(A:UOp, B:UOp): return A[0].store(B[0]+1).sink(arg=KernelInfo(kernel_name))
     with save_viz() as viz:
-      c1 = Tensor.empty(4).add(1)
-      c2 = Tensor.empty(8).add(1)
-      sched = c1.schedule_linear(c2)
-      prgs = [to_program(si.src[0], Device[Device.DEFAULT].renderer).arg.name for si in sched.src]
+      c1 = Tensor.custom_kernel(c1, c2, fxn=custom_add1)[0]
+      c1.realize()
     lst = viz.list_items()
+    # schedule graph CALL nodes have a link to jump to codegen
     sched_idx = next(i for i,l in enumerate(lst) if l["name"].startswith("Schedule"))
     viz_kernel = next(i for i,s in enumerate(lst[sched_idx]["steps"]) if s["name"] == "View Kernel Graph")
     graph = next(viz.get_details(sched_idx, viz_kernel))["graph"]
     call_nodes = [n for n in graph.values() if n["label"].startswith("CALL")]
     for i,n in enumerate(call_nodes):
       assert n["ref"] is not None
-      self.assertEqual(lst[n["ref"]]["name"], prgs[i])
+      self.assertEqual(lst[n["ref"]]["name"], kernel_name)
+      assert kernel_name[i] in n["label"], f"CALL must contain kernel name, got {n['label']}"
+    # UOp addrspace is colored
+    for u in graph.values():
+      if u["label"].startswith("PARAM\n"): self.assertEqual(u["addrspace"], addrspace_colors[AddrSpace.GLOBAL])
+
+  def test_link_sched_codegen_beam(self):
+    with Context(BEAM=2):
+      self.test_link_sched_codegen()
 
   @Context(TRACEMETA=2)
   def test_metadata_tracing(self):
@@ -396,9 +431,16 @@ class TestVizIntegration(unittest.TestCase):
       default_test(c+2)
     ls = viz.list_items()
     self.assertEqual(len(ls), 2)
-    self.assertEqual(list(next(viz.get_details(0, 0))["graph"]), [id(c+1)])
+    graph = next(viz.get_details(0, 0))["graph"]
+    self.assertEqual(list(graph), [id(c), id(c+1)])
+    self.assertTrue(graph[id(c)]["exclude"])
+    self.assertFalse(graph[id(c+1)]["exclude"])
     self.assertEqual(list(next(viz.get_details(1, 0))["graph"]), [id(c)])
-    self.assertEqual(list(next(viz.get_details(1, 1))["graph"]), [id(c+2)])
+    graph = next(viz.get_details(1, 1))["graph"]
+    self.assertEqual(list(graph), [id(c), id(c.const_like(2)), id(c+2)])
+    self.assertTrue(graph[id(c)]["exclude"])
+    self.assertTrue(graph[id(c.const_like(2))]["exclude"])
+    self.assertFalse(graph[id(c+2)]["exclude"])
 
   def test_recurse(self):
     with save_viz() as viz:
@@ -411,14 +453,67 @@ class TestVizIntegration(unittest.TestCase):
   def test_jit(self):
     with save_viz():
       @TinyJit
-      def f(a, b, c): return (a+b).contiguous().mul(3), c.assign(a.to(c.device))
+      def f(a, b, c): return (a+b).contiguous().mul(3), c.add(1).contiguous().assign(a.to(c.device)), b.assign(c.to(b.device))
       a, b, c = Tensor.empty(16, device="NULL"), Tensor.empty(16, device="NULL"), Tensor.empty(16, device="NULL:1")
       for _ in range(3): Tensor.realize(*f(a, b, c))
     out = load_profile(cpu_events)
-    self.assertEqual(["NULL", "NULL Graph", "NULL:SDMA:0"], [k for k in out["layout"] if k.startswith("NULL")])
+    self.assertEqual(["NULL", "NULL Graph", "NULL:SDMA:0", "NULL:1", "NULL:1:SDMA:0"], [k for k in out["layout"] if k.startswith("NULL")])
     self.assertEqual(len(out["layout"]["NULL"]["events"]), 2*3)
     self.assertEqual(len(out["layout"]["NULL:SDMA:0"]["events"]), 3)
     self.assertEqual(len(out["layout"]["NULL Graph"]["events"]), 2)
+    for graph in out["layout"]["NULL Graph"]["events"]:
+      graph_st, graph_et = graph["st"], graph["st"]+graph["dur"]
+      for k in ["NULL", "NULL:1", "NULL:SDMA:0", "NULL:1:SDMA:0"]:
+        events = [e for e in out["layout"][k]["events"] if graph_st <= e["st"] and e["st"]+e["dur"] <= graph_et]
+        self.assertGreater(len(events), 0)
+        self.assertEqual([e["st"] for e in events], [graph_st+i*events[0]["dur"] for i in range(len(events))])
+
+  @needs_tracked_pm
+  def test_view_source(self):
+    def custom_fn(X:UOp):
+      X = X.flatten()
+      i = UOp.range(X.numel(), 0)
+      custom_op = UOp(Ops.CUSTOMI, src=(X[i],), arg="{} + undeclared_name")
+      return X[i].store(custom_op).end(i).sink(arg=KernelInfo(name=f"custom_fn_{X.numel()}"))
+    x = Tensor.custom_kernel(Tensor.empty(1, device="CPU"), fxn=custom_fn)[0]
+    with save_viz() as viz:
+      with self.assertRaises(Exception) as e:
+        x.realize()
+    lst = viz.list_items()
+    codegen_idx = len(lst)-1
+    steps = lst[codegen_idx]["steps"]
+    lin_idx = next((i for i,s in enumerate(steps) if s["name"] == "View UOp List"), None)
+    src_idx = next((i for i,s in enumerate(steps) if s["name"] == "View Source"), None)
+    bin_idx = next((i for i,s in enumerate(steps) if s["name"] == "View Disassembly"), None)
+    assert all(i is not None for i in [lin_idx, src_idx, bin_idx]), f"linear, source and disasm must be visible in {steps}"
+    # Ops.LINEAR renders
+    lin_render = get_render(viz.data, steps[lin_idx]["query"])["src"]
+    self.assertIn("Ops.SINK", lin_render)
+    self.assertIn("Ops.CUSTOMI", lin_render)
+    # Ops.SOURCE renders
+    src_render = get_render(viz.data, steps[src_idx]["query"])["src"]
+    self.assertIn("undeclared_name", src_render)
+    # Ops.BINARY shows the error message since compile failed
+    bin_render = get_render(viz.data, steps[bin_idx]["query"])["src"]
+    self.assertIn(type(e.exception).__name__, bin_render)
+
+  def test_view_source_alt(self):
+    src = "void E_3(float* data0_3) {}"
+    binary = Device["CPU"].renderer.compiler.compile(src)
+    def custom_binary(X:UOp):
+      sink = UOp.sink(X, arg=KernelInfo("custom_binary"))
+      return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.LINEAR, src=sink.src+(sink,)), UOp(Ops.SOURCE, arg=src),
+                                   UOp(Ops.BINARY, arg=binary)))
+    x = Tensor.custom_kernel(Tensor.empty(1, device="CPU"), fxn=custom_binary)[0]
+    with save_viz() as viz:
+      x.realize()
+    lst = viz.list_items()
+    codegen_idx = len(lst)-1
+    steps = lst[codegen_idx]["steps"]
+    src_idx = next((i for i,s in enumerate(steps) if s["name"] == "View Source"), None)
+    assert src_idx is not None, "must have source rendering in list"
+    src_render = get_render(viz.data, steps[src_idx]["query"])["src"]
+    self.assertEqual(src, src_render)
 
 from tinygrad.device import ProfileDeviceEvent, ProfileGraphEvent, ProfileGraphEntry
 from tinygrad.viz.serve import get_profile
@@ -721,6 +816,7 @@ from tinygrad.runtime.autogen.amd.rdna3.ins import (s_add_u32, s_branch, s_cbran
                                                     s_cmp_eq_u64, s_code_end, s_endpgm, s_mov_b32, s_nop)
 from extra.gemm.amd_asm_matmul import Kernel
 
+@needs_tracked_pm
 class TestCfg(unittest.TestCase):
   def setUp(self): self.arch = "gfx1100"
 
@@ -730,11 +826,11 @@ class TestCfg(unittest.TestCase):
       lidx = UOp.special(1, "lidx0")
       gidx = UOp.special(1, "gidx0")
       sink = UOp.sink(out.base, lidx, gidx, arg=KernelInfo(name=name))
-      return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg="NULL"), UOp(Ops.LINEAR, src=tuple([UOp(Ops.INS, arg=x) for x in insts]))))
+      return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.LINEAR, src=tuple([UOp(Ops.INS, arg=x) for x in insts]))))
     with save_viz() as viz:
       with Context(DEV=f"NULL::{self.arch}"):
         out = Tensor.custom_kernel(Tensor.empty(1), fxn=fxn)[0]
-        _ = to_program(out.schedule_linear().src[-1].src[0], Device[out.device].renderer)
+        _ = do_to_program(out.schedule_linear().src[-1].src[0], Device[out.device].renderer)
     codegen_rewrites = next(s for s in viz.list_items() if s["name"] == name)
     disasm = next(s for s in codegen_rewrites["steps"] if s["name"] == "View Disassembly")
     return get_render(viz.data, disasm["query"])
@@ -904,41 +1000,41 @@ class TestCfg(unittest.TestCase):
     self.get_cfg("jump_back_to_end", k)
 
 # launch viz cli without subprocess
-def run_cli(*cli_args) -> str:
+def run_cli(*cli_args) -> list[dict]:
   from tinygrad.viz.cli import main, get_arg_parser
-  args = get_arg_parser().parse_args(cli_args)
+  args = get_arg_parser().parse_args(cli_args+("--json",))
   with contextlib.redirect_stdout(buf:=io.StringIO()):
     main(args)
-  return buf.getvalue().strip()
+  return [json.loads(line) for line in buf.getvalue().strip().splitlines()]
 
-def call_cli(fxn, *cli_args, debug=2) -> str:
-  with save_viz() as viz:
-    fxn()
+@contextlib.contextmanager
+def write_files(viz) -> list[str]:
   with tempfile.TemporaryDirectory() as tmpdir:
     (r:=Path(tmpdir)/"rewrites.pkl").write_bytes(pickle.dumps(viz.data.trace))
     (p:=Path(tmpdir)/"profile.pkl").write_bytes(pickle.dumps(cpu_events))
-    with Context(DEBUG=debug, NO_COLOR=1):
-      stdout = run_cli("--rewrites-path", str(r), "--profile-path", str(p), *cli_args)
-  return stdout
+    yield ["--rewrites-path", str(r), "--profile-path", str(p)]
 
 class TestCLI(unittest.TestCase):
+  @needs_tracked_pm
   def test_reconstruct_debug(self):
-    def fxn():
+    with save_viz() as viz:
       Tensor.empty(1, device="NULL").add(2.0).realize()
       profile_marker("marker @ 1")
       Tensor.empty(1, device="NULL").add(3.0).realize()
-    out = call_cli(fxn, "-s", "NULL", debug=4)
-    self.assertIn("void E", out)
-    self.assertIn("marker @ 1", out)
+    with write_files(viz) as files, Context(DEBUG=4):
+      out = run_cli(*files, "-s", "NULL")
+    assert any(s.get("value", "").startswith("void E") for s in out)
+    assert any(s.get("name", "") == "marker @ 1" for s in out)
 
   def test_aggregate(self):
     N, CNT = 1024, 5
-    def fxn():
+    with save_viz() as viz:
       for _ in range(CNT):
         (Tensor.empty(N, N, device="NULL")@Tensor.empty(N, N, device="NULL")).realize()
       for _ in range(CNT):
         (Tensor.empty(N, N, device="NULL").assign(Tensor.empty(N, N, device="NULL"))).realize()
-    kernels = [json.loads(line) for line in call_cli(fxn, "-s", "NULL", "-t", "--json").splitlines()]
+    with write_files(viz) as files, Context(NO_COLOR=1):
+      kernels = run_cli(*files, "-s", "NULL", "-t")
     self.assertEqual(len(kernels), 2)
     gemm_summary = [s for s in kernels if s["name"].startswith("r_")][0]
     copy_summary = [s for s in kernels if s["name"].startswith("E_")][0]
@@ -947,7 +1043,7 @@ class TestCLI(unittest.TestCase):
 
   def test_flops(self):
     test_n = [(8, 16), (16, 32), (32, 64)]
-    def fxn():
+    with save_viz() as viz:
       @TinyJit
       def f(a, b): return (a@a.T), (b@b.T)
       a = Tensor.empty(64, 64, device="NULL")
@@ -956,17 +1052,69 @@ class TestCLI(unittest.TestCase):
         i = Variable("i", 1, 64).bind(i_val)
         j = Variable("j", 1, 64).bind(j_val)
         Tensor.realize(*f(a[:i], b[:j]))
-    out = [json.loads(line) for line in call_cli(fxn, "-s", "NULL", "--json").splitlines()]
+    with write_files(viz) as files:
+      out = run_cli(*files, "-s", "NULL")
+      aggregate = run_cli(*files, "-s", "NULL", "-t")
     self.assertEqual(len(out), 3*2)
     # flops increases as N gets larger
     gflops = [row["fmt"]["FLOPS"] for row in out]
     self.assertGreater(gflops[4], gflops[2])
     self.assertGreater(gflops[5], gflops[3])
     # aggregate flops
-    out = [json.loads(line) for line in call_cli(fxn, "-s", "NULL", "-t", "--json").splitlines()]
-    self.assertEqual(len(out), 2)
-    agg_gflops = [row["fmt"]["FLOPS"] for row in out]
+    self.assertEqual(len(aggregate), 2)
+    agg_gflops = [row["fmt"]["FLOPS"] for row in aggregate]
     assert all(min(gflops) < v < max(gflops) for v in agg_gflops), f"{agg_gflops}"
+
+  def test_dedup(self):
+    with save_viz() as viz:
+      for _ in range(CNT:=4):
+        # use kernel names unique to this test
+        Tensor.custom_kernel(Tensor.empty(4, device="NULL"), fxn=lambda _: UOp.sink(arg=KernelInfo("k1_test_viz_dedup")))[0].realize()
+        Tensor.custom_kernel(Tensor.empty(8, device="NULL"), fxn=lambda _: UOp.sink(arg=KernelInfo("k2_test_viz_dedup")))[0].realize()
+    with write_files(viz) as files, Context(NO_COLOR=1):
+      name = run_cli(*files, "-s", "NULL")[0]["name"]
+      with Context(DEBUG=3):
+        select = run_cli(*files, "-s", "NULL", name)
+    self.assertEqual(len([s for s in select if s.get("value")]), 1, "debug output was not deduped")
+    self.assertEqual(len([s for s in select if s.get("device") == "NULL"]), CNT, f"expected 4 runs for {name}")
+
+  @needs_tracked_pm
+  def test_call_graph(self):
+    @function(precompile=True)
+    def f(x):
+      r = x.sum(axis=1).reshape(32, 1).expand(32, 32).contiguous()
+      return x + r
+    # turn off scache because this test requires a complete schedule rewrite
+    with save_viz() as viz, Context(SCACHE=0):
+      f(f(Tensor.empty(32, 32, device="NULL"))).realize()
+    with write_files(viz) as files, Context(NO_COLOR=1):
+      prgs = [s["name"] for s in run_cli(*files, "-s", "NULL")]
+      with Context(DEBUG=5):
+        out = run_cli(*files, "-s", "TINY")
+    i = next(i for i,s in enumerate(out) if s.get("value", "").lstrip() == "View Kernel Graph")
+    # next print is the CALL graph, CLI outputs exactly as web in TestVizIntegration.test_link_sched_codegen
+    call_nodes = [n for n in out[i+1].values() if n["label"].startswith("CALL")]
+    for i,n in enumerate(call_nodes):
+      assert prgs[i] in n["label"], f"CALL must contain kernel name, got {n['label']}"
+
+  def test_interval(self):
+    def emit_kernel(name:str): Tensor.custom_kernel(Tensor.empty(1, device="NULL"), fxn=lambda _: UOp.sink(arg=KernelInfo(name=name)))[0].realize()
+    with save_viz() as viz:
+      emit_kernel("pre_1")
+      emit_kernel("pre_2")
+      profile_marker("interval_start")
+      emit_kernel("target_1")
+      emit_kernel("target_2")
+      profile_marker("interval_end")
+      emit_kernel("post_1")
+      emit_kernel("post_2")
+    with write_files(viz) as files, Context(NO_COLOR=1):
+      flat = run_cli(*files, "-s", "NULL", "--interval", "interval_start", "interval_end")
+      aggregate = run_cli(*files, "-s", "NULL", "--interval", "interval_start", "interval_end", "-t")
+      final = run_cli(*files, "-s", "NULL", "--interval", "interval_end", "-t")
+    self.assertEqual([s["name"] for s in flat], ["interval_start", "target_1", "target_2", "interval_end"])
+    self.assertEqual(sorted(s["name"] for s in aggregate), ["target_1", "target_2"])
+    assert all(s["name"].startswith("post_") for s in final), f"post_* kernels must be present in final, got {final}"
 
 if __name__ == "__main__":
   unittest.main()

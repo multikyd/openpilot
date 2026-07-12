@@ -139,7 +139,7 @@ class TestUOpsStats(unittest.TestCase):
 
   #MULACC should have the same stats as MUL + ADD
   def test_mulacc(self):
-    globl = UOp(Ops.PARAM, dtypes.int.ptr(), tuple())
+    globl = UOp.param(0, dtypes.int.ptr())
     o1 = UOp(Ops.CONST, dtypes.int, tuple(), 1)
     o2 = UOp(Ops.CONST, dtypes.int, tuple(), 2)
     u1 = globl.index(o1)
@@ -149,7 +149,7 @@ class TestUOpsStats(unittest.TestCase):
     u5 = UOp(Ops.ADD, dtypes.int, (u4,u3))
     uops = tuple(u5.toposort())
 
-    globl = UOp(Ops.PARAM, dtypes.int.ptr(), tuple())
+    globl = UOp.param(0, dtypes.int.ptr())
     o1 = UOp(Ops.CONST, dtypes.int, tuple(), 1)
     o2 = UOp(Ops.CONST, dtypes.int, tuple(), 2)
     u1 = globl.index(o1)
@@ -185,7 +185,7 @@ class TestStatsOptimized(unittest.TestCase):
                       renderer=Device[Device.DEFAULT].renderer)
     except KernelOptError:
       raise unittest.SkipTest("no tensor cores")
-    print(p.src[3].arg)
+    print(p.src[2].arg)
     self.check_gemm(p)
 
   # this is a good lesson about why UPCASTing is a good idea
@@ -217,7 +217,7 @@ class TestStatsOptimized(unittest.TestCase):
       raise unittest.SkipTest("no locals")
     SZ = N*N*4
     # NOTE: these are sort of wrong. they aren't honoring the IF statement
-    self.check_gemm(p, extra_flops=SZ*4)
+    self.check_gemm(p, extra_flops=SZ*5)
     self.assertEqual(p.src[0].arg.estimates.lds, 2*N*N*N*4 + SZ*4 + (SZ*4 + 4*N*N)*4)
 
   def test_reduce(self):

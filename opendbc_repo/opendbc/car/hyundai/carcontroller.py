@@ -311,7 +311,7 @@ class CarController(CarControllerBase):
 
     active_speed_decel = hud_control.activeCarrot == 3 and self.activeCarrot != 3 # 3: Speed Decel
     self.activeCarrot = hud_control.activeCarrot
-    if active_speed_decel and self.speedCameraHapticEndFrame < 0: # 과속카메라 감속시작      
+    if active_speed_decel and self.speedCameraHapticEndFrame < 0: # 과속카메라 감속시작
       self.speedCameraHapticEndFrame = self.frame + (8.0 / DT_CTRL)  #8초간 켜줌.
     elif not active_speed_decel:
       self.speedCameraHapticEndFrame = -1
@@ -690,7 +690,7 @@ class HyundaiJerk:
             self.carrot_cruise_accel = max(carrot_cruise, self.carrot_cruise_accel - 1.0 * DT_CTRL) #  점진적으로 줄임.
     if self.carrot_cruise == 0:
       self.carrot_cruise_accel = CS.out.aEgo
-    
+
   def make_jerk(self, CP, CS, accel, actuators, hud_control):
     if actuators.longControlState == LongCtrlState.stopping:
       self.jerk = self.jerk_u_min / 2 - CS.out.aEgo
@@ -712,7 +712,7 @@ class HyundaiJerk:
         self.cb_upper = self.cb_lower = 0.0
       else:
         self.jerk_u = min(max(self.jerk_u_min, self.jerk * 2.0), jerk_max_u)
-        self.jerk_l = min(max(1.0, -self.jerk * 2.0), jerk_max_l)
+        self.jerk_l = min(max(1.0, -self.jerk * 4.0), jerk_max_l)
         self.cb_upper = np.clip(0.9 + accel * 0.2, 0, 1.2)
         self.cb_lower = np.clip(0.8 + accel * 0.2, 0, 1.2)
 

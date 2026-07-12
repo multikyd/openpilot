@@ -22,7 +22,7 @@ def _custom_fwd(fp8_out:UOp, x_normed_out:UOp, rrms_out:UOp, amax_buf:UOp,
   defines = [f"-DN_ELEMS={n_elems}", f"-DHIDDEN={HIDDEN}", f"-DNUM_WG={NUM_WG}", f"-DTHREADS_PER_WG={THREADS_PER_WG}",
              f"-DEPS_LITERAL={eps_val}f"]
   src = _src()
-  return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=dname), UOp(Ops.LINEAR, src=(*sink.src, sink)),
+  return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.LINEAR, src=(*sink.src, sink)),
                                UOp(Ops.SOURCE, arg=src), UOp(Ops.BINARY, arg=compile_hip(src, defines))))
 
 @functools.cache
@@ -39,7 +39,7 @@ def _custom_fwd_add(fp8_out:UOp, h_out:UOp, x_normed_out:UOp, rrms_out:UOp, amax
   defines = [f"-DN_ELEMS={n_elems}", f"-DHIDDEN={HIDDEN}", f"-DNUM_WG={NUM_WG}", f"-DTHREADS_PER_WG={THREADS_PER_WG}",
              f"-DEPS_LITERAL={eps_val}f", f"-DHAS_RESIDUAL=1"]
   src = _src()
-  return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=dname), UOp(Ops.LINEAR, src=(*sink.src, sink)),
+  return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.LINEAR, src=(*sink.src, sink)),
                                UOp(Ops.SOURCE, arg=src), UOp(Ops.BINARY, arg=compile_hip(src, defines))))
 
 @functools.cache
@@ -55,7 +55,7 @@ def _custom_bwd(grad_x:UOp, grad_weight_partial:UOp,
                                  estimates=Estimates(ops=8*n_elems, mem=mem)))
   defines = [f"-DN_ELEMS={n_elems}", f"-DHIDDEN={HIDDEN}", f"-DNUM_WG={NUM_WG}", f"-DTHREADS_PER_WG={THREADS_PER_WG}"]
   src = _src_bwd()
-  return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=dname), UOp(Ops.LINEAR, src=(*sink.src, sink)),
+  return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.LINEAR, src=(*sink.src, sink)),
                                UOp(Ops.SOURCE, arg=src), UOp(Ops.BINARY, arg=compile_hip(src, defines))))
 
 def _bwd_common(fp8_grad_u, h_grad_u, x_u, x_normed_u, rrms_u, weight_u, amax_state_u, kernel:UOp):
@@ -63,7 +63,7 @@ def _bwd_common(fp8_grad_u, h_grad_u, x_u, x_normed_u, rrms_u, weight_u, amax_st
   MBS, SEQ, HIDDEN = x_normed_u.shape
   axis = x_normed_u.axis if isinstance(device, tuple) else None
   grad_x = alloc_like((MBS, SEQ, HIDDEN), dtypes.bfloat16, device, axis)
-  grad_weight_partial = alloc_local((NUM_WG, HIDDEN), dtypes.float32, device)
+  grad_weight_partial = alloc_local((NUM_WG, HIDDEN), dtypes.float32, device, axis)
   grad_h_from_fp8 = None
   grad_weight_uop = None
   if fp8_grad_u is not None:
@@ -112,42 +112,40 @@ def _fused_add_bwd(*args, **kwargs):
   grad_h, grad_w = _bwd_common(fp8_grad_u, h_grad_u, x_u, x_normed_u, rrms_u, weight_u, amax_state_u, kernel)
   return (None, None, None, None, None, grad_h, grad_h, grad_w, None)
 
-def fused_rmsnorm_mul_quantize_fp8(x:Tensor, weight:Tensor, amax_state:Tensor, eps:float, fp8_dtype) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
-  # NOTE: rmsnorm(x) * weight -> fp8 + amax. Returns (fp8, inv_scale, new_amax, x_normed, rrms).
+def fused_rmsnorm_mul_quantize_fp8(x:Tensor, weight:Tensor, amax_state:Tensor, eps:float, fp8_dtype) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+  # NOTE: rmsnorm(x) * weight -> fp8 + amax. Returns (fp8, new_amax, x_normed, rrms).
   # x_normed + rrms are saved for the rmsnorm backward (also recomputed here from x regs).
   assert x.dtype == dtypes.bfloat16 and weight.dtype == dtypes.bfloat16
   assert x.shape[-1] == weight.shape[-1], f"HIDDEN mismatch: x={x.shape}, weight={weight.shape}"
   MBS, SEQ, HIDDEN = x.shape
   axis = x.uop.axis if isinstance(x.device, tuple) else None
-  if isinstance(x.device, tuple): assert axis in (0, 1), f"unsupported sharding axis={axis}"
+  if isinstance(x.device, tuple): assert axis in (None, 0, 1), f"unsupported sharding axis={axis}"
   fp8_out      = alloc_like((MBS, SEQ, HIDDEN), fp8_dtype,       x.device, axis)
   x_normed_out = alloc_like((MBS, SEQ, HIDDEN), dtypes.bfloat16, x.device, axis)
   rrms_out     = alloc_like((MBS, SEQ),         dtypes.float32,  x.device, axis)
-  amax_buf     = alloc_local((NUM_WG,),         dtypes.float32,  x.device)
+  amax_buf     = alloc_local((NUM_WG,),         dtypes.float32,  x.device, axis)
   fxn = functools.partial(_custom_fwd, dname=dname_of(x.device), eps_val=eps)
   fp8_out, x_normed_out, rrms_out, amax_buf, *_ = Tensor.custom_kernel(
     fp8_out, x_normed_out, rrms_out, amax_buf, x, weight, amax_state, fxn=fxn, grad_fxn=_fused_bwd)
-  inv_scale = (amax_state.float() + 1e-8) / FP8_MAX
-  return fp8_out, inv_scale, scalar_amax(amax_buf), x_normed_out, rrms_out
+  return fp8_out, scalar_amax(amax_buf), x_normed_out, rrms_out
 
 def fused_add_rmsnorm_mul_quantize_fp8(x:Tensor, residual:Tensor, weight:Tensor, amax_state:Tensor,
-                                       eps:float, fp8_dtype) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
+                                       eps:float, fp8_dtype) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
   # NOTE: h = x + residual; y_normed = rmsnorm(h); fp8 = quantize(y_normed * weight).
-  # Returns (fp8, inv_scale, new_amax, h, x_normed, rrms). h is also written so downstream can
+  # Returns (fp8, new_amax, h, x_normed, rrms). h is also written so downstream can
   # reuse it without recomputing x+residual — eliminates the separate residual-add kernel.
   assert x.dtype == dtypes.bfloat16 and residual.dtype == dtypes.bfloat16 and weight.dtype == dtypes.bfloat16
   assert x.shape == residual.shape
   MBS, SEQ, HIDDEN = x.shape
   axis = x.uop.axis if isinstance(x.device, tuple) else None
-  if isinstance(x.device, tuple): assert axis in (0, 1), f"unsupported sharding axis={axis}"
+  if isinstance(x.device, tuple): assert axis in (None, 0, 1), f"unsupported sharding axis={axis}"
   fp8_out      = alloc_like((MBS, SEQ, HIDDEN), fp8_dtype,       x.device, axis)
   h_out        = alloc_like((MBS, SEQ, HIDDEN), dtypes.bfloat16, x.device, axis)
   x_normed_out = alloc_like((MBS, SEQ, HIDDEN), dtypes.bfloat16, x.device, axis)
   rrms_out     = alloc_like((MBS, SEQ),         dtypes.float32,  x.device, axis)
-  amax_buf     = alloc_local((NUM_WG,),         dtypes.float32,  x.device)
+  amax_buf     = alloc_local((NUM_WG,),         dtypes.float32,  x.device, axis)
   fxn = functools.partial(_custom_fwd_add, dname=dname_of(x.device), eps_val=eps)
   fp8_out, h_out, x_normed_out, rrms_out, amax_buf, *_ = Tensor.custom_kernel(
     fp8_out, h_out, x_normed_out, rrms_out, amax_buf, x, residual, weight, amax_state,
     fxn=fxn, grad_fxn=_fused_add_bwd)
-  inv_scale = (amax_state.float() + 1e-8) / FP8_MAX
-  return fp8_out, inv_scale, scalar_amax(amax_buf), h_out, x_normed_out, rrms_out
+  return fp8_out, scalar_amax(amax_buf), h_out, x_normed_out, rrms_out

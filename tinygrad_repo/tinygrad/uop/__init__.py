@@ -13,14 +13,14 @@ class FastEnum(IntEnum):
 class Ops(FastEnum):
   # ** 1 -- defines/special **
 
-  # define GLOBAL/VAR are ptrs to outside the Kernel
-  DEFINE_VAR = auto(); BIND = auto()
+  # BIND pairs a symbolic PARAM with a concrete value
+  BIND = auto()
 
   # this is a RANGE for GPU dimensions, similar to symbolic shapes but not exactly
   SPECIAL = auto()
 
-  # define LOCAL/REG allocate things
-  DEFINE_LOCAL = auto(); DEFINE_REG = auto()
+  # BUFFER allocates global/local/register storage depending on its addrspace
+  BUFFER = auto()
 
   # ** 2 -- non op uops **
 
@@ -43,10 +43,13 @@ class Ops(FastEnum):
   # tuple/gettuple for function with multiple returns
   TUPLE = auto(); GETTUPLE = auto()
 
+  # hcq specific
+  GETADDR = auto()
+
   # ** 3 -- load/store **
 
   # INDEX is a BinaryOp similar to ADD, but it operates on pointers
-  INDEX = auto()
+  INDEX = auto(); SHRINK = auto()
 
   # load/store before math
   LOAD = auto(); STORE = auto()
@@ -61,10 +64,11 @@ class Ops(FastEnum):
   SQRT = auto(); RECIPROCAL = auto(); NEG = auto(); TRUNC = auto()
 
   # BinaryOps
-  ADD = auto(); MUL = auto(); SHL = auto(); SHR = auto(); IDIV = auto(); MAX = auto(); MOD = auto()
+  ADD = auto(); MUL = auto(); SHL = auto(); SHR = auto(); CDIV = auto(); MAX = auto(); CMOD = auto()
   CMPLT = auto(); CMPNE = auto(); CMPEQ = auto()
   XOR = auto(); OR = auto(); AND = auto()
   THREEFRY = auto(); SUB = auto(); FDIV = auto(); POW = auto()
+  FLOORDIV = auto(); FLOORMOD = auto()
 
   # TernaryOps
   WHERE = auto(); MULACC = auto()
@@ -72,10 +76,10 @@ class Ops(FastEnum):
   # ** 5 -- control flow / consts / custom **
 
   # control flow ops
-  BARRIER = auto(); RANGE = auto(); IF = auto(); END = auto(); ENDIF = auto()
+  BARRIER = auto(); RANGE = auto(); IF = auto(); END = auto(); ENDIF = auto(); WAIT = auto()
 
-  # consts. VCONST is a vectorized const
-  VCONST = auto(); CONST = auto()
+  # const.
+  CONST = auto()
 
   # CUSTOM/CUSTOMI are used to output strings into codegen. the I makes the string inline
   CUSTOM = auto(); CUSTOMI = auto()
@@ -85,44 +89,37 @@ class Ops(FastEnum):
 
   # ** 6 -- ops that don't exist in programs **
 
-  # tensor graph ops
-  UNIQUE = auto(); DEVICE = auto()
-
-  # local unique
-  LUNIQUE = auto()
-
   # ops that adjust the behavior of the scheduler
   CONTIGUOUS = auto(); CONTIGUOUS_BACKWARD = auto(); DETACH = auto()
 
   # buffer ops
-  BUFFERIZE = auto(); COPY = auto(); BUFFER = auto(); BUFFER_VIEW = auto(); MSELECT = auto(); MSTACK = auto(); CUSTOM_FUNCTION = auto()
+  STAGE = auto(); COPY = auto(); SLICE = auto(); MSELECT = auto(); MSTACK = auto(); CUSTOM_FUNCTION = auto()
 
   # the core 6 movement ops! these only exist in the tensor graph
-  RESHAPE = auto(); PERMUTE = auto(); EXPAND = auto(); PAD = auto(); SHRINK = auto(); FLIP = auto()
+  RESHAPE = auto(); PERMUTE = auto(); EXPAND = auto(); PAD = auto(); FLIP = auto()
   MULTI = auto()  # MULTI is really a movement op
 
   # reduce
   REDUCE = auto(); ALLREDUCE = auto()
 
   # expander ops
-  UNROLL = auto(); CONTRACT = auto(); VCAT = auto(); PTRCAT = auto()
+  UNROLL = auto(); CONTRACT = auto()
 
 class GroupOp:
   Unary = {Ops.EXP2, Ops.LOG2, Ops.SIN, Ops.SQRT, Ops.RECIPROCAL, Ops.NEG, Ops.TRUNC}
-  Binary = {Ops.ADD, Ops.MUL, Ops.IDIV, Ops.MAX, Ops.MOD, Ops.CMPLT, Ops.CMPNE, Ops.CMPEQ,
-            Ops.XOR, Ops.SHL, Ops.SHR, Ops.OR, Ops.AND, Ops.THREEFRY, Ops.SUB, Ops.FDIV, Ops.POW}
+  Binary = {Ops.ADD, Ops.MUL, Ops.CDIV, Ops.MAX, Ops.CMOD, Ops.CMPLT, Ops.CMPNE, Ops.CMPEQ,
+            Ops.XOR, Ops.SHL, Ops.SHR, Ops.OR, Ops.AND, Ops.THREEFRY, Ops.SUB, Ops.FDIV, Ops.POW, Ops.FLOORDIV, Ops.FLOORMOD}
   Ternary = {Ops.WHERE, Ops.MULACC}
   ALU = set.union(Unary, Binary, Ternary)
+  Broadcastable = set.union(Binary, Ternary, {Ops.GROUP})
 
   # TODO: is BITCAST always Elementwise if it's shape changing?
   Elementwise = set.union(ALU, {Ops.CAST, Ops.BITCAST})
 
-  Defines = {Ops.PARAM, Ops.DEFINE_LOCAL, Ops.DEFINE_REG}
+  Defines = {Ops.PARAM, Ops.BUFFER}
 
-  Irreducible = {Ops.CONST, Ops.DEFINE_VAR, Ops.SPECIAL, Ops.RANGE}
+  Irreducible = {Ops.CONST, Ops.SPECIAL, Ops.RANGE, Ops.PARAM}
   Movement = {Ops.RESHAPE, Ops.EXPAND, Ops.PERMUTE, Ops.PAD, Ops.SHRINK, Ops.FLIP}
-
-  Buffer = {Ops.LOAD, Ops.STORE, Ops.CONST, Ops.DEFINE_VAR}
 
   # BinaryOps that can be flipped
   Commutative = {Ops.ADD, Ops.MUL, Ops.MAX, Ops.CMPNE, Ops.CMPEQ, Ops.XOR, Ops.AND, Ops.OR}
@@ -133,10 +130,10 @@ class GroupOp:
   # BinaryOps that satisfy f(x,x)=x see https://en.wikipedia.org/wiki/Idempotence
   Idempotent = {Ops.OR, Ops.AND, Ops.MAX}
 
+  # ALU ops valid as the reduce op in REDUCE/ALLREDUCE arg
+  Reduce = {Ops.ADD, Ops.MUL, Ops.MAX}
+
   # These can change the dtype to bool
   Comparison = {Ops.CMPLT, Ops.CMPNE, Ops.CMPEQ}
-
-  # do not preserve f(0) = 0
-  UnsafePad = {Ops.RECIPROCAL, Ops.LOG2, Ops.EXP2, Ops.IDIV, Ops.POW}
 
   All = set(Ops)

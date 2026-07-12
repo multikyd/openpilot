@@ -14,7 +14,6 @@ def prod(x:Iterable[T]) -> T|int: return functools.reduce(operator.mul, x, 1)
 
 # NOTE: helpers is not allowed to import from anything else in tinygrad
 OSX, WIN = platform.system() == "Darwin", sys.platform == "win32"
-CI, BENCHMARKS = os.getenv("CI", "") != "", os.getenv("RUNNER_ENVIRONMENT", "") == "self-hosted"
 ARCH_X86 = any(x in platform.processor() for x in ("Intel", "i386", "x86_64"))
 BASEDIR = pathlib.Path(__file__).parent
 
@@ -30,6 +29,11 @@ def argfix(*x):
 # https://stackoverflow.com/questions/3382352/equivalent-of-numpy-argsort-in-basic-python
 def argsort(x): return type(x)(sorted(range(len(x)), key=x.__getitem__))
 def all_same(items:Sequence): return all(x == items[0] for x in items)  # works for empty input
+def get_shape(x) -> tuple[int, ...]:
+  # NOTE: str is special because iterating it still yields strs
+  if not hasattr(x, "__len__") or isinstance(x, str) or getattr(x, "shape", None) == (): return ()
+  if not all_same(subs:=[get_shape(xi) for xi in x]): raise ValueError(f"inhomogeneous shape from {x}")
+  return (len(subs),) + (subs[0] if subs else ())
 def all_int(t: Sequence[Any]) -> TypeGuard[tuple[int, ...]]: return all(isinstance(s, int) for s in t)
 def colored(st, color:str|None, background=False): # replace the termcolor library
   if NO_COLOR: return st
@@ -41,6 +45,7 @@ def size_to_str(s:int) -> str: return next((f"{s / d:.2f} {pr}" for d,pr in [(1<
 def ansistrip(s:str): return re.sub('\x1b\\[(K|.*?m)', '', s)
 def ansilen(s:str): return len(ansistrip(s))
 def make_tuple(x:int|Sequence[int], cnt:int) -> tuple[int, ...]: return (x,)*cnt if isinstance(x, int) else tuple(x)
+def to_tuple(x:T|tuple[T, ...]) -> tuple[T, ...]: return x if isinstance(x, tuple) else (x,)
 def flatten(l:Iterable[Iterable[T]]): return [item for sublist in l for item in sublist]
 def fully_flatten(l):
   if not (hasattr(l, "__len__") and hasattr(l, "__getitem__")) or isinstance(l, str): return [l]
@@ -64,6 +69,9 @@ def next_power2(x): return 1 if x == 0 else 1 << (x - 1).bit_length()
 # cstyle div and mod
 def cdiv(x:int, y:int) -> int: return abs(x)//abs(y)*(1,-1)[x*y<0] if y != 0 else 0
 def cmod(x:int, y:int) -> int: return x-cdiv(x,y)*y
+# python floor div and mod
+def floordiv(x:int, y:int) -> int: return x//y if y != 0 else 0
+def floormod(x:int, y:int) -> int: return x-floordiv(x,y)*y
 def lo32(x:Any) -> Any: return x & 0xFFFFFFFF # Any is sint
 def hi32(x:Any) -> Any: return x >> 32 # Any is sint
 def data64(data:Any) -> tuple[Any, Any]: return (data >> 32, data & 0xFFFFFFFF) # Any is sint
@@ -96,8 +104,8 @@ def get_child(obj, key):
 def word_wrap(x, wrap=80):
   if len(ansistrip(x)) <= wrap: return x
   if len(lines:=x.splitlines()) > 1: return "\n".join(word_wrap(line, wrap) for line in lines)
-  i = 0
-  while len(ansistrip(x[:i])) < wrap and i < len(x): i += 1
+  i = vis = 0
+  while vis < wrap and i < len(x): i, vis = (i + m.end(), vis) if (m:=re.match('\x1b\\[(K|.*?m)', x[i:])) is not None else (i+1, vis+1)
   return x[:i] + "\n" + word_wrap(x[i:], wrap)
 def pad_bytes(b:bytes, align:int) -> bytes: return b + b'\x00' * ((align - (len(b) % align)) % align)
 
@@ -117,7 +125,7 @@ def strides_for_shape(shape:tuple[T, ...]) -> tuple[T, ...]:
 # returns the axes to create new_shape if new_shape can be created by combining axis from old_shape
 def get_contraction(old_shape:tuple[T, ...], new_shape:tuple[T, ...]) -> list[list[int]]|None: # T is sint
   acc_old, acc_new = list(itertools.accumulate(old_shape, operator.mul)), list(itertools.accumulate(new_shape, operator.mul))
-  try: split = [acc_old.index(acc)+1 if acc != 1 else 0 for acc in acc_new]
+  try: split = [0 if isinstance(acc, int) and acc == 1 else acc_old.index(acc)+1 for acc in acc_new]
   except ValueError: return None
   return [list(range(st,ed)) for st,ed in zip([0]+split[:-1], split[:-1]+[len(old_shape)])]
 
@@ -231,14 +239,18 @@ class _DEV(ContextVar):
 DEV, DEBUG, BEAM, NOOPT = _DEV("DEV", ""), ContextVar("DEBUG", 0), ContextVar("BEAM", 0), ContextVar("NOOPT", 0)
 IMAGE, FLOAT16, OPENPILOT_HACKS = ContextVar("IMAGE", 0), ContextVar("FLOAT16", 0), ContextVar("OPENPILOT_HACKS", 0)
 JIT, JIT_BATCH_SIZE = ContextVar("JIT", 2 if OSX and ARCH_X86 else 1), ContextVar("JIT_BATCH_SIZE", 32)
+CHUNK_SIZE = 2**20  # TinyFS content-addressed store: blob chunk + hash-tree node granularity
 WINO, CAPTURING, TRACEMETA, NO_COLOR = ContextVar("WINO", 0), ContextVar("CAPTURING", 1), ContextVar("TRACEMETA", 1), ContextVar("NO_COLOR", 0)
+TRAINING = ContextVar("TRAINING", 0)
 USE_TC, TC_SELECT, TC_OPT = ContextVar("TC", 1), ContextVar("TC_SELECT", -1), ContextVar("TC_OPT", 0)
 TRANSCENDENTAL, NOLOCALS = ContextVar("TRANSCENDENTAL", 1), ContextVar("NOLOCALS", 0)
 SPLIT_REDUCEOP, NO_MEMORY_PLANNER, LRU = ContextVar("SPLIT_REDUCEOP", 1), ContextVar("NO_MEMORY_PLANNER", 0), ContextVar("LRU", 1)
 RING, ALL2ALL, ALLREDUCE_CAST = ContextVar("RING", 1), ContextVar("ALL2ALL", 0), ContextVar("ALLREDUCE_CAST", 1)
-CACHELEVEL, IGNORE_BEAM_CACHE, DEVECTORIZE = ContextVar("CACHELEVEL", 2), ContextVar("IGNORE_BEAM_CACHE", 0), ContextVar("DEVECTORIZE", 1)
-VALIDATE_WITH_CPU, DISABLE_FAST_IDIV = ContextVar("VALIDATE_WITH_CPU", 0), ContextVar("DISABLE_FAST_IDIV", 0)
-CORRECT_DIVMOD_FOLDING, FUSE_OPTIM = ContextVar("CORRECT_DIVMOD_FOLDING", 0), ContextVar("FUSE_OPTIM", 0)
+CACHELEVEL, IGNORE_BEAM_CACHE = ContextVar("CACHELEVEL", 2), ContextVar("IGNORE_BEAM_CACHE", 0)
+VALIDATE_WITH_CPU = ContextVar("VALIDATE_WITH_CPU", 0)
+# TODO: this is broken for some indexing
+DISABLE_FAST_IDIV = ContextVar("DISABLE_FAST_IDIV", 1)
+FUSE_OPTIM = ContextVar("FUSE_OPTIM", 0)
 ALLOW_DEVICE_USAGE, MAX_BUFFER_SIZE = ContextVar("ALLOW_DEVICE_USAGE", 1), ContextVar("MAX_BUFFER_SIZE", 0)
 MAX_KERNEL_BUFFERS = ContextVar("MAX_KERNEL_BUFFERS", 0)
 EMULATED_DTYPES = ContextVar("EMULATED_DTYPES", "")
@@ -263,6 +275,8 @@ ALLOW_TF32 = ContextVar("ALLOW_TF32", 0)
 SCACHE = ContextVar("SCACHE", 1)
 # allow use of atomics for embedding backward
 USE_ATOMICS = ContextVar("USE_ATOMICS", 0)
+# don't allow broadcast
+DISALLOW_BROADCAST = ContextVar("DISALLOW_BROADCAST", 1)
 
 @dataclass(frozen=True)
 class Metadata:
@@ -451,11 +465,11 @@ def fetch(url:str, name:pathlib.Path|str|None=None, subdir:str|None=None, gunzip
     fp = _ensure_downloads_dir() / (subdir or "") / ((name or hashlib.md5(url.encode('utf-8')).hexdigest()) + hh + (".gunzip" if gunzip else ""))
   if not fp.is_file() or not allow_caching or (sha256 and hashlib.sha256(fp.read_bytes()).hexdigest() != sha256):
     (_dir := fp.parent).mkdir(parents=True, exist_ok=True)
-    with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "tinygrad 0.12.0", **headers}), timeout=10) as r:
+    with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "tinygrad 0.13.0", **headers}), timeout=10) as r:
       assert r.status in {200, 206}, r.status
       length = int(r.headers.get('content-length', 0)) if not gunzip else None
       readfile = gzip.GzipFile(fileobj=r) if gunzip else r
-      progress_bar:tqdm = tqdm(total=length, unit='B', unit_scale=True, desc=f"{url}", disable=CI)
+      progress_bar:tqdm = tqdm(total=length, unit='B', unit_scale=True, desc=f"{url}")
       h = hashlib.sha256() if sha256 else None
       with tempfile.NamedTemporaryFile(dir=_dir, delete=False) as f:
         while chunk := readfile.read(16384):
@@ -467,6 +481,13 @@ def fetch(url:str, name:pathlib.Path|str|None=None, subdir:str|None=None, gunzip
       progress_bar.update(close=True)
       if length and (file_size:=os.stat(fp).st_size) < length: raise RuntimeError(f"fetch size incomplete, {file_size} < {length}")
   return fp
+
+def fetch_fw(path:str, name:str, sha256:str) -> bytes:
+  if sys.version_info >= (3,14) and (p:=pathlib.Path(f"/lib/firmware/{path}/{name}.zst")).is_file():
+    from compression.zstd import decompress
+    if hashlib.sha256(b:=decompress(p.read_bytes())).hexdigest() == sha256: return b
+  return fetch(f"https://gitlab.com/kernel-firmware/linux-firmware/-/raw/1e2c15348485939baf1b6d1f5a7a3b799d80703d/{path}/{name}",
+               subdir="fw", sha256=sha256).read_bytes()
 
 # *** Exec helpers
 
@@ -517,9 +538,10 @@ def flat_mv(mv:memoryview): return mv if len(mv) == 0 else mv.cast("B", shape=(m
 # *** tqdm
 
 class tqdm(Generic[T]):
-  def __init__(self, iterable:Iterable[T]|None=None, desc:str='', disable:bool=False,
+  def __init__(self, iterable:Iterable[T]|None=None, desc:str='', disable:bool|None=False,
                unit:str='it', unit_scale=False, total:int|None=None, rate:int=100):
-    self.iterable, self.disable, self.unit, self.unit_scale, self.rate = iterable, disable, unit, unit_scale, rate
+    self.disable = not sys.stderr.isatty() if disable is None else disable
+    self.iterable, self.unit, self.unit_scale, self.rate = iterable, unit, unit_scale, rate
     self.st, self.i, self.n, self.skip, self.t = time.perf_counter(), -1, 0, 1, getattr(iterable, "__len__", lambda:0)() if total is None else total
     self.set_description(desc)
     self.update(0)

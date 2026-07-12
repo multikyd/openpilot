@@ -2,14 +2,13 @@ from typing import Optional, Any
 import unittest, math
 import numpy as np
 from tinygrad.tensor import Tensor, _to_np_dtype
-from tinygrad.helpers import CI, Context
+from tinygrad.helpers import Context
 from tinygrad.dtype import dtypes, DType, AddrSpace, ConstFloat  # noqa: F401
 from tinygrad.device import Buffer, Device
 from tinygrad.uop.ops import Ops, UOp, KernelInfo, AxisType, buffers
 from tinygrad.renderer.cstyle import CStyleLanguage
 from tinygrad.engine.realize import run_linear
 from tinygrad.codegen import to_program
-from tinygrad.device import is_dtype_supported
 from tinygrad.codegen.opt import Opt, OptOps
 from tinygrad.renderer.ptx import PTXRenderer
 from test.helpers import to_uops_list
@@ -21,14 +20,15 @@ def run_uops(uops_list:list[UOp], bufs:list[Buffer]):
 
 def uop(uops:list[UOp], op:Ops, dtype:Optional[DType], src:tuple[UOp, ...], arg:Any=None) -> UOp:
   if op is Ops.CONST: uops.append(UOp.const(dtype, arg))
+  elif op is Ops.PARAM: uops.append(UOp.param(arg, dtype).replace(src=()))
   else: uops.append(UOp(op, dtype, tuple(src), arg))
   return uops[-1]
 
 def _test_single_value(vals, op, dts):
   uops = []
   output_dtype = dtypes.bool if op in (Ops.CMPLT, Ops.CMPNE) else dts[-1]
-  buf_store = uop(uops, Ops.PARAM, output_dtype.ptr(), (), 0)
-  buf_loads = [uop(uops, Ops.PARAM, dtype.ptr(), (), i+1) for i,dtype in enumerate(dts)]
+  buf_store = uop(uops, Ops.PARAM, output_dtype.ptr(1), (), 0)
+  buf_loads = [uop(uops, Ops.PARAM, dtype.ptr(1), (), i+1) for i,dtype in enumerate(dts)]
   loads = (buf_loads[i].index(uop(uops, Ops.CONST, dtypes.int32, (), 0)) for i, dtype in enumerate(dts))
   alu = uop(uops, op, output_dtype, loads)
   out = uop(uops, Ops.STORE, dtypes.void, (buf_store.index(uop(uops, Ops.CONST, dtypes.int32, (), 0), ptr=True), alu))
@@ -42,7 +42,7 @@ def _test_single_value(vals, op, dts):
 def _test_single_value_const(vals, op, dts):
   uops = []
   output_dtype = dtypes.bool if op in (Ops.CMPLT, Ops.CMPNE) else dts[-1]
-  buf_store = uop(uops, Ops.PARAM, output_dtype.ptr(), (), 0)
+  buf_store = uop(uops, Ops.PARAM, output_dtype.ptr(1), (), 0)
   loads = (uop(uops, Ops.CONST, dtype, [], a) for a,dtype in zip(vals, dts))
   alu = uop(uops, op, output_dtype, loads)
   out = buf_store[UOp.const(dtypes.int32, 0)].store(alu)
@@ -54,7 +54,7 @@ def _test_single_value_const(vals, op, dts):
 
 def _test_uops_result(output_dtype, uops, res):
   # uops = []
-  buf_store = uop(uops, Ops.PARAM, output_dtype.ptr(), (), 0)
+  buf_store = uop(uops, Ops.PARAM, output_dtype.ptr(1), (), 0)
   # res = output_fn(uops)
   out = uop(uops, Ops.STORE, dtypes.void, (buf_store.index(uop(uops, Ops.CONST, dtypes.int32, (), 0)), res))
   buf = Buffer(Device.DEFAULT, 1, output_dtype).allocate()
@@ -133,17 +133,15 @@ class TestNonFloatUOps(TestUOps):
   @unittest.skipUnless(isinstance(Device[Device.DEFAULT].renderer, (PTXRenderer, CStyleLanguage)), "only ptx and cstyle use bitshifts")
   def test_shl_int32(self): self._test_bop_fxn(Ops.SHL, lambda a,b: int(a)<<int(b), (dtypes.int32, dtypes.int32), no_b_neg=True)
   def test_div_int32(self):
-    self._test_bop_fxn(Ops.IDIV, lambda a,b: int(a/b), (dtypes.int32, dtypes.int32), no_b_zero=True)
+    self._test_bop_fxn(Ops.CDIV, lambda a,b: int(a/b), (dtypes.int32, dtypes.int32), no_b_zero=True)
   def test_and_int32(self): self._test_bop_fxn(Ops.AND, lambda a,b: int(a)&int(b), (dtypes.int32, dtypes.int32))
   def test_or_int32(self): self._test_bop_fxn(Ops.OR, lambda a,b: int(a)|int(b), (dtypes.int32, dtypes.int32))
   def test_mod_int32(self):
-    self._test_bop_fxn(Ops.MOD,
+    self._test_bop_fxn(Ops.CMOD,
                        lambda a,b: abs(int(a))%abs(int(b))*(1,-1)[a<0], (dtypes.int32, dtypes.int32), no_b_zero=True)
   def test_cmplt_int32(self): self._test_bop_fxn(Ops.CMPLT, lambda a,b: int(a)<int(b), (dtypes.int32, dtypes.int32))
   def test_cmpne_int32(self): self._test_bop_fxn(Ops.CMPNE, lambda a,b: int(a)!=int(b), (dtypes.int32, dtypes.int32))
-  @unittest.skipUnless(is_dtype_supported(dtypes.bool), "dtype not supported")
   def test_mul_bool(self): self._test_bop_fxn(Ops.MUL, lambda a,b: bool(a) and bool(b), (dtypes.bool, dtypes.bool))
-  @unittest.skipUnless(is_dtype_supported(dtypes.float16), "dtype not supported")
   def test_where_float16(self):
     self._test_top_fxn(Ops.WHERE, lambda a,b,c: b if a!=0 else c, (dtypes.bool, dtypes.float16, dtypes.float16))
 
@@ -176,12 +174,11 @@ class TestBoolUOps(TestUOps):
   def test_where_bool(self): self._test_top_bool_fxn(Ops.WHERE, lambda a,b,c: b if a else c)
 
 class TestLocalAccess(unittest.TestCase):
-  # NOTE: this is failing on METAL CI, no idea why. Works locally.
-  @unittest.skipIf(Device.DEFAULT == "METAL" and CI, "failing only in CI")
   @unittest.skipUnless(Device[Device.DEFAULT].renderer.has_shared, "test requires shared memory")
   def test_local_basic(self):
     uops = []
-    smem = uop(uops, Ops.DEFINE_LOCAL, dtypes.float32.ptr(size=16, addrspace=AddrSpace.LOCAL), (), 'smem')
+    smem = UOp.placeholder((16,), dtypes.float32, slot=0, addrspace=AddrSpace.LOCAL)
+    uops.append(smem)
     st = uop(uops, Ops.STORE, dtypes.void, (smem.index(uop(uops, Ops.CONST, dtypes.int32, (), 0)), uop(uops, Ops.CONST, dtypes.float32, (), 42.0)))
     barr = uop(uops, Ops.BARRIER, dtypes.void, (st,))
     sres = uop(uops, Ops.LOAD, dtypes.float32, (smem.after(barr).index(uop(uops, Ops.CONST, dtypes.int32, (), 0), ptr=True),))
@@ -191,7 +188,8 @@ class TestLocalAccess(unittest.TestCase):
   @unittest.skipUnless(Device.DEFAULT == "WEBGPU", "Test local access with packed data type")
   def test_local_packed(self):
     uops = []
-    smem = uop(uops, Ops.DEFINE_LOCAL, dtypes.uint8.ptr(size=16, addrspace=AddrSpace.LOCAL), (), 'smem')
+    smem = UOp.placeholder((16,), dtypes.uint8, slot=0, addrspace=AddrSpace.LOCAL)
+    uops.append(smem)
     st = uop(uops, Ops.STORE, dtypes.void, (smem.index(uop(uops, Ops.CONST, dtypes.int32, (), 0)), uop(uops, Ops.CONST, dtypes.uint8, (), 42)))
     barr = uop(uops, Ops.BARRIER, dtypes.void, (st,))
     sres = smem.after(barr).index(uop(uops, Ops.CONST, dtypes.int32, (), 0))
@@ -203,18 +201,20 @@ class TestLocalAccess(unittest.TestCase):
     _dtypes = [dtypes.char, dtypes.uchar, dtypes.short, dtypes.ushort, dtypes.half]
     size = 16
     for dtype in _dtypes:
-      temp = UOp(Ops.DEFINE_LOCAL, dtype.ptr(size=size, addrspace=AddrSpace.LOCAL), (), 'smem')
+      temp = UOp.placeholder((size,), dtype, slot=0, addrspace=AddrSpace.LOCAL)
       uops = to_uops_list([temp], ren=Device[Device.DEFAULT].renderer)
       out = Device[Device.DEFAULT].renderer.render(uops)
       # half is supported in wgsl, so it doesn't have to be packed
       corrected_size = size//(4//dtype.itemsize) if dtype != dtypes.half else size
-      self.assertIn(f"temp0: array<{Device[Device.DEFAULT].renderer.buf_map(dtype)},{corrected_size}>;", out)
+      # temp0: array<{Device[Device.DEFAULT].renderer.buf_map(dtype)},{corrected_size}>;
+      self.assertIn(f",{corrected_size}>;", out)
 
   @unittest.skipUnless(Device[Device.DEFAULT].renderer.has_shared, "test requires shared memory")
   @unittest.skip("tinygrad doesn't support this behavior")
   def test_local_indirect(self):
     uops = []
-    smem = uop(uops, Ops.DEFINE_LOCAL, dtypes.int32.ptr(size=16, addrspace=AddrSpace.LOCAL), (), 'smem')
+    smem = UOp.placeholder((16,), dtypes.int32, slot=0, addrspace=AddrSpace.LOCAL)
+    uops.append(smem)
     st1 = uop(uops, Ops.STORE, dtypes.void, (smem.index(uop(uops, Ops.CONST, dtypes.int32, (), 1)), uop(uops, Ops.CONST, dtypes.int32, (), 2)))
     st2 = uop(uops, Ops.STORE, dtypes.void, (smem.index(uop(uops, Ops.CONST, dtypes.int32, (), 2)), uop(uops, Ops.CONST, dtypes.int32, (), 42)))
     barr = uop(uops, Ops.BARRIER, dtypes.void, (st1,st2))
@@ -225,13 +225,15 @@ class TestLocalAccess(unittest.TestCase):
 @unittest.skipUnless(isinstance(Device[Device.DEFAULT].renderer, PTXRenderer), "This only tests assembly backends")
 class TestAssembly(unittest.TestCase):
   def test_bitshift_left(self):
-    g1 = UOp(Ops.PARAM, dtypes.int32.ptr(), (), 0)
+    g1 = UOp.param(0, dtypes.int32.ptr(3))
+    out = UOp.param(1, dtypes.int32.ptr(2))
     c1 = UOp.const(dtypes.int, 2)
     c2 = UOp.const(dtypes.int, 3)
     l1 = g1.index(c1)
     a1 = UOp(Ops.MUL, dtypes.int, (l1, c1))
     a2 = UOp(Ops.MUL, dtypes.int, (l1, c2))
-    uops = to_uops_list([a1,a2], ren=Device[Device.DEFAULT].renderer)
+    uops = to_uops_list([out.index(UOp.const(dtypes.int, 0)).store(a1), out.index(UOp.const(dtypes.int, 1)).store(a2)],
+                        ren=Device[Device.DEFAULT].renderer)
     Device[Device.DEFAULT].renderer.render(uops)
     ops = [x.op for x in uops]
     self.assertIn(Ops.SHL, ops)
@@ -247,11 +249,11 @@ class TestAssembly(unittest.TestCase):
     opts_to_apply = [Opt(OptOps.UNROLL, 0, 4)]
     ast = ast.replace(arg=KernelInfo(opts_to_apply=tuple(opts_to_apply)))
     program = to_program(ast, Device[Device.DEFAULT].renderer)
-    uops = tuple(program.src[2].src)
+    uops = tuple(program.src[1].src)
     self.assertGreaterEqual(len([x.op for x in uops if x.op is Ops.MULACC]), 4)
 
   def test_mulacc_shl(self):
-    g1 = UOp(Ops.PARAM, dtypes.int32.ptr(), (), 0)
+    g1 = UOp.param(0, dtypes.int32.ptr(2))
     c1 = UOp.const(dtypes.int, 0)
     c2 = UOp.const(dtypes.int, 1)
     expr = g1.index(c1) * UOp.const(dtypes.int, 4096) + g1.index(c2)
@@ -260,7 +262,7 @@ class TestAssembly(unittest.TestCase):
     self.assertIn(Ops.MULACC, [x.op for x in uops])
 
   def test_use_cmpeq(self):
-    g = UOp(Ops.PARAM, dtypes.uint32.ptr(), (), 0)
+    g = UOp.param(0, dtypes.uint32.ptr(8))
     c = UOp.const(dtypes.uint, 7)
     comp = g.index(c).ne(c).ne(True)
     uops = to_uops_list([comp], ren=Device[Device.DEFAULT].renderer)
@@ -278,7 +280,7 @@ class TestZeroRange(unittest.TestCase):
 
 class TestUOpPrograms(unittest.TestCase):
   def _run(self, prog:UOp, *tensors:Tensor):
-    run_linear(UOp(Ops.LINEAR, src=(prog.call(*[t.uop.buf_uop for t in tensors]),)), do_update_stats=False)
+    run_linear(UOp(Ops.LINEAR, src=(prog.call(*[t.uop.buf_uop for t in tensors]),)), update_stats=False)
 
   def test_simple(self):
     out = Tensor.empty(10,10,dtype=dtypes.int)

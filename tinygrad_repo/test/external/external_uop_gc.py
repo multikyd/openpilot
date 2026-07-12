@@ -3,7 +3,7 @@ from tinygrad import Tensor, UOp, Device, nn
 from tinygrad.schedule import schedule_cache
 from tinygrad.codegen import to_program, to_program_cache
 from tinygrad.schedule.indexing import apply_movement_op, _apply_reshape
-from tinygrad.uop.divandmod import fold_divmod_general
+from tinygrad.codegen.decomp.divandmod import fold_divmod_general
 from test.test_tiny import TestTiny
 
 def uops_allocated(): return sum([isinstance(x, UOp) for x in gc.get_objects()])
@@ -24,28 +24,28 @@ def two_plus_two_linearize():
 def two_plus_two_realize(): (Tensor([2])+Tensor([2])).realize()
 def two_plus_two_item(): (Tensor([2])+Tensor([2])).item()
 def gradient_test():
-  x = Tensor.eye(3, requires_grad=True)
-  y = Tensor([[2.0,0,-2.0]], requires_grad=True)
+  x = Tensor.eye(3)
+  y = Tensor([[2.0,0,-2.0]])
   z = y.matmul(x).sum()
   z.backward()
 def realized_eye():
-  Tensor.eye(3, requires_grad=True).realize()
+  Tensor.eye(3).clone().realize()
 def realized_list():
-  Tensor([[2.0,0,-2.0]], requires_grad=True).realize()
+  Tensor([[2.0,0,-2.0]]).realize()
 def kernel_matmul():
-  x = Tensor.eye(3, requires_grad=True)
-  y = Tensor([[2.0,0,-2.0]], requires_grad=True)
+  x = Tensor.eye(3)
+  y = Tensor([[2.0,0,-2.0]])
   z = y.matmul(x)
   linear = z.schedule_linear()
   to_program(linear.src[-1].src[0], Device.default.renderer)
 def realized_matmul():
-  x = Tensor.eye(3, requires_grad=True)
-  y = Tensor([[2.0,0,-2.0]], requires_grad=True)
+  x = Tensor.eye(3)
+  y = Tensor([[2.0,0,-2.0]])
   z = y.matmul(x)
   Tensor.realize(z)
 def realized_gradient():
-  x = Tensor.eye(3, requires_grad=True)
-  y = Tensor([[2.0,0,-2.0]], requires_grad=True)
+  x = Tensor.eye(3)
+  y = Tensor([[2.0,0,-2.0]])
   z = y.matmul(x).sum()
   z.backward()
   Tensor.realize(x, y, z, x.grad, y.grad)

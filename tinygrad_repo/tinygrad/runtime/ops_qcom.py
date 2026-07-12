@@ -9,7 +9,7 @@ from tinygrad.runtime.autogen import kgsl, mesa
 from tinygrad.renderer.cstyle import QCOMCLRenderer
 from tinygrad.renderer.nir import IR3Renderer
 from tinygrad.helpers import getenv, mv_address, to_mv, round_up, data64_le, ceildiv, prod, cpu_profile, lo32, suppress_finalizing
-from tinygrad.helpers import next_power2, flatten, PROFILE
+from tinygrad.helpers import next_power2, flatten, PROFILE, IMAGE
 from tinygrad.dtype import ImageDType, dtypes
 from tinygrad.runtime.support.system import System
 if getenv("IOCTL"): import extra.qcom_gpu_driver.opencl_ioctl  # noqa: F401  # pylint: disable=unused-import
@@ -20,13 +20,12 @@ BUFTYPE_BUF, BUFTYPE_TEX, BUFTYPE_IBO = 0, 1, 2
 def dcache_flush():
   from tinygrad.uop.ops import UOp, Ops, KernelInfo
   from tinygrad.codegen import to_program
-  buf, n = UOp(Ops.PARAM, dtypes.uint8.ptr(), arg=0), UOp(Ops.PARAM, dtypes.uint8.ptr(), arg=1)
-  i = UOp.range(n.cast(dtypes.int), 0, dtype=dtypes.int)
-  flush = UOp(Ops.CUSTOM, dtypes.void, (buf.cast(dtypes.ulong) + i.cast(dtypes.ulong) * UOp.const(dtypes.ulong, 64),),
-              arg='__asm__ volatile("dc cvac, %0" :: "r"({0}) : "memory");')
+  buf, n = UOp.param(0, dtypes.uint8.ptr(1)), UOp.param(1, dtypes.int, shape=(1,), name="n", addrspace=None)
+  i = UOp.range(n, 0, dtype=dtypes.int)
+  flush = UOp(Ops.CUSTOM, dtypes.void, (buf.index(i * 64),), arg='__asm__ volatile("dc cvac, %0" :: "r"({0}) : "memory");')
   sink = UOp.sink(flush.end(i), UOp(Ops.CUSTOM, dtypes.void, (), arg='__asm__ volatile("dsb sy" ::: "memory");'), arg=KernelInfo(name="dcache_flush"))
-  prg = to_program(UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg="CPU"), UOp(Ops.LINEAR, src=tuple(sink.toposort())))), Device["CPU"].renderer)
-  return Device["CPU"].runtime(prg.arg.function_name, prg.src[4].arg)
+  prg = to_program(UOp(Ops.PROGRAM, src=(sink, UOp(Ops.LINEAR, src=tuple(sink.toposort())))), Device["CPU"].renderer)
+  return Device["CPU"].runtime(prg.arg.function_name, prg.src[3].arg)
 
 #Parse C-style defines: <regname>_<field_x>__SHIFT and <regname>_<field_y>__MASK from the adreno module into the following format:
 # qreg.<regname>(<field_x>=..., <field_y>=..., ..., <field_n>=...)
@@ -131,7 +130,8 @@ class QCOMComputeQueue(HWQueue):
     self.reg(mesa.REG_A6XX_SP_UPDATE_CNTL, 0x0)
     self.reg(mesa.REG_A6XX_SP_CS_TSIZE, qreg.a6xx_sp_cs_tsize(0x80)) # is this right? mesa uses 1
     self.reg(mesa.REG_A6XX_SP_CS_USIZE, qreg.a6xx_sp_cs_usize(0x40)) # mesa also uses 1
-    self.reg(mesa.REG_A6XX_SP_MODE_CNTL, qreg.a6xx_sp_mode_cntl(isammode=mesa.ISAMMODE_GL if prg.NIR else mesa.ISAMMODE_CL))
+    self.reg(mesa.REG_A6XX_SP_MODE_CNTL, qreg.a6xx_sp_mode_cntl(isammode=mesa.ISAMMODE_GL if prg.NIR else mesa.ISAMMODE_CL,
+                                                                constant_demotion_enable=prg.NIR))
     self.reg(mesa.REG_A6XX_SP_PERFCTR_SHADER_MASK, qreg.a6xx_sp_perfctr_shader_mask(cs=True))
     self.reg(mesa.REG_A6XX_TPL1_MODE_CNTL, qreg.a6xx_tpl1_mode_cntl(isammode=mesa.ISAMMODE_GL if prg.NIR else mesa.ISAMMODE_CL))
     self.reg(mesa.REG_A6XX_TPL1_DBG_ECO_CNTL, 0)
@@ -371,7 +371,7 @@ class QCOMDevice(HCQCompiled):
       System.write_sysfs("/sys/class/kgsl/kgsl-3d0/idle_timer", value="4000000000", msg="Failed to disable suspend mode", expected="4294967276")
 
     super().__init__(device, QCOMAllocator(self), [QCOMCLRenderer, IR3Renderer], functools.partial(QCOMProgram, self), QCOMSignal,
-                     functools.partial(QCOMComputeQueue, self), arch="a%d%d%d" % self.gpu_id)
+                     functools.partial(QCOMComputeQueue, self), arch=("a%d%d%d" + (",IMAGE_PITCH_ALIGNMENT=64" if IMAGE else "")) % self.gpu_id)
 
   def _gpu_alloc(self, size:int, flags:int=0, uncached=False, fill_zeroes=False) -> HCQBuffer:
     flags |= flag("KGSL_MEMALIGN", alignment_hint:=12) | kgsl.KGSL_MEMFLAGS_USE_CPU_MAP
@@ -385,7 +385,7 @@ class QCOMDevice(HCQCompiled):
 
   def _gpu_map(self, ptr:int, size:int) -> HCQBuffer:
     ptr_aligned, size_aligned = (ptr & ~0xfff), round_up(size + (ptr & 0xfff), 0x1000)
-    dcache_flush().fxn(ctypes.c_uint64(ptr_line_aligned:=ptr & ~63), ctypes.c_uint64(ceildiv(ptr + size - ptr_line_aligned, 64)))
+    dcache_flush().fxn(ctypes.c_uint64(ptr_line_aligned:=ptr & ~63), ceildiv(ptr + size - ptr_line_aligned, 64))
     try:
       mi = kgsl.IOCTL_KGSL_MAP_USER_MEM(self.fd, hostptr=ptr_aligned, len=size_aligned, memtype=kgsl.KGSL_USER_MEM_TYPE_ADDR)
       return HCQBuffer(mi.gpuaddr + (ptr - ptr_aligned), size=size, meta=(mi, False), view=MMIOInterface(ptr, size, fmt='B'), owner=self)

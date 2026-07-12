@@ -3,11 +3,10 @@ from dataclasses import replace
 from tinygrad.uop.ops import sym_infer, AxisType, UOp
 from tinygrad.uop.render import pyrender
 from tinygrad.device import Device, Buffer
-from tinygrad.helpers import prod, flatten, DEBUG, CACHELEVEL, diskcache_get, diskcache_put, getenv, Context, colored, time_to_str, unwrap
+from tinygrad.helpers import prod, flatten, DEBUG, CACHELEVEL, diskcache_get, diskcache_put, getenv, Context, colored, time_to_str
 from tinygrad.helpers import IGNORE_BEAM_CACHE
 from tinygrad.codegen.opt import Opt, OptOps, KernelOptError
-from tinygrad.tensor import Tensor
-from tinygrad.engine.realize import get_runtime
+from tinygrad.engine.realize import time_call
 from tinygrad.codegen import to_program
 from tinygrad.codegen.opt.postrange import Scheduler
 
@@ -42,17 +41,11 @@ def _time_program(prg:UOp, var_vals:dict[str, int], rawbufs:list[Buffer], early_
   if allow_test_size and max_global_size is not None:
     global_size, factor = get_test_global_size(prg.arg.global_size, max_global_size, var_vals)
     prg = prg.replace(arg=replace(prg.arg, global_size=tuple(global_size)))
-  try: rt = get_runtime(prg.src[1].arg, prg)
-  except AssertionError: return [math.inf] * cnt
-  global_size, local_size = prg.arg.launch_dims(var_vals)
-  bufs = [rawbufs[i]._buf for i in prg.arg.globals]
+  call = prg.call(*[UOp.from_buffer(b) for b in rawbufs])
   tms = []
   for _ in range(cnt):
-    if clear_l2:
-      if hasattr(dev:=Device[prg.src[1].arg], 'invalidate_caches'): dev.invalidate_caches()
-      else:
-        with Context(DEBUG=0, BEAM=0, CAPTURING=0, TRACK_MATCH_STATS=0): Tensor.ones(1024,1024).contiguous().realize(do_update_stats=False)
-    tms.append(unwrap(rt(*bufs, global_size=global_size, local_size=local_size, vals=prg.arg.vals(var_vals), wait=True, timeout=timeout))*factor)
+    try: tms.append(time_call(call, var_vals, timeout=timeout, clear_l2=clear_l2) * factor)
+    except AssertionError: return [math.inf] * cnt
     if early_stop is not None and early_stop < min(tms): break
   return tms
 
@@ -71,7 +64,7 @@ def _try_compile(x:tuple[int,Scheduler]) -> tuple[int, tuple[UOp, float]|None]:
     st = time.perf_counter()
     prg = to_program(x[1].copy().get_optimized_ast(name_override="test"), x[1].ren)
     et = time.perf_counter() - st
-    uops = prg.src[2].src
+    uops = prg.src[1].src
     if len(uops) >= (uops_max:=getenv("BEAM_UOPS_MAX", 3000)) > 0:
       if getenv("BEAM_LOG_SURPASS_MAX"): print(f"too many uops. {len(uops)=}, {uops_max=}")
       raise RuntimeError("too many uops")
@@ -153,7 +146,7 @@ def beam_search(s:Scheduler, rawbufs:list[Buffer], amt:int, allow_test_size=True
       for i, proc in ((map if beam_pool is None else beam_pool.imap_unordered)(_try_compile, enumerate(candidates))):
         if proc is None: continue
         prg, compile_et = proc
-        if (lib:=prg.src[4].arg) in seen_libs: continue
+        if (lib:=prg.src[3].arg) in seen_libs: continue
         # filter out kernels that use 1000x more compute than the smallest
         estimates = prg.src[0].arg.estimates
         least_compute_ops = min(this_compute_ops:=sym_infer(estimates.ops if estimates is not None else 0, var_vals), least_compute_ops)
@@ -170,7 +163,7 @@ def beam_search(s:Scheduler, rawbufs:list[Buffer], amt:int, allow_test_size=True
           raise
         timed.append((candidates[i], min(tms)))
         if BEAM_DEBUG > 1:
-          print(f"{time.perf_counter() - st:7.2f}s: {i:5d} {len(prg.src[2].src):5d} uops",
+          print(f"{time.perf_counter() - st:7.2f}s: {i:5d} {len(prg.src[1].src):5d} uops",
                 f"{time_to_str(compile_et, w=12)} compile/{time_to_str(timed[-1][1], w=12)} run",
                 f"      {len(timed):4d}/{len(candidates):4d}         {timed[-1][0].colored_shape()}")
         elif DEBUG >= 2:

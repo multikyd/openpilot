@@ -1,7 +1,7 @@
 # basic self-contained tests of the external functionality of tinygrad
 import unittest, random
 from tinygrad import Tensor, Context, Variable, TinyJit, dtypes, Device, nn
-from tinygrad.helpers import CI, getenv
+from tinygrad.helpers import getenv, OSX
 
 class TestTiny(unittest.TestCase):
 
@@ -41,7 +41,7 @@ class TestTiny(unittest.TestCase):
 
   def test_gemm(self, N=getenv("GEMM_N", 64)):
     a = Tensor.ones(N,N).contiguous()
-    b = Tensor.eye(N).contiguous()
+    b = Tensor.eye(N).clone()
     lst = (out:=a@b).tolist()
     for y in range(N):
       for x in range(N):
@@ -50,7 +50,7 @@ class TestTiny(unittest.TestCase):
 
   def test_gemv(self, N=getenv("GEMV_N", 64), out_dtype=dtypes.float):
     a = Tensor.ones(1,N).contiguous()
-    b = Tensor.eye(N).contiguous()
+    b = Tensor.eye(N).clone()
     lst = (out:=a@b).tolist()
     for x in range(N):
       self.assertEqual(lst[0][x], 1.0, msg=f"mismatch at {x}")
@@ -89,6 +89,7 @@ class TestTiny(unittest.TestCase):
 
   # *** BEAM (for Kernel speed) ***
 
+  @unittest.skipIf(Device.DEFAULT == "WEBGPU" and OSX, "WEBGPU's timestamp-query is unreliable on dawn's metal backend")
   def test_beam(self):
     with Context(BEAM=1, IGNORE_BEAM_CACHE=1): self.test_plus()
 
@@ -111,7 +112,7 @@ class TestTiny(unittest.TestCase):
   # *** a model ***
 
   # TODO: this is failing because of how swizzling rewrites the ShapeTracker of the final STORE
-  @unittest.skipIf(CI and Device.DEFAULT == "DSP", "failing because of make things that can't be images not images")
+  @unittest.skipIf(Device.DEFAULT == "DSP", "failing because of make things that can't be images not images")
   def test_mnist(self):
     layers = [
       nn.Conv2d(1, 32, 5), Tensor.relu,
@@ -130,7 +131,7 @@ class TestTiny(unittest.TestCase):
     self.assertEqual(len(probs[0]), 10)
 
   # TODO: this is failing because of how swizzling rewrites the ShapeTracker of the final STORE
-  @unittest.skipIf(CI and Device.DEFAULT == "DSP", "failing because of make things that can't be images not images")
+  @unittest.skipIf(Device.DEFAULT == "DSP", "failing because of make things that can't be images not images")
   def test_mnist_backward(self):
     # NOTE: we don't have the whole model here for speed
     layers = [
@@ -141,7 +142,6 @@ class TestTiny(unittest.TestCase):
     Tensor.realize(*[p.replace(Tensor.ones_like(p).contiguous()) for p in nn.state.get_parameters(layers)])
 
     # realize gradients
-    for x in nn.state.get_parameters(layers): x.requires_grad_()
     Tensor.empty(4, 1, 14, 14).sequential(layers).sum().backward()
     Tensor.realize(*[x.grad for x in nn.state.get_parameters(layers) if x.grad is not None])
 

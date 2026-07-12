@@ -2,7 +2,7 @@ import os, time, math, functools, random, contextlib
 from pathlib import Path
 import multiprocessing
 
-from tinygrad import Device, GlobalCounters, Tensor, TinyJit, dtypes
+from tinygrad import Device, GlobalCounters, Tensor, TinyJit, dtypes, Context
 from tinygrad.helpers import getenv, BEAM, WINO, round_up, diskcache_clear, Profiling, profile_marker, DEBUG
 from tinygrad.nn.state import get_parameters, get_state_dict, load_state_dict, safe_load, safe_save
 from tinygrad.nn.optim import LAMB, LARS, SGD, OptimizerGroup, Adam, AdamW
@@ -157,6 +157,7 @@ def train_resnet():
   # input_std = Tensor([0.229, 0.224, 0.225], device=GPUS, dtype=dtypes.float32).reshape(1, -1, 1, 1)
   def normalize(x): return (x.permute([0, 3, 1, 2]) - input_mean).cast(dtypes.default_float)
   @TinyJit
+  @Context(TRAINING=1)
   def train_step(X, Y):
     optimizer_group.zero_grad()
     X = normalize(X)
@@ -170,6 +171,7 @@ def train_resnet():
     return loss.realize(), top_1.realize()
 
   @TinyJit
+  @Context(TRAINING=0)
   def eval_step(X, Y):
     X = normalize(X)
     out = model.forward(X)
@@ -180,11 +182,11 @@ def train_resnet():
   def fake_data_get(batch_size):
     x = Tensor.zeros(batch_size, 224, 224, 3, dtype=dtypes.uchar).contiguous()
     y = [0] * batch_size
-    return x.shard(GPUS, axis=0).realize(), Tensor(y, requires_grad=False).shard(GPUS, axis=0), y, None
+    return x.shard(GPUS, axis=0).realize(), Tensor(y).shard(GPUS, axis=0), y, None
 
   def data_get(it):
     x, y, cookie = next(it)
-    return x.shard(GPUS, axis=0).realize(), Tensor(y, requires_grad=False).shard(GPUS, axis=0), y, cookie
+    return x.shard(GPUS, axis=0).realize(), Tensor(y).shard(GPUS, axis=0), y, cookie
 
   # ** epoch loop **
   step_times = []
@@ -192,7 +194,6 @@ def train_resnet():
     # ** train loop **
     if MLLOGGER and RUNMLPERF:
       MLLOGGER.start(key=mllog_constants.EPOCH_START, value=e+1, metadata=dict(epoch_num=e+1))
-    Tensor.training = True
     BEAM.value = TRAIN_BEAM
 
     if INITMLPERF:
@@ -271,7 +272,6 @@ def train_resnet():
       eval_loss = 0.0
       eval_top_1 = 0
       eval_num_samples = 0
-      Tensor.training = False
       BEAM.value = EVAL_BEAM
 
       if INITMLPERF:
@@ -413,7 +413,7 @@ def train_retinanet():
     layers_to_train = ["layer4", "layer3", "layer2", "layer1", "conv1"][:trainable_layers]
     for k, v in get_state_dict(backbone).items():
       if all([not k.startswith(layer) for layer in layers_to_train]):
-        v.requires_grad = False
+        v.is_param_(False)
 
   def _data_get(it:Iterator[tuple[Tensor, ...]], val:bool=False):
     if val:
@@ -614,7 +614,7 @@ def train_retinanet():
 
       if getenv("RESET_STEP", 1): _train_step.reset()
 
-      with Tensor.train(mode=False):
+      with Context(TRAINING=0):
         if not RUNMLPERF:
           i, proc = 0, _fake_data_get(EVAL_BS, val=(val:=True))
         else:
@@ -784,7 +784,7 @@ def train_unet3d():
     return x.shard(GPUS, axis=0).realize(), y.shard(GPUS, axis=0), cookie
 
   @TinyJit
-  @Tensor.train()
+  @Context(TRAINING=1)
   def train_step(model, x, y):
     optim.zero_grad()
 
@@ -795,10 +795,10 @@ def train_unet3d():
     optim.step()
     return loss.realize()
 
-  @Tensor.train(mode=False)
+  @Context(TRAINING=0)
   def eval_step(model, x, y):
     y_hat, y = sliding_window_inference(model, x, y, gpus=GPUS)
-    y_hat, y = Tensor(y_hat), Tensor(y, requires_grad=False)
+    y_hat, y = Tensor(y_hat), Tensor(y)
     loss = dice_ce_loss(y_hat, y)
     score = dice_score(y_hat, y)
     return loss.realize(), score.realize()
@@ -919,6 +919,7 @@ def train_rnnt():
   pass
 
 @TinyJit
+@Context(TRAINING=0)
 def eval_step_bert(model, input_ids:Tensor, segment_ids:Tensor, attention_mask:Tensor, masked_positions:Tensor, masked_lm_ids:Tensor,
                    masked_lm_weights:Tensor, next_sentence_labels:Tensor, GPUS):
   for t in [input_ids, segment_ids, attention_mask, masked_positions, masked_lm_ids, masked_lm_weights, next_sentence_labels]:
@@ -1106,6 +1107,7 @@ def train_bert():
       MLLOGGER.start(key=mllog_constants.EPOCH_START, value=i*GBS, metadata={"epoch_num": i*GBS})
 
   @TinyJit
+  @Context(TRAINING=1)
   def train_step_bert(input_ids:Tensor, segment_ids:Tensor, attention_mask:Tensor,
                       masked_positions:Tensor, masked_lm_ids:Tensor, masked_lm_weights:Tensor, next_sentence_labels:Tensor):
     for t in [input_ids, segment_ids, attention_mask, masked_positions, masked_lm_ids, masked_lm_weights, next_sentence_labels]:
@@ -1133,7 +1135,6 @@ def train_bert():
 
   while train_data is not None and i < train_steps and not achieved:
     if getenv("TRAIN", 1):
-      Tensor.training = True
       BEAM.value = TRAIN_BEAM
       st = time.perf_counter()
       GlobalCounters.reset()
@@ -1186,7 +1187,6 @@ def train_bert():
       eval_lm_accs = []
       eval_clsf_accs = []
       eval_times = []
-      Tensor.training = False
       BEAM.value = EVAL_BEAM
 
       for j in tqdm(range(max_eval_steps), desc="Evaluating", total=max_eval_steps, disable=BENCHMARK):
@@ -1282,7 +1282,7 @@ def train_bert():
         previous_step = i
 
 def train_llama3():
-  from examples.mlperf.models.flat_llama import FlatTransformer, apply_grad, FP8_DTYPE
+  from examples.mlperf.models.flat_llama import FlatTransformer, apply_grad, FP8_DTYPE, MXFP8
   from examples.llama3 import MODEL_PARAMS
   from examples.mlperf.lr_schedulers import CosineAnnealingLRWithWarmup
   from examples.mlperf.optim import GradAccClipAdamW
@@ -1419,7 +1419,7 @@ def train_llama3():
 
   for p in optim.params:
     grad_dtype = dtypes.bfloat16 if p.dtype == FP8_DTYPE else p.dtype
-    p.grad = Tensor.zeros(p.shape, dtype=grad_dtype, device=p.device).contiguous()
+    p.grad = p.zeros_like(dtype=grad_dtype).contiguous()
   grads = [p.grad for p in optim.params]
 
   scheduler = CosineAnnealingLRWithWarmup(optim, opt_base_learning_rate, opt_end_learning_rate, opt_learning_rate_warmup_steps, opt_learning_rate_decay_steps)
@@ -1435,16 +1435,24 @@ def train_llama3():
 
   fp8_amax = [t for ts in model._fp8_amax.values() for t in ts]
   fp8_grad_amax = [t for ts in model._fp8_grad_amax.values() for t in ts] if hasattr(model, "_fp8_grad_amax") else []
-  fp8_inv_scales = list(model._fp8_inv_scale.values())
+  fp8_inv_scales = list(model._fp8_inv_scale.values()) + list(model._fp8_next_inv_scale.values())
 
   from tinygrad.nn.state import get_state_dict
   model_state = get_state_dict(model)
-  for wname in ["wqkv", "wo", "w13", "w2"]:
+  for wname in model._fp8_inv_scale:
     w = model_state[wname]
     w._inv_scale = model._fp8_inv_scale[wname]
+    w._next_inv_scale = model._fp8_next_inv_scale[wname]
     if optim.master_params:
       idx = next(j for j, p in enumerate(optim.params) if p is w)
-      optim.master_params[idx].assign((optim.master_params[idx] * w._inv_scale.reshape(-1, *([1]*(w.ndim-1)))).contiguous())
+      master = optim.master_params[idx]
+      inv = w._inv_scale if w._inv_scale.device == master.device else w._inv_scale.to(master.device)
+      if MXFP8:
+        from extra.gemm.cdna_asm_gemm import _mx_block_scale
+        bs = _mx_block_scale(inv.reshape(-1, inv.shape[-1])).reshape(w.shape)
+        master.assign((master * bs).contiguous())
+      else:
+        master.assign((master * inv.reshape(*inv.shape, *([1]*(w.ndim-inv.ndim)))).contiguous())
 
   # realize everything here
   if optim.master_params: Tensor.realize(*optim.master_params)
@@ -1455,7 +1463,7 @@ def train_llama3():
     if is_dp: tokens = tokens.to(None).shard(device, 0)
     if is_mp: tokens = tokens.shard(device)
     if not is_sharding: tokens = tokens.to(None)
-    logits:Tensor = model(tokens[:, :-1])
+    logits:Tensor = model(tokens[:, :-1], save=bool(SMALL))
     if getenv("FAST_CE", 0):
       from extra.llama_kernels.fused_ce import fused_ce_loss
       loss = fused_ce_loss(logits.cast(dtypes.bfloat16), tokens[:, 1:], label_smoothing=0.0)
@@ -1473,7 +1481,7 @@ def train_llama3():
     grad_norm = optim.fstep(grads)
     scheduler.step()
 
-    for g in grads: g.assign(g.zeros_like())
+    for g in grads: g.assign(0)
 
     lr_cpu = optim.lr.float().to("CPU")
     grad_norm_cpu = grad_norm.float().to("CPU")
@@ -1482,7 +1490,7 @@ def train_llama3():
     return lr_cpu, grad_norm_cpu
 
   @TinyJit
-  @Tensor.train(False)
+  @Context(TRAINING=0)
   def eval_step(tokens:Tensor):
     if is_dp: tokens = tokens.to(None).shard(device, 0)
     if is_mp: tokens = tokens.shard(device)
@@ -1495,7 +1503,7 @@ def train_llama3():
   def fake_data(bs, samples):
     import numpy as np
     for _ in range(samples // bs):
-      fake_data_np = np.random.randint(0, model_params["vocab_size"], size=(bs, SEQLEN + 1), dtype=np.int32)
+      fake_data_np = np.random.randint(0, real_vocab_size, size=(bs, SEQLEN + 1), dtype=np.int32)
       yield Tensor(fake_data_np, device="NPY")
 
   def get_train_iter():
@@ -1795,7 +1803,7 @@ if __name__ == "__main__":
   elif getenv("RUNMLPERF"): bench_log_manager = WallTimeEvent(BenchEvent.MLPERF_RUN)
   else: bench_log_manager = contextlib.nullcontext()
 
-  with Tensor.train():
+  with Context(TRAINING=1):
     for m in getenv("MODEL", "resnet,retinanet,unet3d,rnnt,bert,maskrcnn,stable_diffusion").split(","):
       nm = f"train_{m}"
       if nm in globals():

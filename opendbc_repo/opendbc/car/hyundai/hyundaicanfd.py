@@ -5,7 +5,7 @@ from opendbc.car.crc import CRC16_XMODEM
 from opendbc.car.hyundai.values import HyundaiFlags, HyundaiExtFlags
 from openpilot.common.params import Params
 from opendbc.car.common.conversions import Conversions as CV
-from cereal import log
+from openpilot.cereal import log
 
 LaneChangeState = log.LaneChangeState
 LaneChangeDirection = log.LaneChangeDirection
@@ -295,7 +295,7 @@ def create_acc_control_scc2(packer, CAN, enabled, accel_last, accel, stopping, g
     acc_mode = 4 if enabled else 0
     enabled = False
     accel = accel_last = 0.5
-   
+
   elif hyundai_jerk.carrot_cruise == 2:
     accel = accel_last = hyundai_jerk.carrot_cruise_accel
 
@@ -352,7 +352,7 @@ def create_acc_control_scc2(packer, CAN, enabled, accel_last, accel, stopping, g
   # AccelLimitBandUpper, Lower
   values["SysFailState"] = 0    # 1: Performance degredation, 2: system temporairy unavailble, 3: SCC Service required , 눈이 묻어 레이더오류시... 2가 됨. 이때 가속을 안함...
 
-  values["AccelLimitBandUpper"] = 0.0   # 이값이 1.26일때 가속을 안하는 증상이 보임.. 
+  values["AccelLimitBandUpper"] = 0.0   # 이값이 1.26일때 가속을 안하는 증상이 보임..
   values["AccelLimitBandLower"] = 0.0
 
   values["ZEROS_7"] = 1

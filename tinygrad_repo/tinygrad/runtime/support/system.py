@@ -38,8 +38,6 @@ class _System:
       return vfio_fd
     except OSError: return None
 
-  def reserve_hugepages(self, cnt): os.system(f"sudo sh -c 'echo {cnt} > /proc/sys/vm/nr_hugepages'")
-
   @functools.cache
   def reserve_va(self, va_start, va_size):
     # cached, runs only once per range. used to not collide with other mappings.
@@ -64,7 +62,9 @@ class _System:
         return int.from_bytes(bytes(buf), "little")
 
       iokit.IOServiceGetMatchingServices(0, iokit.IOServiceMatching(b"IOPCIDevice"), ctypes.byref(iterator:=ctypes.c_uint()))
-      while svc:=iokit.IOIteratorNext(iterator): all_devs.append((v:=read_prop(svc, "vendor-id"), d:=read_prop(svc, "device-id"), f"{v:x}:{d:x}"))
+      while svc:=iokit.IOIteratorNext(iterator):
+        if base_class is not None and read_prop(svc, "class-code") >> 16 != base_class: continue
+        all_devs.append((v:=read_prop(svc, "vendor-id"), d:=read_prop(svc, "device-id"), f"{v:x}:{d:x}"))
     else:
       try: devs = FileIOInterface("/sys/bus/pci/devices")
       except FileNotFoundError: raise RuntimeError("no pcie")
@@ -272,7 +272,7 @@ class PCIIfaceBase:
     return HCQBuffer(mapping.va_addr, size, view=barview, meta=PCIAllocationMeta(mapping, cpu_access, hMemory=mapping.paddrs[0][0]), owner=self.dev)
 
   def free(self, b:HCQBuffer):
-    if b.owner != self.dev: self.dev.iface.dev_impl.mm.unmap_range(b.va_addr, b.size)
+    if b.owner != self.dev: self.dev.iface.dev_impl.mm.unmap_range(b.va_addr, round_up(b.size, 0x1000))
     if b.owner == self.dev and b.meta.mapping.aspace is AddrSpace.PHYS: self.dev_impl.mm.vfree(b.meta.mapping)
     if b.owner == self.dev and self.is_local() and b.meta.has_cpu_mapping: FileIOInterface.munmap(b.va_addr, b.size)
 

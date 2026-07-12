@@ -39,29 +39,29 @@ function agnos_init {
 
   # Check if AGNOS update is required
   if [ $(< /VERSION) != "$AGNOS_VERSION" ]; then
-    AGNOS_PY="$DIR/system/hardware/tici/agnos.py"
-    MANIFEST="$DIR/system/hardware/tici/agnos.json"
+    AGNOS_PY="$DIR/openpilot/common/hardware/tici/agnos.py"
+    MANIFEST="$DIR/openpilot/system/hardware/tici/agnos.json"
     if $AGNOS_PY --verify $MANIFEST; then
       sudo reboot
     fi
-    $DIR/system/hardware/tici/updater $AGNOS_PY $MANIFEST
+    $DIR/openpilot/common/hardware/tici/updater $AGNOS_PY $MANIFEST
   fi
 
   if [ -f "/data/params/d/KisaSSHLegacy" ]; then
     SSH_KEY=$(cat /data/params/d/KisaSSHLegacy)
   else
     echo "1" > /data/params/d/SshEnabled
-    cp -f /data/openpilot/selfdrive/assets/addon/key/GithubSshKeys_legacy /data/params/d/GithubSshKeys
+    cp -f /data/openpilot/openpilot/selfdrive/assets/addon/key/GithubSshKeys_legacy /data/params/d/GithubSshKeys
     chmod 600 /data/params/d/GithubSshKeys
   fi
   if [ "$SSH_KEY" == "1" ]; then
-    cp -f /data/openpilot/selfdrive/assets/addon/key/GithubSshKeys_legacy /data/params/d/GithubSshKeys
+    cp -f /data/openpilot/openpilot/selfdrive/assets/addon/key/GithubSshKeys_legacy /data/params/d/GithubSshKeys
     chmod 600 /data/params/d/GithubSshKeys
   fi
 
   if [ ! -f "/data/params/d/GithubSshKeys" ]; then
     echo "1" > /data/params/d/SshEnabled
-    cp -f /data/openpilot/selfdrive/assets/addon/key/GithubSshKeys_legacy /data/params/d/GithubSshKeys
+    cp -f /data/openpilot/openpilot/selfdrive/assets/addon/key/GithubSshKeys_legacy /data/params/d/GithubSshKeys
     chmod 600 /data/params/d/GithubSshKeys
   fi
 
@@ -117,6 +117,14 @@ function launch {
   ln -sfn $(pwd) /data/pythonpath
   export PYTHONPATH="$PWD"
 
+  # submodule package symlinks for PYTHONPATH imports on device.
+  # on PC these come from editable installs via pyproject.toml / uv.
+  ln -sfn msgq_repo/msgq msgq
+  ln -sfn opendbc_repo/opendbc opendbc
+  ln -sfn rednose_repo/rednose rednose
+  ln -sfn teleoprtc_repo/teleoprtc teleoprtc
+  ln -sfn tinygrad_repo/tinygrad tinygrad
+
   # hardware specific init
   if [ -f /AGNOS ]; then
     agnos_init
@@ -126,10 +134,10 @@ function launch {
   tmux capture-pane -pq -S-1000 > /tmp/launch_log
 
     # kisa agent start
-    python3 /data/openpilot/selfdrive/kisapilot/kisa_agent.py &
+    python3 /data/openpilot/openpilot/selfdrive/kisapilot/kisa_agent.py &
 
   # start manager
-  cd system/manager
+  cd openpilot/system/manager
   if [ ! -f $DIR/prebuilt ]; then
     ./build.py
   fi

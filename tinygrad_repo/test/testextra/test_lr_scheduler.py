@@ -4,7 +4,7 @@ import unittest
 from tinygrad.tensor import Tensor
 from tinygrad.nn.state import get_parameters
 from tinygrad.nn.optim import Adam, SGD
-from tinygrad.helpers import DEBUG
+from tinygrad.helpers import DEBUG, Context
 from extra.lr_scheduler import MultiStepLR, ReduceLROnPlateau, CosineAnnealingLR, OneCycleLR
 from extra.training import train, evaluate
 from extra.datasets import fetch_mnist
@@ -53,15 +53,11 @@ def get_lrs(optim, sched, epochs, steps=1, accs=None):
   return lrs
 
 class TestLrScheduler(unittest.TestCase):
-  def setUp(self):
-    self.old_training = Tensor.training
-    Tensor.training = True
-  def tearDown(self):
-    Tensor.training = self.old_training
+  def setUp(self): self.enterContext(Context(TRAINING=1))
 
   def _test_lr_scheduler(self, tinygrad_sched, torch_sched, epochs, opts, atol, rtol, adam=True):
     accs = opts.pop('accs', None)
-    test_tensor = Tensor([0.], requires_grad=True)    # NOTE: optimizers are broken on 0-dim tensors because it broadcasts to [lr]
+    test_tensor = Tensor([0.])    # NOTE: optimizers are broken on 0-dim tensors because it broadcasts to [lr]
     test_tensor.mean().backward()
     if adam:
       tinygrad_optim, torch_optim = Adam([test_tensor], lr=0.01), torch.optim.Adam([torch.tensor([0.], requires_grad=True)], lr=0.01)
