@@ -203,7 +203,6 @@ class CarInterface(CarInterfaceBase):
 
     ret.longitudinalTuning.kpBP = [0.]
     ret.longitudinalTuning.kpV = [1.]
-    ret.longitudinalTuning.kf = 1.0
 
     # *** feature detection ***
     if ret.flags & HyundaiFlags.CANFD:

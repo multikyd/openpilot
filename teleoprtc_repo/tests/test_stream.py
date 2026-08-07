@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 
+import contextlib
+
 import pytest
 
-import aiortc
-from aiortc.mediastreams import AudioStreamTrack
+from libdatachannel import Description
 
 from teleoprtc.builder import WebRTCOfferBuilder, WebRTCAnswerBuilder
 from teleoprtc.info import parse_info_from_offer
+from teleoprtc.stream import H264_FORMAT_PARAMETERS
 from teleoprtc.tracks import TiciVideoStreamTrack
 
 
@@ -25,9 +27,6 @@ class DummyH264VideoStreamTrack(TiciVideoStreamTrack):
   async def recv(self):
     raise NotImplementedError()
 
-  def codec_preference(self):
-    return "H264"
-
 
 @pytest.mark.asyncio
 class TestOfferStream:
@@ -41,25 +40,12 @@ class TestOfferStream:
       _ = await stream.start()
     except Exception:
       pass
+    finally:
+      await stream.stop()
 
     info = parse_info_from_offer(capture.offer.sdp)
     assert info.expected_audio_track
     assert not info.incoming_audio_track
-
-  async def test_offer_stream_sdp_sendonly_audio(self):
-    capture = OfferCapture()
-    builder = WebRTCOfferBuilder(capture)
-    builder.add_audio_stream(AudioStreamTrack())
-    stream = builder.stream()
-
-    try:
-      _ = await stream.start()
-    except Exception:
-      pass
-
-    info = parse_info_from_offer(capture.offer.sdp)
-    assert not info.expected_audio_track
-    assert info.incoming_audio_track
 
   async def test_offer_stream_sdp_channel(self):
     capture = OfferCapture()
@@ -71,9 +57,25 @@ class TestOfferStream:
       _ = await stream.start()
     except Exception:
       pass
+    finally:
+      await stream.stop()
 
     info = parse_info_from_offer(capture.offer.sdp)
     assert info.incoming_datachannel
+
+  async def test_answer_side_messaging_channel_wrapper_retained_after_stop(self):
+    stream = WebRTCOfferBuilder(OfferCapture()).stream()
+    stream._retain_messaging_channel_on_close = True
+    channel = stream.peer_connection.create_data_channel("data")
+    stream.messaging_channel = channel
+    stream.messaging_channel_ready_event.set()
+
+    try:
+      await stream.stop()
+      assert stream.messaging_channel is None
+      assert stream._retained_messaging_channels[-1] is channel
+    finally:
+      stream._retained_messaging_channels.pop()
 
 
 @pytest.mark.asyncio
@@ -112,12 +114,18 @@ a=setup:actpass"""
     builder = WebRTCAnswerBuilder(offer_sdp)
     builder.add_video_stream("road", DummyH264VideoStreamTrack("road", 0.05))
     stream = builder.stream()
-    answer = await stream.start()
+    try:
+      answer = await stream.start()
 
-    sdp_desc = aiortc.sdp.SessionDescription.parse(answer.sdp)
-    video_desc = [m for m in sdp_desc.media if m.kind == "video"][0]
-    codecs = video_desc.rtp.codecs
-    assert codecs[0].mimeType == "video/H264"
+      sdp_desc = Description(answer.sdp, Description.Type.Answer)
+      video_desc = next(sdp_desc.media(i) for i in range(sdp_desc.media_count()) if sdp_desc.media(i).type() == "video")
+      codecs = []
+      for pt in video_desc.payload_types():
+        with contextlib.suppress(ValueError):
+          codecs.append(video_desc.rtp_map(pt).format)
+      assert codecs[0] == "H264"
+    finally:
+      await stream.stop()
 
   async def test_fail_if_preferred_codec_not_in_offer(self):
     offer_sdp = """v=0
@@ -149,8 +157,56 @@ a=setup:actpass"""
     builder.add_video_stream("road", DummyH264VideoStreamTrack("road", 0.05))
     stream = builder.stream()
 
-    with pytest.raises(ValueError):
-      _ = await stream.start()
+    try:
+      with pytest.raises(ValueError):
+        _ = await stream.start()
+    finally:
+      await stream.stop()
+
+  async def test_multi_track(self):
+    offer_sdp = """v=0
+o=- 1 1 IN IP4 0.0.0.0
+s=-
+t=0 0
+a=group:BUNDLE 0 1
+m=video 9 UDP/TLS/RTP/SAVPF 99
+c=IN IP4 0.0.0.0
+a=recvonly
+a=mid:0
+a=rtpmap:99 H264/90000
+a=ice-ufrag:1234
+a=ice-pwd:1234
+a=fingerprint:sha-256 15:F3:F0:23:67:44:EE:2C:AA:8C:D9:50:95:26:42:7C:67:EA:1F:D2:92:C5:97:01:7B:2E:57:C9:A3:13:00:4A
+a=setup:actpass
+m=video 9 UDP/TLS/RTP/SAVPF 99
+c=IN IP4 0.0.0.0
+a=recvonly
+a=mid:1
+a=rtpmap:99 H264/90000
+a=ice-ufrag:1234
+a=ice-pwd:1234
+a=fingerprint:sha-256 15:F3:F0:23:67:44:EE:2C:AA:8C:D9:50:95:26:42:7C:67:EA:1F:D2:92:C5:97:01:7B:2E:57:C9:A3:13:00:4A
+a=setup:actpass"""
+
+    builder = WebRTCAnswerBuilder(offer_sdp)
+    builder.add_video_stream("road", DummyH264VideoStreamTrack("road", 0.05))
+    builder.add_video_stream("wideRoad", DummyH264VideoStreamTrack("wideRoad", 0.05))
+    stream = builder.stream()
+    try:
+      answer = await stream.start()
+
+      sdp_desc = Description(answer.sdp, Description.Type.Answer)
+      video_ssrcs = []
+      for i in range(sdp_desc.media_count()):
+        media = sdp_desc.media(i)
+        if media and media.type() == "video":
+          video_ssrcs.extend(media.get_ssrcs())
+      assert len(video_ssrcs) == 2
+      assert len(set(video_ssrcs)) == 2
+      video_sections = list(answer.sdp.split("m=video")[1:])
+      assert all(f"a=fmtp:99 {H264_FORMAT_PARAMETERS}" in section for section in video_sections)
+    finally:
+      await stream.stop()
 
   async def test_parse_incoming_streams_datachannel_counting(self):
     offer_sdp = """v=0
@@ -177,3 +233,4 @@ a=sctp-port:5000"""
     stream._parse_incoming_streams(builder.offer_sdp)
 
     assert stream.expected_number_of_incoming_media == 1
+    await stream.stop()

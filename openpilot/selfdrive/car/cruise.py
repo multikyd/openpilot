@@ -171,7 +171,6 @@ class VCruiseCarrot:
 
     self._gas_pressed_count = 0
     self._gas_pressed_count_last = 0
-    self._gas_pressed_value = 0
     self._gas_tok_timer = int(0.4 / 0.01) # 0.4 sec
     self.gas_tok = False
     self._brake_pressed_count = 0
@@ -314,9 +313,9 @@ class VCruiseCarrot:
       self.aTarget = lp.aTarget
     if sm.alive['radarState']:
       lead = sm['radarState'].leadOne
-      self.d_rel = lead.dRel if lead.status else 0
-      self.v_rel = lead.vRel if lead.status else 0
-      self.v_lead_kph = lead.vLeadK * CV.MS_TO_KPH if lead.status else 0
+      self.d_rel = lead.dRel if lead.present else 0
+      self.v_rel = lead.vRel if lead.present else 0
+      self.v_lead_kph = lead.vLeadK * CV.MS_TO_KPH if lead.present else 0
 
     self.v_cruise_kph_last = self.v_cruise_kph
     self.is_metric = is_metric
@@ -778,7 +777,6 @@ class VCruiseCarrot:
       self._paddle_decel_active = False
       self._gas_pressed_count = max(1, self._gas_pressed_count + 1)
       self._gas_pressed_count_last = self._gas_pressed_count
-      self._gas_pressed_value = max(CS.gas, self._gas_pressed_value) if self._gas_pressed_count > 1 else CS.gas
       self.gas_tok = False
       #if self._cruise_cancel_state and self._soft_hold_active == 2:
       #  self._cruise_control(-1, -1, "Cruise off,softhold mode (gasPressed)")

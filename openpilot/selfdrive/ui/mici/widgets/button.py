@@ -1,6 +1,6 @@
 import math
 import pyray as rl
-from typing import Union
+from typing import TYPE_CHECKING, Union
 from enum import Enum
 from collections.abc import Callable
 from openpilot.system.ui.widgets import Widget
@@ -9,12 +9,14 @@ from openpilot.system.ui.widgets.scroller import DO_ZOOM
 from openpilot.system.ui.lib.application import gui_app, FontWeight, MousePos
 from openpilot.common.filter_simple import BounceFilter
 
-try:
+if TYPE_CHECKING:
   from openpilot.common.params import Params
-except ImportError:
-  Params = None
+else:
+  try:
+    from openpilot.common.params import Params
+  except (ImportError, OSError):
+    Params = None
 
-SCROLLING_SPEED_PX_S = 50
 COMPLICATION_SIZE    = 36
 LABEL_COLOR          = rl.Color(255, 255, 255, int(255 * 0.9))
 COMPLICATION_GREY    = rl.Color(0xAA, 0xAA, 0xAA, 255)
@@ -375,6 +377,7 @@ class GreyBigButton(BigButton):
 class BigMultiParamToggle(BigMultiToggle):
   def __init__(self, text: str, param: str, options: list[str], toggle_callback: Callable | None = None,
                select_callback: Callable | None = None):
+    assert Params is not None
     super().__init__(text, options, toggle_callback, select_callback)
     self._param = param
 
@@ -392,6 +395,7 @@ class BigMultiParamToggle(BigMultiToggle):
 
 class BigParamControl(BigToggle):
   def __init__(self, text: str, param: str, toggle_callback: Callable | None = None):
+    assert Params is not None
     super().__init__(text, "", toggle_callback=toggle_callback)
     self.param = param
     self.params = Params()
@@ -409,6 +413,7 @@ class BigParamControl(BigToggle):
 class BigCircleParamControl(BigCircleToggle):
   def __init__(self, icon: rl.Texture, param: str, toggle_callback: Callable | None = None,
                icon_offset: tuple[int, int] = (0, 0)):
+    assert Params is not None
     super().__init__(icon, toggle_callback, icon_offset=icon_offset)
     self._param = param
     self.params = Params()

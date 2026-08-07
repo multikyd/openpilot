@@ -203,6 +203,7 @@ struct CarState {
   vehicleSensorsInvalid @52 :Bool;  # invalid steering angle readings, etc.
   lowSpeedAlert @56 :Bool;  # lost steering control due to a dynamic min steering speed
   blockPcmEnable @60 :Bool;  # whether to allow PCM to enable this frame
+  carNotReady @61 :Bool;  # car is transiently refusing engagement, used to prevent a fault if engaged
 
   # cruise state
   cruiseState @10 :CruiseState;
@@ -228,33 +229,34 @@ struct CarState {
   fuelGauge @41 :Float32; # battery or fuel tank level from [0.0, 1.0]
   charging @43 :Bool;
 
-  vCluRatio @61 :Float32;
-  softHoldActive @62 :Int16;    #0: not active, 1: active ready, 2: activated
-  activateCruise @63 :Int16;
-  latEnabled @64 :Bool;
-  pcmCruiseGap @65 :Int16;      #0: can't read, 1,2,3,4: gap setting
-  speedLimit @66 :Float32;
-  speedLimitDistance @67 :Float32;
-  gearStep @68 :Int16;          
-  tpms @69 :TPMS;
-  useLaneLineSpeed @70 : Float32;
-  leftLatDist @71 : Float32;  # distance to left lane line
-  rightLatDist @72 : Float32; # distance to right lane line
-  leftLongDist @73 : Float32; # distance to left lane line in the direction of travel
-  rightLongDist @74 : Float32; # distance to right lane line in the direction of travel
-  carrotCruise @75 : Int16;
-  leftLaneLine @76 : Int16; # -1: no lane, 0: dashed, 1: solid, +10: white, +20: yellow, ex) 21: solid yellow
-  rightLaneLine @77 : Int16; # -1: no lane, 0: dashed, 1: solid, +10: white, +20: yellow, ex) 21: solid yellow
-  datetime @78 :UInt64; # timestamp in milliseconds since epoch
-  roadLimitSpeed @79 :Float32;
-  steerTouch @80 :Bool;
-  aReqValue @81 :Float32;
-  radarDRel @82 :Float32;
-  radarVRel @83 :Float32;
-  vSetDis @84 :Float32;
-  cruiseGap @85 :Int8;
-  cruiseButtons @86 :Float32;
-  gasTok @87 :Bool;
+  # kisa
+  vCluRatio @62 :Float32;
+  softHoldActive @63 :Int16;    #0: not active, 1: active ready, 2: activated
+  activateCruise @64 :Int16;
+  latEnabled @65 :Bool;
+  pcmCruiseGap @66 :Int16;      #0: can't read, 1,2,3,4: gap setting
+  speedLimit @67 :Float32;
+  speedLimitDistance @68 :Float32;
+  gearStep @69 :Int16;          
+  tpms @70 :TPMS;
+  useLaneLineSpeed @71 : Float32;
+  leftLatDist @72 : Float32;  # distance to left lane line
+  rightLatDist @73 : Float32; # distance to right lane line
+  leftLongDist @74 : Float32; # distance to left lane line in the direction of travel
+  rightLongDist @75 : Float32; # distance to right lane line in the direction of travel
+  carrotCruise @76 : Int16;
+  leftLaneLine @77 : Int16; # -1: no lane, 0: dashed, 1: solid, +10: white, +20: yellow, ex) 21: solid yellow
+  rightLaneLine @78 : Int16; # -1: no lane, 0: dashed, 1: solid, +10: white, +20: yellow, ex) 21: solid yellow
+  datetime @79 :UInt64; # timestamp in milliseconds since epoch
+  roadLimitSpeed @80 :Float32;
+  steerTouch @81 :Bool;
+  aReqValue @82 :Float32;
+  radarDRel @83 :Float32;
+  radarVRel @84 :Float32;
+  vSetDis @85 :Float32;
+  cruiseGap @86 :Int8;
+  cruiseButtons @87 :Float32;
+  gasTok @88 :Bool;
 
   struct TPMS {
     unit @0 :Int8;
@@ -280,7 +282,9 @@ struct CarState {
     standstill @4 :Bool;
     nonAdaptive @5 :Bool;
 
-    speedOffsetDEPRECATED @3 :Float32;
+    deprecated :group {
+      speedOffset @3 :Float32;
+    }
   }
 
   enum GearShifter {
@@ -321,17 +325,19 @@ struct CarState {
     }
   }
 
-  # deprecated
-  errorsDEPRECATED @0 :List(OnroadEventDEPRECATED.EventName);
-  gas @3 :Float32;        # this is user pedal only
-  brakeDEPRECATED @5 :Float32;
   brakeLights @19 :Bool;
-  steeringRateLimitedDEPRECATED @29 :Bool;
-  canMonoTimesDEPRECATED @12: List(UInt64);
-  canRcvTimeoutDEPRECATED @49 :Bool;
-  eventsDEPRECATED @13 :List(OnroadEventDEPRECATED);
-  clutchPressedDEPRECATED @28 :Bool;
-  engineRpm @46 :Float32;
+
+  deprecated :group {
+    errors @0 :List(OnroadEventDEPRECATED.EventName);
+    gas @3 :Float32;
+    brake @5 :Float32;
+    steeringRateLimited @29 :Bool;
+    canMonoTimes @12: List(UInt64);
+    canRcvTimeout @49 :Bool;
+    events @13 :List(OnroadEventDEPRECATED);
+    clutchPressed @28 :Bool;
+    engineRpm @46 :Float32;
+  }
 }
 
 # ******* radar state @ 20hz *******
@@ -348,21 +354,17 @@ struct RadarData @0x888ad6581cf0aacb {
   }
 
   # similar to LiveTracks
-  # is one timestamp valid for all? I think so
   struct RadarPoint {
+    # all fields required
     trackId @0 :UInt64;  # no trackId reuse
-
-    # these 3 are the minimum required
-    dRel @1 :Float32; # m from the front bumper of the car
-    yRel @2 :Float32; # m
-    vRel @3 :Float32; # m/s
+    dRel @1 :Float32;    # m from the front bumper of the car
+    yRel @2 :Float32;    # m
+    vRel @3 :Float32;    # m/s
 
     # these are optional and valid if they are not NaN
     aRel @4 :Float32; # m/s^2
     yvRel @5 :Float32; # m/s
-
-    # some radars flag measurements VS estimates
-    measured @6 :Bool;
+    measured @6 :Bool;  # measurement VS estimate flag
 
     vLead @7 :Float32; # m/s
     aLead @8 :Float32; # m/s^2
@@ -375,9 +377,10 @@ struct RadarData @0x888ad6581cf0aacb {
     wrongConfig @2;
   }
 
-  # deprecated
-  canMonoTimesDEPRECATED @2 :List(UInt64);
-  errorsDEPRECATED @0 :List(ErrorDEPRECATED);
+  deprecated :group {
+    canMonoTimes @2 :List(UInt64);
+    errors @0 :List(ErrorDEPRECATED);
+  }
 }
 
 # ******* car controls @ 100hz *******
@@ -439,8 +442,11 @@ struct CarControl {
     cancel @0: Bool;
     resume @1: Bool;
     override @4: Bool;
-    speedOverrideDEPRECATED @2: Float32;
-    accelOverrideDEPRECATED @3: Float32;
+
+    deprecated :group {
+      speedOverride @2: Float32;
+      accelOverride @3: Float32;
+    }
   }
 
   struct HUDControl {
@@ -520,13 +526,15 @@ struct CarControl {
     }
   }
 
-  gasDEPRECATED @1 :Float32;
-  brakeDEPRECATED @2 :Float32;
-  steeringTorqueDEPRECATED @3 :Float32;
-  activeDEPRECATED @7 :Bool;
-  rollDEPRECATED @8 :Float32;
-  pitchDEPRECATED @9 :Float32;
-  actuatorsOutputDEPRECATED @10 :Actuators;
+  deprecated :group {
+    gas @1 :Float32;
+    brake @2 :Float32;
+    steeringTorque @3 :Float32;
+    active @7 :Bool;
+    roll @8 :Float32;
+    pitch @9 :Float32;
+    actuatorsOutput @10 :Actuators;
+  }
 }
 
 struct CarOutput {
@@ -578,22 +586,16 @@ struct CarParams {
   lateralParams @48 :LateralParams;
   lateralTuning :union {
     pid @26 :LateralPIDTuning;
-    indiDEPRECATED @27 :LateralINDITuning;
-    lqrDEPRECATED @40 :LateralLQRTuning;
+    indiDEPRECATED @27 :LateralINDITuningDEPRECATED;
+    lqrDEPRECATED @40 :LateralLQRTuningDEPRECATED;
     torque @67 :LateralTorqueTuning;
   }
 
-  steerLimitAlert @28 :Bool;
   steerLimitTimer @47 :Float32;  # time before steerLimitAlert is issued
 
-  vEgoStopping @29 :Float32; # Speed at which the car goes into stopping state
-  vEgoStarting @59 :Float32; # Speed at which the car goes into starting state
   steerControlType @34 :SteerControlType;
   radarUnavailable @35 :Bool; # True when radar objects aren't visible on CAN or aren't parsed out
   stopAccel @60 :Float32; # Required acceleration to keep vehicle stationary
-  stoppingDecelRate @52 :Float32; # m/s^2/s while trying to stop
-  startAccel @32 :Float32; # Required acceleration to get car moving
-  startingState @70 :Bool; # Does this car make use of special starting state
 
   steerActuatorDelay @36 :Float32; # Steering wheel actuator delay in seconds
   longitudinalActuatorDelay @58 :Float32; # Gas/Brake actuator delay in seconds
@@ -616,8 +618,11 @@ struct CarParams {
   struct SafetyConfig {
     safetyModel @0 :SafetyModel;
     safetyParam @3 :UInt16;
-    safetyParamDEPRECATED @1 :Int16;
-    safetyParam2DEPRECATED @2 :UInt32;
+
+    deprecated :group {
+      safetyParam @1 :Int16;
+      safetyParam2 @2 :UInt32;
+    }
   }
 
   struct LateralParams {
@@ -638,11 +643,14 @@ struct CarParams {
     steeringAngleDeadzoneDeg @5 :Float32;
     latAccelFactor @6 :Float32;
     latAccelOffset @7 :Float32;
-    useSteeringAngleDEPRECATED @0 :Bool;
-    kpDEPRECATED @1 :Float32;
-    kiDEPRECATED @2 :Float32;
-    kfDEPRECATED @4 :Float32;
-    kdDEPRECATED @8 : Float32;
+
+    deprecated :group {
+      useSteeringAngle @0 :Bool;
+      kp @1 :Float32;
+      ki @2 :Float32;
+      kf @4 :Float32;
+      kd @8 : Float32;
+    }
   }
 
   struct LongitudinalPIDTuning {
@@ -650,12 +658,15 @@ struct CarParams {
     kpV @1 :List(Float32);
     kiBP @2 :List(Float32);
     kiV @3 :List(Float32);
-    kf @6 :Float32;
-    deadzoneBPDEPRECATED @4 :List(Float32);
-    deadzoneVDEPRECATED @5 :List(Float32);
+
+    deprecated :group {
+      kf @6 :Float32;
+      deadzoneBP @4 :List(Float32);
+      deadzoneV @5 :List(Float32);
+    }
   }
 
-  struct LateralINDITuning {
+  struct LateralINDITuningDEPRECATED {
     outerLoopGainBP @4 :List(Float32);
     outerLoopGainV @5 :List(Float32);
     innerLoopGainBP @6 :List(Float32);
@@ -665,13 +676,15 @@ struct CarParams {
     actuatorEffectivenessBP @10 :List(Float32);
     actuatorEffectivenessV @11 :List(Float32);
 
-    outerLoopGainDEPRECATED @0 :Float32;
-    innerLoopGainDEPRECATED @1 :Float32;
-    timeConstantDEPRECATED @2 :Float32;
-    actuatorEffectivenessDEPRECATED @3 :Float32;
+    deprecated :group {
+      outerLoopGain @0 :Float32;
+      innerLoopGain @1 :Float32;
+      timeConstant @2 :Float32;
+      actuatorEffectiveness @3 :Float32;
+    }
   }
 
-  struct LateralLQRTuning {
+  struct LateralLQRTuningDEPRECATED {
     scale @0 :Float32;
     ki @1 :Float32;
     dcGain @2 :Float32;
@@ -726,8 +739,7 @@ struct CarParams {
   enum SteerControlType {
     torque @0;
     angle @1;
-
-    curvatureDEPRECATED @2;
+    curvature @2;
   }
 
   enum TransmissionType {
@@ -795,28 +807,38 @@ struct CarParams {
     gateway @1;    # Integration at vehicle's CAN gateway
   }
 
-  enableGasInterceptorDEPRECATED @2 :Bool;
-  enableCameraDEPRECATED @4 :Bool;
-  enableApgsDEPRECATED @6 :Bool;
-  steerRateCostDEPRECATED @33 :Float32;
-  isPandaBlackDEPRECATED @39 :Bool;
-  hasStockCameraDEPRECATED @57 :Bool;
-  safetyParamDEPRECATED @10 :Int16;
-  safetyModelDEPRECATED @9 :SafetyModel;
-  safetyModelPassiveDEPRECATED @42 :SafetyModel = silent;
-  minSpeedCanDEPRECATED @51 :Float32;
-  communityFeatureDEPRECATED @46: Bool;
-  startingAccelRateDEPRECATED @53 :Float32;
-  steerMaxBPDEPRECATED @11 :List(Float32);
-  steerMaxVDEPRECATED @12 :List(Float32);
-  gasMaxBPDEPRECATED @13 :List(Float32);
-  gasMaxVDEPRECATED @14 :List(Float32);
-  brakeMaxBPDEPRECATED @15 :List(Float32);
-  brakeMaxVDEPRECATED @16 :List(Float32);
-  directAccelControlDEPRECATED @30 :Bool;
-  maxSteeringAngleDegDEPRECATED @54 :Float32;
-  longitudinalActuatorDelayLowerBoundDEPRECATED @61 :Float32;
-  stoppingControlDEPRECATED @31 :Bool; # Does the car allow full control even at lows speeds when stopping
+
   radarTimeStep @45: Float32;  # time delta between radar updates, 20Hz is very standard
-  enableDsuDEPRECATED @5 :Bool;        # driving support unit
+  vEgoStopping @29 :Float32; # Speed at which the car goes into stopping state
+  vEgoStarting @59 :Float32; # Speed at which the car goes into starting state
+  stoppingDecelRate @52 :Float32; # m/s^2/s while trying to stop
+  startAccel @32 :Float32; # Required acceleration to get car moving
+  startingState @70 :Bool; # Does this car make use of special starting state
+
+  deprecated :group {
+    enableGasInterceptor @2 :Bool;
+    enableCamera @4 :Bool;
+    enableApgs @6 :Bool;
+    steerLimitAlert @28 :Bool;
+    steerRateCost @33 :Float32;
+    isPandaBlack @39 :Bool;
+    hasStockCamera @57 :Bool;
+    safetyParam @10 :Int16;
+    safetyModel @9 :SafetyModel;
+    safetyModelPassive @42 :SafetyModel = silent;
+    minSpeedCan @51 :Float32;
+    communityFeature @46: Bool;
+    startingAccelRate @53 :Float32;
+    steerMaxBP @11 :List(Float32);
+    steerMaxV @12 :List(Float32);
+    gasMaxBP @13 :List(Float32);
+    gasMaxV @14 :List(Float32);
+    brakeMaxBP @15 :List(Float32);
+    brakeMaxV @16 :List(Float32);
+    directAccelControl @30 :Bool;
+    maxSteeringAngleDeg @54 :Float32;
+    longitudinalActuatorDelayLowerBound @61 :Float32;
+    stoppingControl @31 :Bool; # Does the car allow full control even at lows speeds when stopping
+    enableDsu @5 :Bool;        # driving support unit
+  }
 }

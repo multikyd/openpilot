@@ -8,8 +8,7 @@ from libc.stdint cimport uint32_t, uint64_t
 from libcpp cimport bool, int
 
 cdef extern from "msgq/visionipc/visionbuf.h":
-  cdef enum VisionStreamType:
-    pass
+  ctypedef uint32_t VisionStreamType "VisionStreamType"
 
   cdef cppclass VisionBuf:
     void * addr
@@ -46,7 +45,7 @@ cdef extern from "msgq/visionipc/visionipc_client.h":
     int num_buffers
     VisionBuf buffers[1]
     VisionIpcClient(string, VisionStreamType, bool)
-    VisionBuf * recv(VisionIpcBufExtra *, int)
+    VisionBuf * recv(VisionIpcBufExtra *, int) nogil
     bool connect(bool)
     bool is_connected()
     @staticmethod

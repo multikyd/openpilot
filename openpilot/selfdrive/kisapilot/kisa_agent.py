@@ -9,7 +9,11 @@ import subprocess
 import pty
 import select
 
-import netifaces
+try:
+    import netifaces
+except (ImportError, ModuleNotFoundError):
+    netifaces = None
+    pass
 import ipaddress
 import requests
 import shutil
@@ -1343,6 +1347,9 @@ _cached_broadcasts = []
 _cached_time = 0
 CACHE_TTL = 10  # seconds
 def get_broadcast_addresses():
+	if not netifaces:
+        return []
+
     global _cached_broadcasts, _cached_time
 
     now = time.time()

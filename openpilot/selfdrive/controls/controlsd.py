@@ -181,11 +181,11 @@ class Controls:
     self.desired_curvature, curvature_limited = clip_curvature(CS.vEgo, self.desired_curvature, new_desired_curvature, lp.roll)
     lat_delay = self.sm["liveDelay"].lateralDelay + self.lat_smooth_seconds
     actuators.curvature = float(self.desired_curvature)
-    steer, steeringAngleDeg, lac_log = self.LaC.update(CC.latActive, CS, self.VM, lp,
-                                                       self.steer_limited_by_safety, self.desired_curvature,
-                                                       curvature_limited, lat_delay)
+    steer, lateral_output, lac_log = self.LaC.update(CC.latActive, CS, self.VM, lp,
+                                                     self.steer_limited_by_safety, self.desired_curvature,
+                                                     curvature_limited, lat_delay)
     actuators.torque = float(steer)
-    actuators.steeringAngleDeg = float(steeringAngleDeg)
+    actuators.steeringAngleDeg = float(lateral_output)
     # Ensure no NaNs/Infs
     for p in ACTUATOR_FIELDS:
       attr = getattr(actuators, p)
@@ -237,8 +237,8 @@ class Controls:
 
     radarState = self.sm['radarState']
     leadOne = radarState.leadOne
-    hudControl.leadDistance = leadOne.dRel if leadOne.status else 0
-    hudControl.leadRelSpeed = leadOne.vRel if leadOne.status else 0
+    hudControl.leadDistance = leadOne.dRel if leadOne.present else 0
+    hudControl.leadRelSpeed = leadOne.vRel if leadOne.present else 0
     hudControl.leadRadar = 1 if leadOne.radar else 0
     hudControl.leadDPath = leadOne.dPath
 

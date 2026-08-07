@@ -75,7 +75,6 @@ struct OnroadEvent @0xc4fa6047f024e718 {
     driverUnresponsive2 @37;
     driverUnresponsive3 @38;
     belowSteerSpeed @39;
-    lowBattery @40;
     accFaulted @41;
     sensorDataInvalid @42;
     commIssue @43;
@@ -107,18 +106,17 @@ struct OnroadEvent @0xc4fa6047f024e718 {
     noGps @68;
     wrongCruiseMode @69;
     modeldLagging @70;
-    deviceFalling @71;
     fanMalfunction @72;
     cameraMalfunction @73;
     cameraFrameRate @74;
     processNotRunning @75;
     dashcamMode @76;
     selfdriveInitializing @77;
-    usbError @78;
     cruiseMismatch @79;
     canBusMissing @80;
     selfdrivedLagging @81;
     resumeBlocked @82;
+    carNotReady @103;
     steerTimeLimit @83;
     vehicleSensorsInvalid @84;
     locationdTemporaryError @85;
@@ -131,24 +129,30 @@ struct OnroadEvent @0xc4fa6047f024e718 {
     aeb @92;
     userBookmark @95;
     excessiveActuation @96;
-    audioFeedback @97;
+    bigModelLoading @100;
+    bigModelFailed @102;
 
-    trafficStopping @100;
-    audioPrompt @101;
-    audioRefuse @102;
-    stopStop @103;
-    audioLaneChange @104;
-    trafficSignGreen @105;
-    trafficSignChanged @106;
-    turningLeft @107;
-    turningRight @108;
-
-    chimeAtResume @109;
-    laneChangeMerging @110;
-    laneChangeFinish @111;
-    softHold @112;
-
+    lowBatteryDEPRECATED @40;
     soundsUnavailableDEPRECATED @47;
+    deviceFallingDEPRECATED @71;
+    usbErrorDEPRECATED @78;
+    audioFeedbackDEPRECATED @97;
+    bigModelReadyDEPRECATED @101;
+
+    # kisa
+    trafficStopping @104;
+    audioPrompt @105;
+    audioRefuse @106;
+    stopStop @107;
+    audioLaneChange @108;
+    trafficSignGreen @109;
+    trafficSignChanged @110;
+    turningLeft @111;
+    turningRight @112;
+    chimeAtResume @113;
+    laneChangeMerging @114;
+    laneChangeFinish @115;
+    softHold @116;
   }
 }
 
@@ -192,13 +196,13 @@ struct InitData {
 
   enum DeviceType {
     unknown @0;
-    neo @1;
+    neo @1;   # NEO, EON, & comma two
     chffrAndroid @2;
     chffrIos @3;
-    tici @4;
+    tici @4;  # comma three
     pc @5;
-    tizi @6;
-    mici @7;
+    tizi @6;  # comma 3X
+    mici @7;  # comma four
   }
 
   struct PandaInfo {
@@ -716,12 +720,25 @@ struct UsbState {
     speedMbps @4 :UInt16;
     manufacturer @6 :Text;
     product @5 :Text;
+    linkErrorCount @7 :UInt16;
   }
 }
 
+struct ChestnutState {
+  tempC @0 :Float32;
+  memoryTempC @1 :Float32;
+  powerDrawW @2 :Float32;
+  powerLimitW @3 :Float32;
+  gpuUsagePercent @4 :UInt8;
+  gpuClockMhz @5 :UInt16;
+  fanSpeedRpm @6 :UInt16;
+  pcieLtssm @7 :UInt8;
+  supplyVoltage @8 :UInt16;  # mV
+  supplyCurrent @9 :Int16;  # mA
+}
+
 struct RadarState @0x9a185389d6fdd05f {
-  mdMonoTime @6 :UInt64;
-  carStateMonoTime @11 :UInt64;
+  mdMonoTime @6 :UInt64;  # for debugging
   radarErrors @13 :Car.RadarData.Error;
 
   leadOne @3 :LeadData;
@@ -737,23 +754,23 @@ struct RadarState @0x9a185389d6fdd05f {
   leadsCutIn @21 : List(LeadData);
 
   struct LeadData {
-    dRel @0 :Float32;
-    yRel @1 :Float32;
-    vRel @2 :Float32;
+    dRel @0 :Float32;  # m from the front bumper of the car
+    yRel @1 :Float32;  # m in car frame, left positive
+    vRel @2 :Float32;  # m/s relative longitudinal speed
+    vLead @4 :Float32;  # m/s absolute lead speed
+    vLeadK @8 :Float32;  # kalman-filtered lead speed
+    aLeadK @9 :Float32;  # kalman-filtered lead accel
+    present @11 :Bool;  # true if a lead is present
+    aLeadTau @12 :Float32;  # lead accel time constant
+    modelProb @13 :Float32;  # vision model lead probability
+    radar @14 :Bool;  # true if lead is radar-matched (vs vision-only)
+    radarTrackId @15 :Int32 = -1;  # for debugging
+
     aRel @3 :Float32;
-    vLead @4 :Float32;
+    aLead @5 :Float32;
     dPath @6 :Float32;
     vLat @7 :Float32;
-    vLeadK @8 :Float32;
-    aLeadK @9 :Float32;
     fcw @10 :Bool;
-    status @11 :Bool;
-    aLeadTau @12 :Float32;
-    modelProb @13 :Float32;
-    radar @14 :Bool;
-    radarTrackId @15 :Int32 = -1;
-
-    aLead @5 :Float32;
     jLead @16 :Float32;
     score @17 :Float32;
   }
@@ -767,6 +784,7 @@ struct RadarState @0x9a185389d6fdd05f {
     calPerc @9 :Int8;
     canMonoTimes @10 :List(UInt64);
     cumLagMs @5 :Float32;
+    carStateMonoTime @11 :UInt64;
     radarErrors @12 :List(Car.RadarData.ErrorDEPRECATED);
   }
 }
@@ -843,17 +861,18 @@ struct SelfdriveState {
     promptDistracted @8;
 
     preAlert @9;
+    complete @10;
 
-    trafficSignGreen @10;
-    trafficSignChanged @11;
-    laneChange @12;
-    stopping @13;
-    autoHold @14;
-    bsdWarning @15;
-    speedDown @16;
-    stopStop @17;
-    reverseGear @18;
-    dingdong @19;
+    trafficSignGreen @11;
+    trafficSignChanged @12;
+    laneChange @13;
+    stopping @14;
+    autoHold @15;
+    bsdWarning @16;
+    speedDown @17;
+    stopStop @18;
+    reverseGear @19;
+    dingdong @20;
   }
 
   enum OpenpilotState @0xdbe58b96d2d1ac61 {
@@ -1076,6 +1095,7 @@ struct ModelDataV2 {
   timestampEof @3 :UInt64;
   modelExecutionTime @15 :Float32;
   rawPredictions @16 :Data;
+  big @27 :Bool;
 
   # predicted future position, orientation, etc..
   position @4 :XYZTData;
@@ -2241,7 +2261,8 @@ struct DriverMonitoringStateDEPRECATED @0xb83cda094a1da284 {
 
 struct DriverMonitoringState {
   lockout @0 :Bool;
-  lockoutRecoveryPercent @11 :Int8;
+  lockoutCount @15 :Int8;
+  lockoutMinutesRemaining @11 :Int8;
   alert3Count @12 :Int8;
   noResponseCount @13 :Int8;
   noResponseForceDecel @14 :Bool;
@@ -2564,11 +2585,6 @@ struct AudioData {
   sampleRate @1 :UInt32;
 }
 
-struct AudioFeedback {
-  audio @0 :AudioData;
-  blockNum @1 :UInt16;
-}
-
 struct Touch {
   sec @0 :Int64;
   usec @1 :Int64;
@@ -2628,17 +2644,17 @@ struct Event {
     driverStateV2 @92 :DriverStateV2;
 
     # camera stuff, each camera state has a matching encode idx
-    roadCameraState @2 :FrameData;
-    driverCameraState @70: FrameData;
+    narrowRoadCameraState @2 :FrameData;
+    cabinCameraState @70: FrameData;
     wideRoadCameraState @74: FrameData;
-    roadEncodeIdx @15 :EncodeIndex;
-    driverEncodeIdx @76 :EncodeIndex;
+    narrowRoadEncodeIdx @15 :EncodeIndex;
+    cabinEncodeIdx @76 :EncodeIndex;
     wideRoadEncodeIdx @77 :EncodeIndex;
-    qRoadEncodeIdx @90 :EncodeIndex;
+    qNarrowRoadEncodeIdx @90 :EncodeIndex;
 
-    livestreamRoadEncodeIdx @117 :EncodeIndex;
+    livestreamNarrowRoadEncodeIdx @117 :EncodeIndex;
     livestreamWideRoadEncodeIdx @118 :EncodeIndex;
-    livestreamDriverEncodeIdx @119 :EncodeIndex;
+    livestreamCabinEncodeIdx @119 :EncodeIndex;
 
     # microphone data
     soundPressure @103 :SoundPressure;
@@ -2650,6 +2666,7 @@ struct Event {
     procLog @33 :ProcLog;
     clocks @35 :Clocks;
     deviceState @6 :DeviceState;
+    chestnutState @152 :ChestnutState;
     logMessage @18 :Text;
     errorLogMessage @85 :Text;
 
@@ -2662,21 +2679,20 @@ struct Event {
     # driving feedback
     userBookmark @93 :UserBookmark;
     bookmarkButton @148 :UserBookmark;
-    audioFeedback @149 :AudioFeedback;
 
     lateralManeuverPlan @150 :LateralManeuverPlan;
 
     # *********** debug ***********
     testJoystick @52 :Joystick;
-    roadEncodeData @86 :EncodeData;
-    driverEncodeData @87 :EncodeData;
+    narrowRoadEncodeData @86 :EncodeData;
+    cabinEncodeData @87 :EncodeData;
     wideRoadEncodeData @88 :EncodeData;
-    qRoadEncodeData @89 :EncodeData;
+    qNarrowRoadEncodeData @89 :EncodeData;
     alertDebug @133 :DebugAlert;
 
-    livestreamRoadEncodeData @120 :EncodeData;
+    livestreamNarrowRoadEncodeData @120 :EncodeData;
     livestreamWideRoadEncodeData @121 :EncodeData;
-    livestreamDriverEncodeData @122 :EncodeData;
+    livestreamCabinEncodeData @122 :EncodeData;
 
     # *********** Custom: reserved for forks ***********
 
@@ -2712,6 +2728,7 @@ struct Event {
 
     # *********** legacy + deprecated ***********
     model @9 :Deprecated.ModelData; # TODO: rename modelV2 and mark this as deprecated
+    audioFeedbackDEPRECATED @149 :Deprecated.AudioFeedbackDEPRECATED;
     liveMpcDEPRECATED @36 :Deprecated.LiveMpcData;
     liveLongitudinalMpcDEPRECATED @37 :Deprecated.LiveLongitudinalMpcData;
     liveLocationKalmanDeprecatedDEPRECATED @51 :Deprecated.LiveLocationData;

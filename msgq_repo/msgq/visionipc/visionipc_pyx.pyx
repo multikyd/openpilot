@@ -9,19 +9,12 @@ from libcpp.string cimport string
 from .visionipc cimport VisionIpcServer as cppVisionIpcServer
 from .visionipc cimport VisionIpcClient as cppVisionIpcClient
 from .visionipc cimport VisionBuf as cppVisionBuf
-from .visionipc cimport VisionIpcBufExtra
+from .visionipc cimport VisionIpcBufExtra, VisionStreamType
 from .visionipc cimport get_endpoint_name as cpp_get_endpoint_name
 
 
 def get_endpoint_name(string name, VisionStreamType stream):
   return cpp_get_endpoint_name(name, stream).decode('utf-8')
-
-
-cpdef enum VisionStreamType:
-  VISION_STREAM_ROAD
-  VISION_STREAM_DRIVER
-  VISION_STREAM_WIDE_ROAD
-  VISION_STREAM_MAP
 
 
 cdef class VisionBuf:
@@ -151,7 +144,10 @@ cdef class VisionIpcClient:
     return self.extra.valid
 
   def recv(self, int timeout_ms=100):
-    buf = self.client.recv(&self.extra, timeout_ms)
+    cdef cppVisionBuf * buf
+    # release the GIL, this can block for timeout_ms
+    with nogil:
+      buf = self.client.recv(&self.extra, timeout_ms)
     if not buf:
       return None
     return VisionBuf.create(buf)

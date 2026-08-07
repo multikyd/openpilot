@@ -215,8 +215,7 @@ class ProcessContainer:
 
   def _start_process(self):
     if self.capture is not None:
-      self.process.launcher = LauncherWithCapture(self.capture, self.process.launcher)
-    self.process.prepare()
+      self.process.launcher = LauncherWithCapture(self.capture, self.process.launcher)  # ty: ignore[invalid-assignment]  # intentional wrapper
     self.process.start()
 
   def start(
@@ -397,7 +396,7 @@ class ModeldCameraSyncRcvCallback:
 
   def __call__(self, msg, cfg, frame):
     self.is_dual_camera = len(cfg.vision_pubs) == 2
-    if msg.which() == "roadCameraState":
+    if msg.which() == "narrowRoadCameraState":
       self.road_present = True
     elif msg.which() == "wideRoadCameraState":
       self.wide_road_present = True
@@ -435,9 +434,9 @@ CONFIGS = [
     pubs=[
       "carState", "deviceState", "pandaStates", "peripheralState", "liveCalibration", "driverMonitoringState",
       "longitudinalPlan", "livePose", "liveDelay", "liveParameters", "radarState", "modelV2",
-      "driverCameraState", "roadCameraState", "wideRoadCameraState", "managerState", "liveTorqueParameters",
+      "cabinCameraState", "narrowRoadCameraState", "wideRoadCameraState", "managerState", "liveTorqueParameters",
       "accelerometer", "gyroscope", "carOutput", "gpsLocationExternal", "gpsLocation", "controlsState",
-      "carControl", "driverAssistance", "alertDebug", "audioFeedback",
+      "carControl", "driverAssistance", "alertDebug",
     ],
     subs=["selfdriveState", "onroadEvents"],
     ignore=["logMonoTime"],
@@ -550,28 +549,28 @@ CONFIGS = [
   ),
   ProcessConfig(
     proc_name="modeld",
-    pubs=["deviceState", "roadCameraState", "wideRoadCameraState", "liveCalibration", "liveDelay", "driverMonitoringState", "carState", "carControl"],
+    pubs=["deviceState", "narrowRoadCameraState", "wideRoadCameraState", "liveCalibration", "liveDelay", "driverMonitoringState", "carState", "carControl"],
     subs=["modelV2", "drivingModelData", "cameraOdometry"],
     ignore=["logMonoTime", "modelV2.frameDropPerc", "modelV2.modelExecutionTime", "drivingModelData.frameDropPerc", "drivingModelData.modelExecutionTime"],
     should_recv_callback=ModeldCameraSyncRcvCallback(),
     tolerance=NUMPY_TOLERANCE,
     processing_time=0.020,
-    main_pub=vipc_get_endpoint_name("camerad", meta_from_camera_state("roadCameraState").stream),
-    vision_pubs=["roadCameraState", "wideRoadCameraState"],
+    main_pub=vipc_get_endpoint_name("camerad", meta_from_camera_state("narrowRoadCameraState").stream),
+    vision_pubs=["narrowRoadCameraState", "wideRoadCameraState"],
     ignore_alive_pubs=["wideRoadCameraState"],
     init_callback=get_car_params_callback,
   ),
   ProcessConfig(
     proc_name="dmonitoringmodeld",
-    pubs=["liveCalibration", "driverCameraState"],
+    pubs=["liveCalibration", "cabinCameraState"],
     subs=["driverStateV2"],
     ignore=["logMonoTime", "driverStateV2.modelExecutionTime", "driverStateV2.gpuExecutionTime"],
-    should_recv_callback=MessageBasedRcvCallback("driverCameraState"),
+    should_recv_callback=MessageBasedRcvCallback("cabinCameraState"),
     tolerance=NUMPY_TOLERANCE,
     processing_time=0.020,
-    main_pub=vipc_get_endpoint_name("camerad", meta_from_camera_state("driverCameraState").stream),
-    vision_pubs=["driverCameraState"],
-    ignore_alive_pubs=["driverCameraState"],
+    main_pub=vipc_get_endpoint_name("camerad", meta_from_camera_state("cabinCameraState").stream),
+    vision_pubs=["cabinCameraState"],
+    ignore_alive_pubs=["cabinCameraState"],
   ),
 ]
 
@@ -631,10 +630,10 @@ def replay_process(
   fingerprint: str | None = None, return_all_logs: bool = False, custom_params: dict[str, Any] | None = None,
   captured_output_store: dict[str, dict[str, str]] | None = None, disable_progress: bool = False
 ) -> list[capnp._DynamicStructReader]:
-  if isinstance(cfg, Iterable):
-    cfgs = list(cfg)
-  else:
+  if isinstance(cfg, ProcessConfig):
     cfgs = [cfg]
+  else:
+    cfgs = list(cfg)
 
   all_msgs = migrate_all(lr,
                          manager_states=True,

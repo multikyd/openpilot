@@ -21,13 +21,13 @@ import urllib.request
 import urllib.error
 import ssl
 
-import psutil
+import re
 import ipaddress
 import openpilot.cereal.messaging as messaging
 from openpilot.common.realtime import Ratekeeper, set_core_affinity
 from openpilot.common.params import Params
-from openpilot.common.filter_simple import MyMovingAverage
-from openpilot.common.hardware import PC, TICI
+from openpilot.selfdrive.carrot.carrot_functions import MyMovingAverage
+from openpilot.common.hardware import PC, COMMA_HARDWARE
 from openpilot.common.constants import CV
 
 from openpilot.selfdrive.carrot.carrot_serv import CarrotServ
@@ -48,9 +48,9 @@ NAVI_IMAGE_PARAM = "CarrotNaviImage"
 NAVI_IMAGE_BASE64_MAX_CHARS = 6 * 1024 * 1024
 
 AUTO_ONROAD_DIAGNOSTICS = os.environ.get("CARROT_AUTO_ONROAD_DIAGNOSTICS", "1").strip().lower() in ("1", "true", "yes", "on")
-BROADCAST_INTERVAL = 1.0
-BROADCAST_REMOTE_INTERVAL = 0.2
-BROADCAST_NETWORK_ERROR_RETRY_INTERVAL = 5.0
+BROADCAST_INTERVAL = 5.0
+BROADCAST_REMOTE_INTERVAL = 10.0
+BROADCAST_NETWORK_ERROR_RETRY_INTERVAL = 15.0
 BROADCAST_NETWORK_ERROR_LOG_INTERVAL = 30.0
 AUTO_ONROAD_TMUX_DELAY_SECONDS = float(os.environ.get("CARROT_AUTO_ONROAD_TMUX_DELAY_SECONDS", "60"))
 
@@ -286,22 +286,27 @@ class CarrotMan:
     threading.Thread(target=self.broadcast_version_info, daemon=True).start()
 
   def get_broadcast_address(self):
-    # Prefer the interface carrying the default route. Ubuntu PCs generally
-    # do not have the C3-era br0 interface, while devices normally use wlan0.
     try:
-      local_ip = self.get_local_ip()
-      ipv4_addrs = [
-        addr
-        for addresses in psutil.net_if_addrs().values()
-        for addr in addresses
-        if addr.family == socket.AF_INET and not addr.address.startswith("127.")
-      ]
-      ipv4_addrs.sort(key=lambda addr: addr.address != local_ip)
-      for addr in ipv4_addrs:
-        if addr.broadcast:
-          return addr.broadcast
-        if addr.netmask:
-          return str(ipaddress.ip_network(f"{addr.address}/{addr.netmask}", strict=False).broadcast_address)
+      route = subprocess.check_output(
+        ["ip", "route", "show", "default"],
+        text=True
+      )
+
+      m = re.search(r"dev\s+(\S+)", route)
+      if not m:
+        return "255.255.255.255"
+
+      iface = m.group(1)
+
+      out = subprocess.check_output(
+        ["ip", "-4", "addr", "show", iface],
+        text=True
+      )
+
+      m = re.search(r"brd\s+(\d+\.\d+\.\d+\.\d+)", out)
+      if m:
+        return m.group(1)
+
     except Exception as e:
       print(f"[carrot_man] failed to resolve broadcast address: {e}")
     return "255.255.255.255"
@@ -324,7 +329,7 @@ class CarrotMan:
     next_broadcast_time = 0.0
     last_network_error_log_time = 0.0
 
-    rk = Ratekeeper(20, print_delay_threshold=None)
+    rk = Ratekeeper(10, print_delay_threshold=None)
 
     while self.is_running:
       try:
@@ -332,7 +337,8 @@ class CarrotMan:
         remote_addr = self.remote_addr
         remote_ip = remote_addr[0] if remote_addr is not None else ""
         vturn_speed = self.carrot_curve_speed(self.sm)
-        coords, distances, route_speed = self.carrot_navi_route()
+        #coords, distances, route_speed = self.carrot_navi_route()
+        coords, distances, route_speed = [], [], 300
 
         #print("coords=", coords)
         #print("curvatures=", curvatures)
@@ -352,7 +358,7 @@ class CarrotMan:
             if ip_address != self.ip_address:
               self.ip_address = ip_address
               self.remote_addr = None
-            self.params_memory.put("NetworkAddress", self.ip_address)
+              self.params_memory.put("NetworkAddress", self.ip_address)
 
             msg = self.make_send_message()
             if self.broadcast_ip is not None:
@@ -1494,7 +1500,7 @@ class CarrotMan:
           conn.close()
         except Exception:
           pass
-        self.remote_addr = None      
+        self.remote_addr = None
 
 def main():
   try:

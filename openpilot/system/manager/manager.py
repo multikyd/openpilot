@@ -128,10 +128,6 @@ def manager_init() -> None:
     os.system("pip install netifaces")
     print("netifaces Installed!")
 
-  # preimport all processes
-  for p in managed_processes.values():
-    p.prepare()
-
 
 def manager_cleanup() -> None:
   # send signals to kill all procs

@@ -3,7 +3,7 @@ name = "msgq"
 version = "0.0.1"
 description = "Lock-free IPC pub/sub message queue"
 readme = "README.md"
-requires-python = ">=3.11,<3.13"
+requires-python = ">=3.11"
 license = {text = "MIT"}
 authors = [{name = "comma.ai"}]
 classifiers = [
@@ -11,19 +11,23 @@ classifiers = [
   "Programming Language :: Python :: 3",
   "Topic :: System :: Hardware",
 ]
-dependencies = [
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
   "setuptools",  # for distutils
   "Cython",
   "scons",
-  "catch2 @ git+https://github.com/commaai/dependencies.git@release-catch2#subdirectory=catch2",
   "ruff",
-  "parameterized",
   "cppcheck",
   "cpplint",
   "codespell",
   "ty",
   "lefthook",
 ]
+
+[tool.setuptools.package-data]
+"*" = ["*.so"]
 
 # https://beta.ruff.rs/docs/configuration/#using-pyprojecttoml
 [tool.ruff]

@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 from enum import IntEnum
-from typing import Optional
 
 
 # TODO: this should be automatically determined using the capnp schema
@@ -11,7 +10,7 @@ class QueueSize(IntEnum):
 
 
 class Service:
-  def __init__(self, should_log: bool, frequency: float, decimation: Optional[int] = None,
+  def __init__(self, should_log: bool, frequency: float, decimation: int | None = None,
                queue_size: QueueSize = QueueSize.SMALL):
     self.should_log = should_log
     self.frequency = frequency
@@ -26,6 +25,7 @@ _services: dict[str, tuple] = {
   "accelerometer": (True, 104., 104),
   "temperatureSensor": (True, 2., 200),
   "deviceState": (True, 2., 1),
+  "chestnutState": (True, 0.1, 1),
   "touch": (True, 20., 1),
   "can": (True, 100., 2053, QueueSize.BIG),  # decimation gives ~3 msgs in a full segment
   "controlsState": (True, 100., 10, QueueSize.MEDIUM),
@@ -33,7 +33,7 @@ _services: dict[str, tuple] = {
   "pandaStates": (True, 10., 1),
   "peripheralState": (True, 2., 1),
   "radarState": (True, 20., 5),
-  "roadEncodeIdx": (False, 20., 1),
+  "narrowRoadEncodeIdx": (False, 20., 1),
   "liveTracks": (True, 20.),
   "sendcan": (True, 100., 139, QueueSize.MEDIUM),
   "logMessage": (True, 0., None, QueueSize.BIG),
@@ -61,9 +61,9 @@ _services: dict[str, tuple] = {
   "thumbnail": (True, 1 / 60., 1),
   "onroadEvents": (True, 1., 1),
   "carParams": (True, 0.02, 1),
-  "roadCameraState": (True, 20., 20),
-  "driverCameraState": (True, 20., 20),
-  "driverEncodeIdx": (False, 20., 1),
+  "narrowRoadCameraState": (True, 20., 20),
+  "cabinCameraState": (True, 20., 20),
+  "cabinEncodeIdx": (False, 20., 1),
   "driverStateV2": (True, 20., 10),
   "driverMonitoringState": (True, 20., 10),
   "wideRoadEncodeIdx": (False, 20., 1),
@@ -71,27 +71,26 @@ _services: dict[str, tuple] = {
   "drivingModelData": (True, 20., 10),
   "modelV2": (True, 20., None, QueueSize.BIG),
   "managerState": (True, 2., 1),
-  "qRoadEncodeIdx": (False, 20.),
+  "qNarrowRoadEncodeIdx": (False, 20.),
   "userBookmark": (True, 0., 1),
   "soundPressure": (True, 10., 10),
   "rawAudioData": (False, 20.),
   "bookmarkButton": (True, 0., 1),
-  "audioFeedback": (True, 0., 1),
-  "roadEncodeData": (False, 20., None, QueueSize.BIG),
-  "driverEncodeData": (False, 20., None, QueueSize.BIG),
+  "narrowRoadEncodeData": (False, 20., None, QueueSize.BIG),
+  "cabinEncodeData": (False, 20., None, QueueSize.BIG),
   "wideRoadEncodeData": (False, 20., None, QueueSize.BIG),
-  "qRoadEncodeData": (False, 20., None, QueueSize.BIG),
+  "qNarrowRoadEncodeData": (False, 20., None, QueueSize.BIG),
 
   # debug
   "uiDebug": (True, 0., 1),
   "testJoystick": (True, 0.),
   "alertDebug": (True, 20., 5),
   "livestreamWideRoadEncodeIdx": (False, 20.),
-  "livestreamRoadEncodeIdx": (False, 20.),
-  "livestreamDriverEncodeIdx": (False, 20.),
+  "livestreamNarrowRoadEncodeIdx": (False, 20.),
+  "livestreamCabinEncodeIdx": (False, 20.),
   "livestreamWideRoadEncodeData": (False, 20., None, QueueSize.MEDIUM),
-  "livestreamRoadEncodeData": (False, 20., None, QueueSize.MEDIUM),
-  "livestreamDriverEncodeData": (False, 20., None, QueueSize.MEDIUM),
+  "livestreamNarrowRoadEncodeData": (False, 20., None, QueueSize.MEDIUM),
+  "livestreamCabinEncodeData": (False, 20., None, QueueSize.MEDIUM),
   "customReservedRawData0": (True, 0.),
 
   "lateralPlan": (True, 20., 5),
@@ -115,8 +114,7 @@ def build_header():
   for k, v in SERVICE_LIST.items():
     should_log = "true" if v.should_log else "false"
     decimation = -1 if v.decimation is None else v.decimation
-    h += '  { "%s", {"%s", %s, %f, %d, %d}},\n' % \
-         (k, k, should_log, v.frequency, decimation, v.queue_size)
+    h += f'  {{ "{k}", {{"{k}", {should_log}, {v.frequency:f}, {decimation:d}, {v.queue_size:d}}}}},\n'
   h += "};\n"
 
   h += "#endif\n"

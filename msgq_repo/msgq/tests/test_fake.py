@@ -1,7 +1,6 @@
 import multiprocessing
 import unittest
 import msgq
-from parameterized import parameterized_class
 from typing import Optional
 
 WAIT_TIMEOUT = 5
@@ -12,7 +11,15 @@ def set_event_run(endpoint, identifier):
   handle.recv_called_event.set()
 
 
-def daemon_repub_process_run():
+def daemon_repub_process_run(prefix: Optional[str] = None):
+  # Re-apply fake config in the child. Python 3.14+ defaults to forkserver on
+  # Linux, which does not inherit setenv() calls from the parent.
+  msgq.toggle_fake_events(True)
+  if prefix is not None:
+    msgq.set_fake_prefix(prefix)
+  else:
+    msgq.delete_fake_prefix()
+
   pub_sock = msgq.pub_sock("ubloxGnss")
   sub_sock = msgq.sub_sock("carState")
 
@@ -84,12 +91,10 @@ class TestEvents(unittest.TestCase):
     assert msgq.wait_for_one_event([h.recv_called_event for h in handles], WAIT_TIMEOUT) == 1
 
 
-@parameterized_class([{"prefix": None}, {"prefix": "test"}])
-class TestFakeSockets(unittest.TestCase):
+class FakeSocketsTestBase:
   prefix: Optional[str] = None
 
   def setUp(self):
-    super().setUp()
     msgq.toggle_fake_events(True)
     if self.prefix is not None:
       msgq.set_fake_prefix(self.prefix)
@@ -99,7 +104,6 @@ class TestFakeSockets(unittest.TestCase):
   def tearDown(self):
     msgq.toggle_fake_events(False)
     msgq.delete_fake_prefix()
-    super().tearDown()
 
   def test_event_handle_init(self):
     handle = msgq.fake_event_handle("controlsState", override=True)
@@ -155,7 +159,7 @@ class TestFakeSockets(unittest.TestCase):
       _ = sub_sock.receive()
       assert not recv_called.peek()
     except RuntimeError:
-      self.fail("event.wait() timed out")
+      raise AssertionError("event.wait() timed out")
 
   def test_synced_pub_sub(self):
     carState_handle = msgq.fake_event_handle("carState", enable=True)
@@ -164,7 +168,7 @@ class TestFakeSockets(unittest.TestCase):
 
     pub_sock = msgq.pub_sock("carState")
 
-    p = multiprocessing.Process(target=daemon_repub_process_run)
+    p = multiprocessing.Process(target=daemon_repub_process_run, args=(self.prefix,))
     p.start()
 
     sub_sock = msgq.sub_sock("ubloxGnss")
@@ -190,6 +194,15 @@ class TestFakeSockets(unittest.TestCase):
         frame = int.from_bytes(msg, 'little')
         assert frame == i
     except RuntimeError:
-      self.fail("event.wait() timed out")
+      raise AssertionError("event.wait() timed out")
     finally:
       p.kill()
+      p.join()
+
+
+class TestFakeSockets(FakeSocketsTestBase, unittest.TestCase):
+  pass
+
+
+class TestFakeSocketsWithPrefix(FakeSocketsTestBase, unittest.TestCase):
+  prefix = "test"
