@@ -1347,7 +1347,7 @@ _cached_broadcasts = []
 _cached_time = 0
 CACHE_TTL = 10  # seconds
 def get_broadcast_addresses():
-	if not netifaces:
+    if not netifaces:
         return []
 
     global _cached_broadcasts, _cached_time
