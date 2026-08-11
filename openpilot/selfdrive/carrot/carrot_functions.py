@@ -115,6 +115,7 @@ class CarrotPlanner:
     self.comfortBrake = 2.4
     self.comfort_brake = self.comfortBrake
     self.a_change_cost2 = 50
+    self.lead_danger_factor2 = 0.75
 
     self.soft_hold_active = 0
     self.events = Events()
@@ -215,6 +216,7 @@ class CarrotPlanner:
       self.aChangeCostStarting = self.params.get("AChangeCostStarting")
       self.trafficStopDistanceAdjust = self.params.get("TrafficStopDistanceAdjust")
       self.a_change_cost2 = self.params.get("AChangeCost2")
+      self.lead_danger_factor2 = self.params.get("LeadDangerFactor")
     elif self.params_count >= 100:
 
       self.params_count = 0

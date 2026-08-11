@@ -316,7 +316,8 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"LeftEdgeOffset", {PERSISTENT, FLOAT, "-0.05"}},
     {"RightEdgeOffset", {PERSISTENT, FLOAT, "0.05"}},
     {"CameraYawTrimDeg", {PERSISTENT, FLOAT, "0.0"}},
-    {"CarrotNaviDebug", {CLEAR_ON_MANAGER_START, STRING} },
-    {"CarrotNaviImage", {CLEAR_ON_MANAGER_START, STRING} },
-    {"TrafficLight", {CLEAR_ON_MANAGER_START, STRING} },
+    {"CarrotNaviDebug", {CLEAR_ON_MANAGER_START, STRING}},
+    {"CarrotNaviImage", {CLEAR_ON_MANAGER_START, STRING}},
+    {"TrafficLight", {CLEAR_ON_MANAGER_START, STRING}},
+    {"LeadDangerFactor", {PERSISTENT, FLOAT, "0.75"}},
 };
