@@ -566,7 +566,7 @@ class RadarD:
     self.cutin_enter_min_abs_dpath = cutin_tuning["enter_min_abs_dpath"]
     self.cutin_enter_future_in_lane_prob = cutin_tuning["enter_future_in_lane_prob"]
     self.cutin_enter_centering_gain = cutin_tuning["enter_centering_gain"]
-    self.radar_reaction_factor = self.params.get("RadarReactionFactor") * 0.01
+    self.radar_reaction_factor = self.params.get("RadarReactionFactor")
     self.detect_cut_in = self.radar_lat_factor > 0 and self.enable_corner_radar > 1
     vision_only_mode = self.enable_radar_tracks <= VISION_ONLY_RADAR_TRACK_MODE
 
