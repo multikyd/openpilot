@@ -378,6 +378,13 @@ def main(demo=False):
       lat_delay = sm["liveDelay"].lateralDelay + lat_smooth_seconds_dynamic
     if sm.updated["liveCalibration"] and sm.seen['narrowRoadCameraState'] and sm.seen['deviceState']:
       device_from_calib_euler = np.array(sm["liveCalibration"].rpyCalib, dtype=np.float32)
+
+      calib_done = sm["liveCalibration"].calStatus == log.LiveCalibrationData.Status.calibrated
+      applied_yaw_trim_deg = camera_yaw_trim_deg if calib_done else 0.0
+
+      if applied_yaw_trim_deg != 0.0:
+        device_from_calib_euler[2] -= np.radians(applied_yaw_trim_deg)
+
       dc = DEVICE_CAMERAS[(str(sm['deviceState'].deviceType), str(sm['narrowRoadCameraState'].sensor))]
       main_intrinsics = dc.wide_road.intrinsics if main_wide_camera else dc.narrow_road.intrinsics
       model_transform_main = get_warp_matrix(device_from_calib_euler, main_intrinsics, False).astype(np.float32)
