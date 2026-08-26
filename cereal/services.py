@@ -104,7 +104,6 @@ _services: dict[str, tuple] = {
   "customReservedRawData1": (True, 0.),
   "customReservedRawData2": (True, 0.),
 
-  "navInstructionCarrot": (True, 1., 10),
   "lateralPlan": (True, 20.),
   "carrotMan": (True, 0.),
 }

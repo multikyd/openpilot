@@ -92,7 +92,7 @@ class LanePlanner:
   def parse_model(self, md):
 
     self.timer += DT_MDL
-    if self.timer > 1.0:
+    if self.timer > 2.0:
       self.timer = 0.0
       self.camera_offset = self.params.get("CameraOffsetAdj", return_default=True)
       self.path_offset = self.camera_offset - 0.04

@@ -12,6 +12,8 @@ from openpilot.selfdrive.controls.radard import _LEAD_ACCEL_TAU
 # from openpilot.selfdrive.carrot.carrot_functions import CarrotPlanner
 from openpilot.selfdrive.carrot.carrot_functions import XState
 
+from openpilot.common.params import Params
+
 if __name__ == '__main__':  # generating code
   from openpilot.third_party.acados.acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver
 else:
@@ -43,7 +45,7 @@ A_CHANGE_COST = 200.
 A_CHANGE_COST_STARTING = 10. #30.
 DANGER_ZONE_COST = 100.
 CRASH_DISTANCE = .25
-LEAD_DANGER_FACTOR = 0.65 #0.75
+LEAD_DANGER_FACTOR = Params().get("LeadDangerFactor", return_default=True) if Params().get("LeadDangerFactor", return_default=True) is not None else 0.75 #0.75
 LIMIT_COST = 1e6
 ACADOS_SOLVER_TYPE = 'SQP_RTI'
 
@@ -386,6 +388,7 @@ class LongitudinalMpc:
     comfort_brake = carrot.comfort_brake
     stop_distance = carrot.stop_distance
     a_change_cost2 = carrot.a_change_cost2
+    lead_danger_factor2 = carrot.lead_danger_factor2
     
     if mode == 'blended':
       stop_x = 1000.0
@@ -447,7 +450,7 @@ class LongitudinalMpc:
         self.a_change_cost = A_CHANGE_COST
 
       #safe_distance = lead_0_obstacle[0] - get_safe_obstacle_distance(v_ego, comfort_brake, stop_distance)
-      self.lead_danger_factor = LEAD_DANGER_FACTOR #np.interp(safe_distance, [-30.0, 0.0], [0.9, LEAD_DANGER_FACTOR]) # 이걸적용하니, 사고방지턱 감속시 너무 급정거하는것 같음.
+      self.lead_danger_factor = lead_danger_factor2 #np.interp(safe_distance, [-30.0, 0.0], [0.9, LEAD_DANGER_FACTOR]) # 이걸적용하니, 사고방지턱 감속시 너무 급정거하는것 같음.
       self.params[:,5] = self.lead_danger_factor
       
     elif mode == 'blended':
