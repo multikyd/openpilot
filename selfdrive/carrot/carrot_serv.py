@@ -993,11 +993,11 @@ class CarrotServ:
         if self.desired_speed_vcruise != 0:
           self.desired_speed_vcruise = 0
       elif CS.cruiseButtons == Buttons.RES_ACCEL or CS.gasTok:
-        #self.desired_speed_vcruise = CS.vCruiseCluster + self.autoRoadSpeedLimitOffset
+        self.desired_speed_vcruise = CS.vCruiseCluster + self.autoRoadSpeedLimitOffset
         if self.desired_speed_vcruise <= desired_speed:
           self.desired_speed_vcruise = desired_speed + self.autoRoadSpeedLimitOffset
-        else:
-          self.desired_speed_vcruise = self.desired_speed_vcruise + self.autoRoadSpeedLimitOffset
+        # else:
+        #   self.desired_speed_vcruise = self.desired_speed_vcruise + self.autoRoadSpeedLimitOffset
         self.gas_override_speed = 0
       else:
         self.gas_pressed_state = False
