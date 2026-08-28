@@ -67,6 +67,8 @@ class Controls:
       self.LaC = LatControlTorque(self.CP, self.CI, DT_CTRL)
     self.standstill_elapsed_timer = 0.0
 
+    self.lanefull_timer = 0
+
     self.timer = 0
     self.sr_rate = self.params.get("SteerRatioRate", return_default=True)
     self.custom_sr = self.params.get("CustomSR", return_default=True)
@@ -153,7 +155,31 @@ class Controls:
 
     # Steering PID loop and lateral MPC
     lat_plan = self.sm['lateralPlan']
-    self.lanefull_mode_enabled = (lat_plan.useLaneLines and abs(self.sm['carrotMan'].vTurnSpeed) > self.use_lane_line_curve_speed)
+    #self.lanefull_mode_enabled = (lat_plan.useLaneLines and abs(self.sm['carrotMan'].vTurnSpeed) > self.use_lane_line_curve_speed)
+    v_turn = abs(self.sm['carrotMan'].vTurnSpeed)
+    if lat_plan.useLaneLines:
+      buffer = 5.0  # 속도 버퍼 (±5.0)
+      HOLD_FRAMES = 50  # 약 0.5초 유지 (100Hz 기준: 50프레임)
+
+      # 1. 속도 조건 판단 (현재 모드 상태에 따른 히스테리시스)
+      if getattr(self, 'lanefull_mode_enabled', False):
+        target_request = (v_turn > (self.use_lane_line_curve_speed - buffer))
+      else:
+        target_request = (v_turn > (self.use_lane_line_curve_speed + buffer))
+
+      # 2. 시간 지연(Timer) 판정: 조건 변화 후 0.5초 동안 유지되어야만 최종 전환
+      if target_request != getattr(self, 'lanefull_mode_enabled', False):
+        self.lanefull_timer = getattr(self, 'lanefull_timer', 0) + 1
+        if self.lanefull_timer >= HOLD_FRAMES:
+          self.lanefull_mode_enabled = target_request
+          self.lanefull_timer = 0
+      else:
+        self.lanefull_timer = 0
+    else:
+      # 차선 유실 시 시간 지연 없이 즉시 안전하게 해제
+      self.lanefull_mode_enabled = False
+      self.lanefull_timer = 0
+
     steer_actuator_delay = self.sm['liveDelay'].lateralDelay if self.steer_actuator_delay == 0.0 else self.steer_actuator_delay
     
     def smooth_value(val, prev_val, tau):
@@ -171,7 +197,7 @@ class Controls:
         curvature = get_lag_adjusted_curvature(self.CP, CS.vEgo, lat_plan.psis, lat_plan.curvatures, steer_actuator_delay + self.lat_smooth_seconds, lat_plan.distances)
         new_desired_curvature = smooth_value(curvature, self.desired_curvature, self.lat_smooth_seconds)
     else:
-      new_desired_curvature = smooth_value(model_v2.action.desiredCurvature, self.desired_curvature, 0.1)
+      new_desired_curvature = smooth_value(model_v2.action.desiredCurvature, self.desired_curvature, 0.25)
 
     self.desired_curvature, curvature_limited = clip_curvature(CS.vEgo, self.desired_curvature, new_desired_curvature, lp.roll)
     lat_delay = self.sm["liveDelay"].lateralDelay + self.lat_smooth_seconds
