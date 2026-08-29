@@ -70,9 +70,9 @@ procs = [
   DaemonProcess("manage_athenad", "system.athena.manage_athenad", "AthenadPid"),
 
   #NativeProcess("loggerd", "system/loggerd", ["./loggerd"], logging),
-  NativeProcess("encoderd", "system/loggerd", ["./encoderd"], only_onroad),
-  NativeProcess("stream_encoderd", "system/loggerd", ["./encoderd", "--stream"], notcar),
-  PythonProcess("logmessaged", "system.logmessaged", always_run),
+  #NativeProcess("encoderd", "system/loggerd", ["./encoderd"], only_onroad),
+  #NativeProcess("stream_encoderd", "system/loggerd", ["./encoderd", "--stream"], notcar),
+  #PythonProcess("logmessaged", "system.logmessaged", always_run),
 
   NativeProcess("camerad", "system/camerad", ["./camerad"], driverview, enabled=not WEBCAM),
   PythonProcess("webcamerad", "tools.webcam.camerad", driverview, enabled=WEBCAM),
@@ -120,7 +120,7 @@ procs = [
   PythonProcess("webjoystick", "tools.bodyteleop.web", notcar),
   PythonProcess("joystick", "tools.joystick.joystick_control", and_(joystick, iscar)),
 
-  PythonProcess("fleet_manager", "selfdrive.frogpilot.fleetmanager.fleet_manager", always_run, enabled=not PC),
+  #PythonProcess("fleet_manager", "selfdrive.frogpilot.fleetmanager.fleet_manager", always_run, enabled=not PC),
   PythonProcess("carrot_man", "selfdrive.carrot.carrot_man", always_run),#, enabled=not PC),
   PythonProcess("kisa_agent", "selfdrive.kisapilot.kisa_agent", always_run, enabled=not PC),
 ]

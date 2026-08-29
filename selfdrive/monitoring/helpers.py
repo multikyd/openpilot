@@ -33,7 +33,7 @@ class DRIVER_MONITOR_SETTINGS:
 
     self._FACE_THRESHOLD = 0.7
     self._EYE_THRESHOLD = 0.5
-    self._BLINK_THRESHOLD = 0.5
+    self._BLINK_THRESHOLD = 0.7
     self._PHONE_THRESH = 0.5
 
     self._POSE_PITCH_THRESHOLD = 0.3133

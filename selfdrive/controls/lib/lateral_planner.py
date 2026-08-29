@@ -128,9 +128,9 @@ class LateralPlanner:
 
     if self.useLaneLineSpeedApply == 0 or self.laneless_only:
       self.useLaneLineMode = False
-    elif speed_kph >= self.useLaneLineSpeedApply + 2:
+    elif speed_kph >= self.useLaneLineSpeedApply + 5:
       self.useLaneLineMode = True
-    elif speed_kph < self.useLaneLineSpeedApply - 2:
+    elif speed_kph < self.useLaneLineSpeedApply - 5:
       self.useLaneLineMode = False
 
     # Turn off lanes during lane change
