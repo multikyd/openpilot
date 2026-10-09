@@ -369,7 +369,7 @@ class LongitudinalMpc:
     self.cruise_min_a = min_a
     self.max_a = max_a
 
-  def update(self, carrot, reset_state, radarstate, v_cruise, x, v, a, j, personality=log.LongitudinalPersonality.standard):
+  def update(self, carrot, reset_state, radarstate, v_cruise, x, v, a, j, personality=log.LongitudinalPersonality.standard, prev_accel_constraint=True):
     v_ego = self.x0[1]
     a_ego = self.x0[2]
     t_follow, self.personality, self.enableSpeedTF = carrot.get_T_FOLLOW(personality, v_ego)
@@ -489,6 +489,9 @@ class LongitudinalMpc:
 
     self.t_follow = t_follow
 
+    # Apply this cycle's follow/jerk factor and lead acceleration-change cost.
+    self.set_weights(prev_accel_constraint, personality=personality,
+                     jerk_factor=carrot.jerk_factor_apply, a_change_cost_starting=carrot.aChangeCostStarting)
     self.run()
     if (np.any(lead_xv_0[FCW_IDXS,0] - self.x_sol[FCW_IDXS,0] < CRASH_DISTANCE) and
             radarstate.leadOne.modelProb > 0.9):

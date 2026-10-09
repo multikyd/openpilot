@@ -247,6 +247,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"HapticFeedbackWhenSpeedCamera", {PERSISTENT, INT, "3"}},
     {"UseLaneLineSpeed", {PERSISTENT, INT, "20"}},
     {"PathOffset", {PERSISTENT, FLOAT, "0.0"}},
+    {"LaneCenterOffset", {PERSISTENT, FLOAT, "-0.03"}},
     {"UseLaneLineCurveSpeed", {PERSISTENT, INT, "60"}},
     {"CameraOffsetAdj", {PERSISTENT, FLOAT, "0.0"}},
     {"AdjustLaneOffset", {PERSISTENT, FLOAT, "0.0"}},

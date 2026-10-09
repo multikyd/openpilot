@@ -28,6 +28,12 @@ LATERAL_JERK_COST = 0.04
 STEERING_RATE_COST = 700.0
 
 
+def get_lane_center_curvature(measured_curvature, t_idxs, yaw_rate, speeds):
+  predicted = np.abs(np.asarray(yaw_rate) / np.clip(speeds, MIN_SPEED, np.inf))
+  preview = np.interp([0.0, 0.75, 1.5], t_idxs, predicted)
+  return float(np.max(np.append(preview, abs(measured_curvature))))
+
+
 class LateralPlanner:
   def __init__(self, CP, debug=False):
     #self.DH = DesireHelper()
@@ -146,6 +152,8 @@ class LateralPlanner:
     self.LP.lane_width_left = md.meta.laneWidthLeft
     self.LP.lane_width_right = md.meta.laneWidthRight
     self.LP.curvature = measured_curvature
+    self.LP.lane_center_curvature = get_lane_center_curvature(
+      measured_curvature, self.t_idxs, self.plan_yaw_rate, self.v_plan)
     self.path_xyz, self.lanelines_active = self.LP.get_d_path(sm['carState'], v_ego_car, self.t_idxs, self.path_xyz, self.curve_speed)
 
     if self.lanelines_active:
@@ -158,8 +166,6 @@ class LateralPlanner:
       
     self.latDebugText = self.LP.debugText
     #self.lanelines_active = True if self.LP.d_prob > 0.3 and self.LP.lanefull_mode else False
-
-    self.path_xyz[:, 1] += (self.LP.path_offset + self.LP.path_offset2)
 
     self.lat_mpc.set_weights(self.lateralPathCost, self.lateralMotionCost,
                              LATERAL_ACCEL_COST, LATERAL_JERK_COST,

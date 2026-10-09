@@ -72,6 +72,9 @@ class LanePlanner:
     self.lane_width_left_filtered = FirstOrderFilter(1.0, 1.0, DT_MDL)
     self.lane_width_right_filtered = FirstOrderFilter(1.0, 1.0, DT_MDL)
     self.lane_offset_filtered = FirstOrderFilter(0.0, 2.0, DT_MDL)
+    self.lane_center_offset_filtered = FirstOrderFilter(0.0, 0.8, DT_MDL)
+    self.lane_center_offset = self.params.get("LaneCenterOffset", return_default=True)
+    self.lane_center_curvature = 0.0
 
     self.lanefull_mode = False
     self.d_prob_count = 0
@@ -96,6 +99,7 @@ class LanePlanner:
       self.timer = 0.0
       self.camera_offset = self.params.get("CameraOffsetAdj", return_default=True)
       self.path_offset = self.camera_offset - 0.04
+      self.lane_center_offset = self.params.get("LaneCenterOffset", return_default=True)
 
     if self.left_edge_offset != 0.0 or self.right_edge_offset != 0.0: # kisapilot
       left_edge_prob = np.clip(1.0 - md.roadEdgeStds[0], 0.0, 1.0)
@@ -184,6 +188,24 @@ class LanePlanner:
     if len(desire_state):
       self.l_lane_change_prob = desire_state[log.Desire.laneChangeLeft]
       self.r_lane_change_prob = desire_state[log.Desire.laneChangeRight]
+
+  def _get_lane_center_offset(self, CS, laneline_active):
+    # Positive y is right. Keep this preference separate from camera calibration.
+    value = self.lane_center_offset
+    curvature = abs(self.lane_center_curvature)
+    enabled = (laneline_active and not CS.leftBlinker and not CS.rightBlinker and
+               value is not None and np.isfinite(value) and np.isfinite(curvature))
+    target = 0.0
+    if enabled:
+      # Full preference on straight roads; fade out between radii 500m and 200m.
+      curve_factor = np.interp(curvature, [0.002, 0.005], [1.0, 0.0])
+      target = float(np.clip(value, -0.05, 0.05)) * curve_factor
+    filtered = self.lane_center_offset_filtered.update(target)
+    if not enabled:
+      return 0.0
+    confidence = np.interp(self.d_prob, [0.3, 0.8], [0.0, 1.0])
+    width_factor = np.interp(self.lane_width, [2.8, 3.2], [0.0, 1.0])
+    return float(filtered * confidence * width_factor)
 
   def get_d_path(self, CS, v_ego, path_t, path_xyz, curve_speed):
     #if v_ego > 0.1:
@@ -311,9 +333,13 @@ class LanePlanner:
           path_xyz[:,1] = self.d_prob * lane_path_y_interp + (1.0 - self.d_prob) * path_xyz[:,1]
 
 
-    path_xyz[:, 1] += (self.lane_offset_filtered.x + self.path_offset + self.path_offset2)
+    lane_center_offset = self._get_lane_center_offset(CS, laneline_active)
+    # Preserve the existing total calibration adjustment, previously added here
+    # and again in LateralPlanner. Apply the new lane-only preference once.
+    calibration_offset = 2.0 * (self.path_offset + self.path_offset2)
+    path_xyz[:, 1] += self.lane_offset_filtered.x + calibration_offset + lane_center_offset
 
-    self.offset_total = self.lane_offset_filtered.x
+    self.offset_total = self.lane_offset_filtered.x + lane_center_offset
 
     return path_xyz, laneline_active
 

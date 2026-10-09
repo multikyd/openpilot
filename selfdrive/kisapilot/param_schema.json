@@ -318,6 +318,29 @@
   {
     "group": "LAT",
     "title": {
+      "ko": "레인모드 중심 보정",
+      "en": "Lane Center Offset"
+    },
+    "param": "LaneCenterOffset",
+    "min_value": -0.05,
+    "max_value": 0.05,
+    "step": 0.01,
+    "decimal_places": 2,
+    "value_type": "FLOAT",
+    "special_texts": {
+      "0": {
+        "ko": "사용 안 함",
+        "en": "Disabled"
+      }
+    },
+    "description": {
+      "ko": "레인모드의 직선 주행 위치를 보정합니다. 음수는 왼쪽, 양수는 오른쪽입니다. 단위는 m이며 기본값은 -0.03입니다. 강한 커브에서는 서서히 줄이고 레인리스에는 적용하지 않습니다.",
+      "en": "Adjusts lane-mode position on straight roads. Negative is left, positive is right. Units: m; default: -0.03. Fades in stronger curves and does not apply in laneless mode."
+    }
+  },
+  {
+    "group": "LAT",
+    "title": {
       "ko": "Steer Ratio(Manual)",
       "en": "Steer Ratio(Manual)"
     },
