@@ -128,6 +128,9 @@ procs = [
 if EnableLogger:
   procs += [
     NativeProcess("loggerd", "system/loggerd", ["./loggerd"], logging),
+    NativeProcess("encoderd", "system/loggerd", ["./encoderd"], only_onroad),
+    NativeProcess("stream_encoderd", "system/loggerd", ["./encoderd", "--stream"], notcar),
+    PythonProcess("logmessaged", "system.logmessaged", always_run),
   ]
 
 managed_processes = {p.name: p for p in procs}
