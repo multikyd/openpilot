@@ -91,6 +91,8 @@ class UIState:
     self.started: bool = False
     self.ignition: bool = False
     self.recording_audio: bool = False
+    self._record_audio_enabled: bool = False
+    self._display_param_update_time: float = 0.0
     self.panda_type: log.PandaState.PandaType = log.PandaState.PandaType.unknown
     self.personality: log.LongitudinalPersonality = log.LongitudinalPersonality.standard
     self.has_longitudinal_control: bool = False
@@ -185,6 +187,7 @@ class UIState:
     self._engaged_transition_callbacks: list[Callable[[], None]] = []
 
     self.update_params()
+    self._update_display_params()
 
   def add_offroad_transition_callback(self, callback: Callable[[], None]):
     self._offroad_transition_callbacks.append(callback)
@@ -205,6 +208,8 @@ class UIState:
   def update(self) -> None:
     self.prime_state.start()  # start thread after manager forks ui
     self.sm.update(0)
+    if time.monotonic() - self._display_param_update_time >= 1.0:
+      self._update_display_params()
     self._update_state()
     self._update_status()
     if time.monotonic() - self._param_update_time > 5.0:
@@ -238,10 +243,7 @@ class UIState:
     self.started = self.sm["deviceState"].started and self.ignition
 
     # Update recording audio state
-    self.recording_audio = self.params.get_bool("RecordAudio") and self.started
-
-    self.is_metric = self.params.get_bool("IsMetric")
-    self.always_on_dm = self.params.get_bool("AlwaysOnDM")
+    self.recording_audio = self._record_audio_enabled and self.started
 
     # Kisa states update
     if self.sm.updated["deviceState"]:
@@ -382,6 +384,13 @@ class UIState:
         callback()
 
       self._started_prev = self.started
+
+  def _update_display_params(self) -> None:
+    # These preferences need not hit parameter storage on every rendered frame.
+    self._record_audio_enabled = self.params.get_bool("RecordAudio")
+    self.is_metric = self.params.get_bool("IsMetric")
+    self.always_on_dm = self.params.get_bool("AlwaysOnDM")
+    self._display_param_update_time = time.monotonic()
 
   def update_params(self) -> None:
     # For slower operations
