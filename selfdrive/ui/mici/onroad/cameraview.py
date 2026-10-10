@@ -1,3 +1,4 @@
+import os
 import platform
 import numpy as np
 import pyray as rl
@@ -104,6 +105,15 @@ else:
     """
 
 
+def _camera_fragment_shader(stream_type: VisionStreamType) -> str:
+  # Road-only experiment: avoid full-screen gamma pow() while retaining saturation
+  # and contrast. Keep the driver camera unchanged and allow an A/B rollback.
+  if (TICI and stream_type in (VisionStreamType.VISION_STREAM_ROAD, VisionStreamType.VISION_STREAM_WIDE_ROAD)
+      and os.getenv("MICI_LEGACY_ROAD_GAMMA", "0") != "1"):
+    return FRAME_FRAGMENT_SHADER.replace("        color.rgb = pow(color.rgb, vec3(1.0/1.28));\n", "")
+  return FRAME_FRAGMENT_SHADER
+
+
 class CameraView(Widget):
   def __init__(self, name: str, stream_type: VisionStreamType):
     super().__init__()
@@ -120,7 +130,11 @@ class CameraView(Widget):
 
     self._texture_needs_update = True
     self.last_connection_attempt: float = 0.0
-    self.shader = rl.load_shader_from_memory(VERTEX_SHADER, FRAME_FRAGMENT_SHADER)
+    frame_shader = _camera_fragment_shader(stream_type)
+    self.shader = rl.load_shader_from_memory(VERTEX_SHADER, frame_shader)
+    if TICI and stream_type in (VisionStreamType.VISION_STREAM_ROAD, VisionStreamType.VISION_STREAM_WIDE_ROAD):
+      cloudlog.info({"event": "mici_road_camera_shader",
+                     "gamma_mode": "legacy" if frame_shader == FRAME_FRAGMENT_SHADER else "lightweight"})
     self._texture1_loc: int = rl.get_shader_location(self.shader, "texture1") if not TICI else -1
     self._engaged_loc = rl.get_shader_location(self.shader, "engaged")
     self._engaged_val = rl.ffi.new("int[1]", [1])

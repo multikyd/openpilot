@@ -68,6 +68,8 @@ class ModelRenderer(Widget):
     self._experimental_mode = False
     self._blend_filter = FirstOrderFilter(1.0, 0.25, 1 / gui_app.target_fps)
     self._prev_allow_throttle = True
+    self._path_gradient_key = None
+    self._path_gradient: Gradient | None = None
     self._lane_line_probs = np.zeros(4, dtype=np.float32)
     self._road_edge_stds = np.zeros(2, dtype=np.float32)
     self._lead_vehicles = [LeadVehicle(), LeadVehicle()]
@@ -358,16 +360,20 @@ class ModelRenderer(Widget):
     else:
       # Blend throttle/no throttle colors based on transition
       blend_factor = round(self._blend_filter.x * 100) / 100
-      if ui_state.activeLaneLine:
-        blended_colors = self._blend_colors(NO_THROTTLE_COLORS, THROTTLE_COLORS, blend_factor)
-      else:
-        blended_colors = self._blend_colors(LL_NO_THROTTLE_COLORS, LL_THROTTLE_COLORS, blend_factor)
-      gradient = Gradient(
-        start=(0.0, 1.0),  # Bottom of path
-        end=(0.0, 0.0),  # Top of path
-        colors=blended_colors,
-        stops=[0.0, 0.5, 1.0],
-      )
+      gradient_key = (ui_state.activeLaneLine, blend_factor)
+      if self._path_gradient_key != gradient_key:
+        if ui_state.activeLaneLine:
+          blended_colors = self._blend_colors(NO_THROTTLE_COLORS, THROTTLE_COLORS, blend_factor)
+        else:
+          blended_colors = self._blend_colors(LL_NO_THROTTLE_COLORS, LL_THROTTLE_COLORS, blend_factor)
+        self._path_gradient = Gradient(
+          start=(0.0, 1.0),  # Bottom of path
+          end=(0.0, 0.0),  # Top of path
+          colors=blended_colors,
+          stops=[0.0, 0.5, 1.0],
+        )
+        self._path_gradient_key = gradient_key
+      gradient = self._path_gradient
 
       if ui_state.status == UIStatus.DISENGAGED:
         draw_polygon(self._rect, self._path.projected_points, rl.Color(0, 0, 0, 90))

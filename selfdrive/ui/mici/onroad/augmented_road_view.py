@@ -143,6 +143,7 @@ class AugmentedRoadView(CameraView):
     self._last_rect_dims = (0.0, 0.0)
     self._last_stream_type = stream_type
     self._cached_matrix: np.ndarray | None = None
+    self._frame_matrix_cache_key = None
     self._content_rect = rl.Rectangle()
     self._last_click_time = 0.0
 
@@ -295,7 +296,6 @@ class AugmentedRoadView(CameraView):
 
   def _calc_frame_matrix(self, rect: rl.Rectangle) -> np.ndarray:
     # Get camera configuration
-    # TODO: cache with vEgo?
     calib_time = ui_state.sm.recv_frame['liveCalibration']
     current_dims = (self._content_rect.width, self._content_rect.height)
     device_camera = self.device_camera or DEFAULT_DEVICE_CAMERA
@@ -306,6 +306,13 @@ class AugmentedRoadView(CameraView):
       zoom = 0.7 * 1.5
     else:
       zoom = np.interp(ui_state.sm['carState'].vEgo, [10, 30], [0.8, 1.0])
+
+    # Calibration matrices are replaced by _update_calibration; camera configs are constant.
+    # Include position as well as size, since overlay coordinates use the viewport origin.
+    cache_key = (calib_time, self._content_rect.x, self._content_rect.y, *current_dims,
+                 self.stream_type, zoom, id(device_camera), id(calibration))
+    if self._cached_matrix is not None and self._frame_matrix_cache_key == cache_key:
+      return self._cached_matrix
 
     # Calculate transforms for vanishing point
     inf_point = np.array([1000.0, 0.0, 0.0])
@@ -348,6 +355,7 @@ class AugmentedRoadView(CameraView):
       [0.0, 0.0, 1.0]
     ])
     self._model_renderer.set_transform(video_transform @ calib_transform)
+    self._frame_matrix_cache_key = cache_key
 
     return self._cached_matrix
 
