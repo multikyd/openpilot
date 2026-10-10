@@ -190,6 +190,7 @@ class CarrotServ:
 
     self.desired_speed_vcruise = 0
     self.desired_speed_vcruise_prev = 0
+    self.res_speed_override = False
 
     self.debugText = ""
 
@@ -950,10 +951,11 @@ class CarrotServ:
       self.atcType = "none"
 
 
+    sdi_source = "hda" if hda_active else "bump" if self.xSpdType == 22 else "section" if self.xSpdType == 4 else "police" if self.xSpdType == 100 else "waze" if self.xSpdType == 101 else "cam"
     speed_n_sources = [
       (atc_desired, "atc"),
       (atc_desired_next, "atc2"),
-      (sdi_speed, "hda" if hda_active else "bump" if self.xSpdType == 22 else "section" if self.xSpdType == 4 else "police" if self.xSpdType == 100 else "waze" if self.xSpdType == 101 else "cam"),
+      (sdi_speed, sdi_source),
       (limit_speed, "road"),
     ]
     if self.turnSpeedControlMode in [1,2]:
@@ -984,6 +986,7 @@ class CarrotServ:
         self.gas_override_speed = 0
         self.desired_speed_vcruise = 0
         self.desired_speed_vcruise_prev = 0
+        self.res_speed_override = False
       elif CS.gasPressed and not self.gas_pressed_state and self.autoGasSync:
         #self.gas_override_speed = max(v_ego_kph, self.gas_override_speed)
         self.gas_override_speed = max(CS.vEgoCluster*CV.MS_TO_KPH, self.gas_override_speed)
@@ -992,7 +995,15 @@ class CarrotServ:
           self.gas_override_speed = 0
         if self.desired_speed_vcruise != 0:
           self.desired_speed_vcruise = 0
-      elif CS.cruiseButtons == Buttons.RES_ACCEL or CS.gasTok:
+        self.desired_speed_vcruise_prev = 0
+        self.res_speed_override = False
+      elif CS.cruiseButtons == Buttons.RES_ACCEL:
+        # cruise.py owns the RES increment; do not add the offset twice here.
+        self.desired_speed_vcruise = CS.vCruiseCluster
+        self.res_speed_override = True
+        self.gas_override_speed = 0
+      elif CS.gasTok:
+        self.res_speed_override = False
         self.desired_speed_vcruise = CS.vCruiseCluster + self.autoRoadSpeedLimitOffset
         if self.desired_speed_vcruise <= desired_speed:
           self.desired_speed_vcruise = desired_speed + self.autoRoadSpeedLimitOffset
@@ -1010,12 +1021,21 @@ class CarrotServ:
         self.desired_speed_vcruise = self.desired_speed_vcruise_prev
         self.desired_speed_vcruise_prev = 0
 
+      # Button and cruise updates arrive independently; track the final setting.
+      if self.res_speed_override and self.desired_speed_vcruise != 0:
+        self.desired_speed_vcruise = CS.vCruiseCluster
+
       if desired_speed < self.gas_override_speed:
         source = "gas"
         desired_speed = self.gas_override_speed
       elif source == "road" and desired_speed < self.desired_speed_vcruise:
         source = "road++"
         desired_speed = self.desired_speed_vcruise
+
+      # Road-limit override must still respect a camera/section/bump target.
+      if source == "road++" and sdi_speed < desired_speed:
+        desired_speed = sdi_speed
+        source = sdi_source
 
       self.debugText += f"route={route_speed:.1f}"#f"desired={desired_speed:.1f},{source},g={self.gas_override_speed:.0f}"
 

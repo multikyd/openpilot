@@ -495,21 +495,19 @@ class VCruiseCarrot:
             road_limit_kph = self.nRoadLimitSpeed * self.autoSpeedUptoRoadSpeedLimit
             if road_limit_kph > 1.0:
               v_cruise_kph = max(v_cruise_kph, road_limit_kph)
-        elif self._v_cruise_kph_at_brake > 0 and v_cruise_kph <= self._v_cruise_kph_at_brake:
-          v_cruise_kph = self._v_cruise_kph_at_brake
-          self._v_cruise_kph_at_brake = 0
-        elif self.v_cruise_kph_prev != 0:
-          v_cruise_kph = self.v_cruise_kph_prev
-          self.v_cruise_kph_prev = 0
-        elif self._cruise_button_mode == 0:
-          v_cruise_kph = button_kph
         else:
-          v_cruise_kph = self._v_cruise_desired(CS, v_cruise_kph)
+          # While cruising, RES increments the current setting, not old memory.
+          step_kph = self.autoRoadSpeedLimitOffset if self.autoRoadSpeedLimitOffset > 0 else (
+            self._cruise_speed_unit_basic if self.is_metric else self._cruise_speed_unit_basic * CV.MPH_TO_KPH)
+          v_cruise_kph += step_kph
+          self._v_cruise_kph_at_brake = 0
+          self.v_cruise_kph_prev = 0
         self.carrot_cruise_active = False
 
       elif button_type == ButtonType.decelCruise:
         self._lat_enabled = True
         self._pause_auto_speed_up = True
+        self.v_cruise_kph_prev = 0
         #self.carrot_cruise_active = False
 
         if 0 < self.nRoadLimitSpeed < 150:
@@ -523,7 +521,7 @@ class VCruiseCarrot:
           self._paddle_decel_active = True
           pass
         elif not CC.enabled:
-          v_cruise_kph = max(self.v_ego_kph_set, self._cruise_speed_min)
+          v_cruise_kph = set_speed_kph if 0 < self.nRoadLimitSpeed < 150 else max(self.v_ego_kph_set, self._cruise_speed_min)
         elif self.v_ego_kph_set > v_cruise_kph + 2 and self._cruise_button_mode in [2, 3]:
           v_cruise_kph = max(self.v_ego_kph_set, self._cruise_speed_min)
         elif self._cruise_button_mode in [0, 1]:
@@ -576,6 +574,7 @@ class VCruiseCarrot:
         self._pause_auto_speed_up = True
         v_cruise_kph = button_kph
         self._v_cruise_kph_at_brake = 0
+        self.v_cruise_kph_prev = 0
       elif button_type == ButtonType.gapAdjustCruise:
         self.params.put_nonblocking("MyDrivingMode", self.params.get("MyDrivingMode") % 4 + 1) # 1,2,3,4 (1:eco, 2:safe, 3:normal, 4:high speed)
       elif button_type == ButtonType.lfaButton:
