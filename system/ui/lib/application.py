@@ -221,6 +221,7 @@ class GuiApplication:
     self._textures: dict[str, rl.Texture] = {}
     self._target_fps: int = _DEFAULT_FPS
     self._last_fps_log_time: float = time.monotonic()
+    self._reset_frame_timings(self._last_fps_log_time)
     self._frame = 0
     self._window_close_requested = False
     self._nav_stack: list[object] = []
@@ -585,6 +586,7 @@ class GuiApplication:
         self._render_profiler.enable()
 
       while not (self._window_close_requested or rl.window_should_close()):
+        frame_start = time.monotonic()
         if PC:
           # Thread is not used on PC, need to manually add mouse events
           self._mouse._handle_mouse_event()
@@ -596,6 +598,7 @@ class GuiApplication:
 
         # Skip rendering when screen is off
         if not self._should_render:
+          self._reset_frame_timings(frame_start)
           if PC:
             rl.poll_input_events()
           time.sleep(1 / self._target_fps)
@@ -617,11 +620,15 @@ class GuiApplication:
         for tick in self._nav_stack_ticks:
           tick()
 
+        draw_start = time.monotonic()
+
         # Only render top widgets
         for widget in self._nav_stack[-self._nav_stack_widgets_to_render:]:
           widget.render(rl.Rectangle(0, 0, self.width, self.height))
 
+        draw_end = time.monotonic()
         yield True
+        update_end = time.monotonic()
 
         if self._scale != 1.0:
           rl.rl_pop_matrix()
@@ -650,7 +657,9 @@ class GuiApplication:
         if self._grid_size > 0:
           self._draw_grid()
 
+        present_start = time.monotonic()
         rl.end_drawing()
+        present_end = time.monotonic()
 
         if RECORD:
           image = rl.load_image_from_texture(self._render_texture.texture)
@@ -659,6 +668,12 @@ class GuiApplication:
           self._ffmpeg_queue.put(data)  # Async write via background thread
           rl.unload_image(image)
 
+        frame_end = time.monotonic()
+        self._record_frame_timings((
+          draw_start - frame_start, draw_end - draw_start, update_end - draw_end,
+          present_start - update_end, present_end - present_start, frame_end - present_end,
+          frame_end - frame_start,
+        ))
         self._monitor_fps()
         self._frame += 1
 
@@ -764,15 +779,45 @@ class GuiApplication:
     self._trace_log_callback = trace_log_callback
     rl.set_trace_log_callback(self._trace_log_callback)
 
+  def _reset_frame_timings(self, now):
+    self._frame_timing_start = now
+    self._frame_timing_count = 0
+    self._frame_timing_sum = [0.0] * 7
+    self._frame_timing_max = [0.0] * 7
+
+  def _record_frame_timings(self, durations):
+    self._frame_timing_count += 1
+    for i, duration in enumerate(durations):
+      self._frame_timing_sum[i] += duration
+      self._frame_timing_max[i] = max(self._frame_timing_max[i], duration)
+
+  def _frame_timing_summary(self, now):
+    stages = ("prepare", "widgets", "state_update", "finish", "present", "capture", "total")
+    count = self._frame_timing_count
+    return {
+      "frames": count,
+      "window_s": round(now - self._frame_timing_start, 3),
+      "ui_mode": "big" if self.big_ui() else "mici",
+      # present includes GPU/display waits and raylib's FPS limiter.
+      "mean_ms": {name: round(self._frame_timing_sum[i] * 1000 / count, 3) if count else 0.0
+                  for i, name in enumerate(stages)},
+      "max_ms": {name: round(self._frame_timing_max[i] * 1000, 3) for i, name in enumerate(stages)},
+    }
+
   def _monitor_fps(self):
     fps = rl.get_fps()
+    current_time = time.monotonic()
 
     # Log FPS drop below threshold at regular intervals
     if fps < self._target_fps * FPS_DROP_THRESHOLD:
-      current_time = time.monotonic()
       if current_time - self._last_fps_log_time >= FPS_LOG_INTERVAL:
         cloudlog.warning(f"FPS dropped below {self._target_fps}: {fps}")
+        cloudlog.info({"event": "ui_frame_timing", "fps": fps, "target_fps": self._target_fps,
+                       "frame_timing": self._frame_timing_summary(current_time)})
         self._last_fps_log_time = current_time
+
+    if current_time - self._frame_timing_start >= FPS_LOG_INTERVAL:
+      self._reset_frame_timings(current_time)
 
     # Strict mode: terminate UI if FPS drops too much
     if STRICT_MODE and fps < self._target_fps * FPS_CRITICAL_THRESHOLD:

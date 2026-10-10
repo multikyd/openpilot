@@ -103,8 +103,10 @@ class ModelRenderer(Widget):
       self._longitudinal_control = cp.openpilotLongitudinalControl
 
   def set_transform(self, transform: np.ndarray):
-    self._car_space_transform = transform.astype(np.float32)
-    self._transform_dirty = True
+    transform = transform.astype(np.float32)
+    if not np.array_equal(self._car_space_transform, transform):
+      self._car_space_transform = transform
+      self._transform_dirty = True
 
   def _render(self, rect: rl.Rectangle):
     sm = ui_state.sm
@@ -145,7 +147,7 @@ class ModelRenderer(Widget):
       if path_x_array.size == 0:
         return
 
-      self._update_model(lead_one, path_x_array)
+      self._update_model(lead_one, path_x_array, update_lane_lines=model_updated or self._transform_dirty)
       if render_lead_indicator:
         self._update_leads(radar_state, path_x_array)
       self._transform_dirty = False
@@ -188,23 +190,25 @@ class ModelRenderer(Widget):
         if point:
           self._lead_vehicles[i] = self._update_lead_vehicle(d_rel, v_rel, point, self._rect)
 
-  def _update_model(self, lead, path_x_array):
+  def _update_model(self, lead, path_x_array, update_lane_lines=True):
     """Update model visualization data based on model message"""
     max_distance = np.clip(path_x_array[-1], MIN_DRAW_DISTANCE, MAX_DRAW_DISTANCE)
-    max_idx = self._get_path_length_idx(self._lane_lines[0].raw_points[:, 0], max_distance)
+    # Radar updates affect path clipping and leads, not lane geometry.
+    if update_lane_lines:
+      max_idx = self._get_path_length_idx(self._lane_lines[0].raw_points[:, 0], max_distance)
 
-    # Update lane lines using raw points
-    line_width_factor = 0.12
-    for i, lane_line in enumerate(self._lane_lines):
-      if i in (1, 2):
-        line_width_factor = 0.16
-      lane_line.projected_points = self._map_line_to_polygon(
-        lane_line.raw_points, line_width_factor * self._lane_line_probs[i], 0.0, max_idx
-      )
+      # Update lane lines using raw points
+      line_width_factor = 0.12
+      for i, lane_line in enumerate(self._lane_lines):
+        if i in (1, 2):
+          line_width_factor = 0.16
+        lane_line.projected_points = self._map_line_to_polygon(
+          lane_line.raw_points, line_width_factor * self._lane_line_probs[i], 0.0, max_idx
+        )
 
-    # Update road edges using raw points
-    for road_edge in self._road_edges:
-      road_edge.projected_points = self._map_line_to_polygon(road_edge.raw_points, line_width_factor, 0.0, max_idx)
+      # Update road edges using raw points
+      for road_edge in self._road_edges:
+        road_edge.projected_points = self._map_line_to_polygon(road_edge.raw_points, line_width_factor, 0.0, max_idx)
 
     # Update path using raw points
     if lead and lead.status:
