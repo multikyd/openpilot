@@ -442,6 +442,7 @@ class CarStateBase(ABC):
     x0=[[0.0], [0.0]]
     K = get_kalman_gain(DT_CTRL, np.array(A), np.array(C), np.array(Q), R)
     self.v_ego_kf = KF1D(x0=x0, A=A, C=C[0], K=K)
+    self.v_clu_kf = KF1D(x0=x0, A=A, C=C[0], K=K)
 
     self.MD = None
 
@@ -459,6 +460,13 @@ class CarStateBase(ABC):
 
     v_ego_x = self.v_ego_kf.update(v_ego_raw)
     return float(v_ego_x[0]), float(v_ego_x[1])
+
+  def update_clu_speed_kf(self, v_clu_raw):
+    if abs(v_clu_raw - self.v_clu_kf.x[0][0]) > 2.0:
+      self.v_clu_kf.set_x([[v_clu_raw], [0.0]])
+
+    v_clu_x = self.v_clu_kf.update(v_clu_raw)
+    return float(v_clu_x[0]), float(v_clu_x[1])
 
   def update_blinker_from_lamp(self, blinker_time: int, left_blinker_lamp: bool, right_blinker_lamp: bool):
     """Update blinkers from lights. Enable output when light was seen within the last `blinker_time`
