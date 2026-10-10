@@ -8,6 +8,7 @@ import os
 import subprocess
 import pty
 import select
+import re
 
 try:
     import netifaces
@@ -700,7 +701,7 @@ def get_remote_file_size():
         return jsonify({"error": str(e), "size": -1}), 500
 
 
-def change_model_task(model_prefix):
+def _change_model_task(model_prefix):
     log_path = "/data/model/download.log"
     subprocess.run(f"mkdir -p /data/model && > {log_path}", shell=True)
     
@@ -746,7 +747,29 @@ def change_model_task(model_prefix):
     
     params = Params()
     params.put("DrivingModel", model_prefix)
-    params.put_bool("DoReboot", True)
+    # Reboot is performed by the guarded wrapper.
+
+
+def _guarded_model_task(task, path, *args):
+    from openpilot.selfdrive.kisapilot.reboot_guard import RebootGuard
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    def write(message):
+        with open(path, "a") as stream:
+            stream.write(message + "\n")
+    try:
+        with RebootGuard(params, write) as guard:
+            task(*args)
+            guard.reboot()
+    except Exception as error:
+        write(f"Operation stopped: {error}")
+
+
+def change_model_task(model_prefix):
+    _guarded_model_task(_change_model_task, "/data/model/download.log", model_prefix)
+
+
+def restore_original_model_task():
+    _guarded_model_task(_restore_original_model_task, "/data/model/restore.log")
 
 
 @app.route('/model/change', methods=['POST'])
@@ -772,7 +795,7 @@ def get_download_log():
     except Exception as e:
         return str(e)
 
-def restore_original_model_task():
+def _restore_original_model_task():
     log_path = "/data/model/restore.log"
     if os.path.exists(log_path):
         os.remove(log_path)
@@ -811,7 +834,7 @@ def restore_original_model_task():
         time.sleep(3)
         params = Params()
         params.put("DrivingModel", "")
-        params.put_bool("DoReboot", True)
+        # Reboot is performed by the guarded wrapper.
         
     except Exception as e:
         with open(log_path, 'a') as f:
@@ -1014,6 +1037,10 @@ def param_set():
     if key is None:
         return jsonify({"error": "missing param"}), 400
 
+    if key == "KisaRebootRequest":
+        return jsonify({"error": "Reserved reboot coordination parameter"}), 400
+    if key == "DoReboot" and (val is True or val == 1 or str(val).lower() in ("1", "true")):
+        return jsonify(start_agent_command("reboot"))
     set_param_value(key, val)
 
     if key == "UpdaterTargetBranch":
@@ -1064,99 +1091,87 @@ def cmd_list():
 
 import uuid
 current_working_directory = "/data/openpilot"
+@app.route("/reboot/capabilities", methods=["GET"])
+def reboot_capabilities():
+    try:
+        if params is None:
+            raise RuntimeError("Params unavailable")
+        params.get("KisaRebootRequest")
+        return jsonify({"disengageBeforeReboot": True, "version": 1})
+    except Exception as error:
+        return jsonify({"disengageBeforeReboot": False, "error": str(error)}), 503
+
+
+REBOOT_COMMANDS = {
+    "reboot": ([], False),
+    "sudo_reboot": ([], True),
+    "git_pull_reboot": (["bash", "-c", "git pull && touch /data/ks && rm -f /data/openpilot/prebuilt"], False),
+    "git_pull_reboot_force": (["bash", "-c", "git pull --force && touch /data/ks && rm -f /data/openpilot/prebuilt"], True),
+    "git_reset_reboot": (["bash", "-c", "git fetch && git reset --hard $(git rev-parse --symbolic-full-name @{u}) && touch /data/ks && rm -f /data/openpilot/prebuilt"], False),
+    "git_reset_reboot_force": (["bash", "-c", "git fetch && git reset --hard $(git rev-parse --symbolic-full-name @{u}) && touch /data/ks && rm -f /data/openpilot/prebuilt"], True),
+}
+
+
+def start_agent_command(cmd_id, param=None):
+    if not isinstance(cmd_id, str):
+        raise ValueError("Missing command")
+    reboot = cmd_id in REBOOT_COMMANDS or cmd_id == "git_restore_reboot"
+    force = False
+    if cmd_id == "git_restore_reboot":
+        if not isinstance(param, str) or not re.fullmatch(r"[0-9a-fA-F]{7,40}", param):
+            raise ValueError("Invalid restore commit")
+        command = ["bash", "-c", "git reset --hard "+param+" && touch /data/ks && rm -f /data/openpilot/prebuilt"]
+        force = True
+    elif cmd_id in REBOOT_COMMANDS:
+        command, force = REBOOT_COMMANDS[cmd_id]
+    elif cmd_id == "git_log_export":
+        command = ["bash", "-c", "git log --date=human --pretty=format:'%h, %ad : %s' -n 30 > /data/params/d/GitCommits"]
+    elif cmd_id == "pre_install_cleanup":
+        command = ["bash", "-c", "touch /data/ks && rm -f /data/openpilot/prebuilt"]
+    else:
+        with open(CMD_SCHEMA_PATH) as stream:
+            entry = next((c for c in json.load(stream) if c["cmd"] == cmd_id), None)
+        if not entry or not entry.get("exec"):
+            raise ValueError("Unknown command")
+        command = entry["exec"]
+        if re.search(r"\b(reboot|shutdown|poweroff)\b|DoReboot|KisaRebootRequest", " ".join(command), re.I):
+            raise ValueError("Use a guarded reboot command")
+    cmd_uuid = str(uuid.uuid4())
+    running_cmds[cmd_uuid] = {"output": "", "done": False}
+    def write(message):
+        running_cmds[cmd_uuid]["output"] += message + "\n"
+    def execute():
+        if command:
+            proc = subprocess.Popen(command, cwd=current_working_directory, stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, text=True)
+            for line in proc.stdout:
+                running_cmds[cmd_uuid]["output"] += line
+            if proc.wait() != 0:
+                raise RuntimeError("Command failed; reboot cancelled")
+    def runner():
+        try:
+            if reboot:
+                from openpilot.selfdrive.kisapilot.reboot_guard import RebootGuard
+                with RebootGuard(params, write) as guard:
+                    execute()
+                    guard.reboot(force)
+            else:
+                execute()
+        except Exception as error:
+            write(f"Operation stopped: {error}")
+        finally:
+            running_cmds[cmd_uuid]["done"] = True
+    threading.Thread(target=runner, daemon=True).start()
+    return {"status": "started", "id": cmd_uuid}
+
+
 @app.route("/cmd/run", methods=["POST"])
 def run_cmd():
-    global current_working_directory
-
-    data = request.json
-    cmd_id = data.get("id")
-    param = data.get("param")
-
-    with open(CMD_SCHEMA_PATH) as f:
-        schema = json.load(f)
-    entry = next((c for c in schema if c["cmd"] == cmd_id), None)
-
-    command_array_to_run = []
-    reboot_after_complete = False
-    
-    # Home
-    if cmd_id == 'git_pull_reboot_force':
-        command_array_to_run = [
-            "bash", "-c",
-            "git pull --force && touch /data/ks && rm -f /data/openpilot/prebuilt"
-        ]
-        reboot_after_complete = True
-        
-    elif cmd_id == 'git_restore_reboot' and param:
-        command_array_to_run = [
-            "bash", "-c",
-            f"git reset --hard {param} && touch /data/ks && rm -f /data/openpilot/prebuilt"
-        ]
-        reboot_after_complete = True
-    elif cmd_id == 'git_reset_reboot_force':
-        command_array_to_run = [
-            "bash", "-c",
-            "cd /data/openpilot && git fetch && git reset --hard $(git rev-parse --symbolic-full-name @{u}) && touch /data/ks && rm -f /data/openpilot/prebuilt"
-        ]
-        reboot_after_complete = True
-
-    elif cmd_id == 'git_log_export':
-        command_array_to_run = [
-            "bash", "-c",
-            "git log --date=human --pretty=format:'%h, %ad : %s' -n 30 > /data/params/d/GitCommits"
-        ]
-        reboot_after_complete = False
-    elif cmd_id == 'pre_install_cleanup':
-        command_array_to_run = [
-            "bash", "-c",
-            "touch /data/ks && rm -f /data/openpilot/prebuilt"
-        ]
-        reboot_after_complete = False
-
-    # Cmd
-    elif not command_array_to_run and entry and entry.get("exec"):
-        command_array_to_run = entry["exec"]
-
-    if command_array_to_run:
-        cmd_uuid = str(uuid.uuid4())
-        running_cmds[cmd_uuid] = {
-            "output": "",
-            "done": False
-        }
-
-        def runner():
-            try:
-                proc = subprocess.Popen(
-                    command_array_to_run,
-                    cwd="/data/openpilot",
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True
-                )
-                for line in proc.stdout:
-                    running_cmds[cmd_uuid]["output"] += line
-                proc.wait()
-                time.sleep(1)
-                
-                if reboot_after_complete:
-                    running_cmds[cmd_uuid]["output"] += "\nTask complete. Rebooting the system in 3~5 seconds."
-                    params.put_bool("DoReboot", True)
-                    time.sleep(5)
-                    os.system("sudo reboot")
-
-            except Exception as e:
-                running_cmds[cmd_uuid]["output"] += f"\nAn error occurred during command execution: {e}"
-            finally:
-                running_cmds[cmd_uuid]["done"] = True
-
-        threading.Thread(target=runner, daemon=True).start()
-
-        return jsonify({
-            "status": "started",
-            "id": cmd_uuid
-        })
-
-    return jsonify({"error": "cmd not found or invalid"}), 404
+    data = request.get_json(silent=True) or {}
+    try:
+        return jsonify(start_agent_command(data.get("id"), data.get("param")))
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
 
 
 @app.route("/cmd/exec_raw", methods=["POST"])
@@ -1168,6 +1183,8 @@ def exec_raw_cmd():
         if not cmd_str:
             return jsonify({"error": "missing cmd"}), 400
 
+        if re.search(r"\b(reboot|shutdown|poweroff)\b|DoReboot|KisaRebootRequest", cmd_str, re.I):
+            return jsonify({"error": "Use /cmd/run guarded reboot commands"}), 400
         print(f"Executing RAW command: {cmd_str}")
 
         def runner():
