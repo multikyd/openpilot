@@ -442,6 +442,8 @@ class LongitudinalMpc:
 
     cruise_max_a = self.cruise_accel_after_lead_loss(
       radarstate.leadOne, radarstate.leadTwo, v_ego, reset_state, mode)
+    if mode == 'acc' and not reset_state:
+      cruise_max_a = min(cruise_max_a, carrot.signal_follow.cruise_accel(self.max_a))
 
     # Update in ACC mode or ACC/e2e blend
     if mode == 'acc':
