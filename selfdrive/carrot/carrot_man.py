@@ -249,6 +249,8 @@ class CarrotMan:
     self.pm = messaging.PubMaster(['carrotMan'])
 
     self.carrot_serv = CarrotServ()
+    # Drain every IMU sample at 10 Hz; SubMaster would retain only the newest.
+    self.bump_accel_sock = messaging.sub_sock("accelerometer")
 
     self.show_panda_debug = False
     self.broadcast_ip = self.get_broadcast_address()
@@ -334,6 +336,10 @@ class CarrotMan:
     while self.is_running:
       try:
         self.sm.update(0)
+        for event in messaging.drain_sock(self.bump_accel_sock):
+          accel = event.accelerometer
+          if event.valid and accel.which() == "acceleration":
+            self.carrot_serv.bump_memory.sensor(accel.timestamp * 1e-9, accel.acceleration.v)
         remote_addr = self.remote_addr
         remote_ip = remote_addr[0] if remote_addr is not None else ""
         vturn_speed = self.carrot_curve_speed(self.sm)

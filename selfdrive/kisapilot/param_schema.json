@@ -1387,6 +1387,45 @@
   },
   {
     "group": "Curv/Safety/Nav",
+    "title": {
+      "ko": "방지턱 충격 학습",
+      "en": "Bump Learning"
+    },
+    "param": "BumpLearningEnabled",
+    "value_type": "BOOL",
+    "description": {
+      "ko": "방향별 충격 위치와 통과 속도 저장. 큰 충격에는 감속, 수동 감속 기록으로는 증속하지 않습니다.",
+      "en": "Remember directional impacts. Driver slowdowns never justify raising the target."
+    }
+  },
+  {
+    "group": "Curv/Safety/Nav",
+    "title": {
+      "ko": "학습 방지턱 접근 알림음",
+      "en": "Learned Bump Sound"
+    },
+    "param": "BumpLearningSound",
+    "value_type": "BOOL"
+  },
+  {
+    "group": "Curv/Safety/Nav",
+    "title": {
+      "ko": "방지턱 학습 최대 증속",
+      "en": "Bump Maximum Speed Increase"
+    },
+    "param": "BumpLearningRaise",
+    "value_type": "INT",
+    "min_value": 0,
+    "max_value": 10,
+    "step": 5,
+    "decimal_places": 0,
+    "description": {
+      "ko": "기본 통과 속도 대비 상한. 0: 증속 안 함. 자동 통과 3회 연속 부드러울 때 5km/h씩 증가.",
+      "en": "Cap above the default; 0 disables increases. Three smooth automatic passes per 5 km/h step."
+    }
+  },
+  {
+    "group": "Curv/Safety/Nav",
     "title": { "ko": "내비 카운트다운 표시 모드", "en": "Navigation Countdown Mode" },
     "param": "AutoNaviCountDownMode",
     "min_value": 0,

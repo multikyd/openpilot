@@ -120,6 +120,7 @@ class Soundd:
     self.params = Params()
     self.soundVolumeAdjust = 1.0
     self.carrot_count_down = 0
+    self.bump_sound_sequence = None
 
     self.lang = self.params.get('LanguageSetting')
     self.load_sounds()
@@ -199,6 +200,14 @@ class Soundd:
       self.current_sound_frame = 0
 
   def update_carrot_alert(self, sm, new_alert):
+    cm = sm['carrotMan']
+    sequence = cm.bumpSoundSequence
+    changed = self.bump_sound_sequence is not None and sequence > self.bump_sound_sequence
+    self.bump_sound_sequence = sequence
+    if (changed and cm.bumpSoundEnabled and not 0 <= cm.leftSec <= 11 and
+        sm.valid['carrotMan'] and sm.alive['carrotMan'] and
+        time.monotonic() - sm.recv_time['carrotMan'] < 1 and new_alert == AudibleAlert.none):
+      return AudibleAlert.dingdong
     if new_alert == AudibleAlert.none:
       count_down = sm['carrotMan'].leftSec
       if self.carrot_count_down != count_down:

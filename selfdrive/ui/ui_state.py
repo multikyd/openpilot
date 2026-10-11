@@ -181,6 +181,9 @@ class UIState:
     self.xSpdType: int = 0
     self.desiredSpeed: int = 0
     self.desiredSource: str = ""
+    self.bumpTarget: int = 0
+    self.bumpDistance: int = 0
+    self.bumpLearningText: str = ""
 
     # Callbacks
     self._offroad_transition_callbacks: list[Callable[[], None]] = []
@@ -350,6 +353,12 @@ class UIState:
       self.xSpdType = carrotman_state.xSpdType
       self.desiredSpeed = carrotman_state.desiredSpeed
       self.desiredSource = carrotman_state.desiredSource
+      self.bumpTarget = carrotman_state.bumpTarget
+      self.bumpDistance = carrotman_state.bumpDistance
+      self.bumpLearningText = carrotman_state.bumpLearningText
+    if not self.started or time.monotonic() - self.sm.recv_time['carrotMan'] > 1:
+      self.bumpTarget = self.bumpDistance = 0
+      self.bumpLearningText = ""
 
   def _update_status(self) -> None:
     if self.started and self.sm.updated["selfdriveState"]:

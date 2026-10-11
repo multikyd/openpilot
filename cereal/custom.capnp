@@ -41,6 +41,13 @@ struct CarrotMan @0x81c2f05a394cf4af {
 	naviPaths @27 : Text;
 	leftSec @28 : Int32;
 	xSpdLimitOrg @29 : Int32;
+  bumpTarget @30 :Int32;
+  bumpDistance @31 :Int32;
+  bumpLearningText @32 :Text;
+  bumpSoundSequence @33 :UInt32;
+  bumpSoundEnabled @34 :Bool;
+  bumpImpact @35 :Float32;
+  bumpPassSpeed @36 :Float32;
 }
 
 struct CustomReserved1 @0xaedffd8f31e7b55d {

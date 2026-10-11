@@ -193,6 +193,30 @@ class HudRenderer(Widget):
     if self._can_draw_top_icons and not self.setspeed_changed:
       self._draw_car_stat(rect)
       self._draw_speed_limit_sign(rect)
+      if ui_state.bumpTarget <= 0 and ui_state.bumpLearningText:
+        # A brief result strip, confined to the middle; retain all left-side status icons.
+        text = ui_state.bumpLearningText
+        if not ui_state.is_metric and ('다음 ' in text or '유지 ' in text):
+          prefix, speed = text.rsplit(' ', 1)
+          text = f"{prefix} {round(float(speed) * KM_TO_MILE)}"
+        size = 22
+        width = measure_text_cached(self._font_bold, text, size).x
+        rl.draw_rectangle_rounded(rl.Rectangle(rect.x+108, rect.y+188, 288, 46), .2, 8, rl.Color(0, 0, 0, 220))
+        rl.draw_text_ex(self._font_bold, text, rl.Vector2(rect.x+252-width/2, rect.y+198), size, 0,
+                        rl.Color(255, 220, 70, 255))
+
+  def _draw_bump_target(self, rect: rl.Rectangle, center_x: float, target: float, distance: float) -> None:
+    # Preserve the existing DM/lead/gap/TPMS/wheel column on the 536x240 C4 screen.
+    img = self.img_speed_bump
+    icon = rl.Rectangle(center_x-45, rect.y+15, 90, 90)
+    rl.draw_texture_pro(img, rl.Rectangle(0, 0, img.width, img.height), icon, rl.Vector2(0, 0), 0, rl.WHITE)
+    speed = round(target * (1 if ui_state.is_metric else KM_TO_MILE))
+    for text, y, size, color in (
+        ("목표" if ui_state.is_metric else "TARGET", 105, 24, rl.WHITE),
+        (str(speed), 129, 64, rl.Color(255, 220, 70, 255)),
+        (f"{max(0, distance):.0f}m", 198, 32, rl.WHITE)):
+      width = measure_text_cached(self._font_bold, text, size).x
+      rl.draw_text_ex(self._font_bold, text, rl.Vector2(center_x-width/2, rect.y+y), size, 0, color)
 
   def _draw_steering_wheel(self, rect: rl.Rectangle) -> None:
     wheel_txt = self._txt_wheel_critical if self._show_wheel_critical else self._txt_wheel
@@ -366,6 +390,15 @@ class HudRenderer(Widget):
 
     type, limit_spd, dist = ui_state.xSpdType, ui_state.xSpdLimitOrg, ui_state.xSpdDist
 
+    learned = ui_state.bumpTarget > 0
+    if type == 22 or (learned and (type < 0 or dist <= 0)):
+      target = ui_state.bumpTarget if learned else ui_state.xSpdLimit
+      distance = ui_state.bumpDistance if learned else dist
+      self._draw_bump_target(rect, s_center_x, target, distance)
+      return
+    if learned:
+      # Retain a simultaneous camera sign in its original position.
+      self._draw_bump_target(rect, rect.x+315, ui_state.bumpTarget, ui_state.bumpDistance)
     if limit_spd <= 20 and dist == 0:
       return
 
