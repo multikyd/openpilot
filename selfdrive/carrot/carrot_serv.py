@@ -191,6 +191,7 @@ class CarrotServ:
     self.desired_speed_vcruise = 0
     self.desired_speed_vcruise_prev = 0
     self.res_speed_override = False
+    self.cruise_button_last = 0
 
     self.debugText = ""
 
@@ -975,6 +976,15 @@ class CarrotServ:
 
     desired_speed, source = min(speed_n_sources, key=lambda x: x[0])
 
+    # Clear overrides even when carState is temporarily unavailable. Otherwise
+    # the one-cycle road-change event can be consumed without clearing memory.
+    if road_speed_limit_changed:
+      self.gas_override_speed = 0
+      self.desired_speed_vcruise = 0
+      self.desired_speed_vcruise_prev = 0
+      self.res_speed_override = False
+      self.cruise_button_last = Buttons.RES_ACCEL
+
     if CS is not None:
       if source != self.source_last:
         self.gas_override_speed = 0
@@ -997,7 +1007,7 @@ class CarrotServ:
           self.desired_speed_vcruise = 0
         self.desired_speed_vcruise_prev = 0
         self.res_speed_override = False
-      elif CS.cruiseButtons == Buttons.RES_ACCEL:
+      elif CS.cruiseButtons == Buttons.RES_ACCEL and self.cruise_button_last != Buttons.RES_ACCEL:
         # cruise.py owns the RES increment; do not add the offset twice here.
         self.desired_speed_vcruise = CS.vCruiseCluster
         self.res_speed_override = True
@@ -1013,6 +1023,7 @@ class CarrotServ:
       else:
         self.gas_pressed_state = False
       self.source_last = source
+      self.cruise_button_last = CS.cruiseButtons
 
       if self.desired_speed_vcruise != 0 and desired_speed < self.desired_speed_vcruise and source in ["cam", "section", "police", "bump", "hda"]:
         self.desired_speed_vcruise_prev = self.desired_speed_vcruise

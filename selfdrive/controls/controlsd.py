@@ -30,6 +30,24 @@ LaneChangeDirection = log.LaneChangeDirection
 ACTUATOR_FIELDS = tuple(car.CarControl.Actuators.schema.fields.keys())
 
 
+def lane_curve_command(CP, v_ego, psis, curvatures, distances, actuator_delay,
+                       smoothing_seconds, previous_curvature, steering_pressed):
+  # Preview compensation must use the same smoothing time as the final filter.
+  curvature = get_lag_adjusted_curvature(CP, v_ego, psis, curvatures,
+                                        actuator_delay + smoothing_seconds, distances)
+  tau = smoothing_seconds
+  if (not steering_pressed and v_ego > 6.0 and smoothing_seconds > 0.15 and
+      np.all(np.isfinite([curvature, previous_curvature])) and
+      (curvature * previous_curvature >= 0 or abs(previous_curvature) < 0.0005)):
+    turn = float(np.interp(abs(curvature), [0.0006, 0.002], [0.0, 1.0]))
+    entry = float(np.interp(abs(curvature) - abs(previous_curvature), [0.0001, 0.0008], [0.0, 1.0]))
+    tau -= turn * entry * (smoothing_seconds - 0.15)
+    curvature = get_lag_adjusted_curvature(CP, v_ego, psis, curvatures,
+                                          actuator_delay + tau, distances)
+  alpha = 1 - np.exp(-DT_CTRL / tau) if tau > 0 else 1.0
+  return float(alpha * curvature + (1 - alpha) * previous_curvature), tau
+
+
 class Controls:
   def __init__(self) -> None:
     self.params = Params()
@@ -192,6 +210,7 @@ class Controls:
       alpha = 1 - np.exp(-DT_CTRL / tau) if tau > 0 else 1
       return alpha * val + (1 - alpha) * prev_val
 
+    effective_lat_smoothing = self.lat_smooth_seconds
     if not CC.latActive:
       new_desired_curvature = self.curvature
     elif self.sm.valid['lateralManeuverPlan']:
@@ -200,13 +219,14 @@ class Controls:
       if len(lat_plan.curvatures) == 0:
         new_desired_curvature = self.curvature
       else:
-        curvature = get_lag_adjusted_curvature(self.CP, CS.vEgo, lat_plan.psis, lat_plan.curvatures, steer_actuator_delay + self.lat_smooth_seconds, lat_plan.distances)
-        new_desired_curvature = smooth_value(curvature, self.desired_curvature, self.lat_smooth_seconds)
+        new_desired_curvature, effective_lat_smoothing = lane_curve_command(
+          self.CP, CS.vEgo, lat_plan.psis, lat_plan.curvatures, lat_plan.distances,
+          steer_actuator_delay, self.lat_smooth_seconds, self.desired_curvature, CS.steeringPressed)
     else:
       new_desired_curvature = smooth_value(model_v2.action.desiredCurvature, self.desired_curvature, 0.25)
 
     self.desired_curvature, curvature_limited = clip_curvature(CS.vEgo, self.desired_curvature, new_desired_curvature, lp.roll)
-    lat_delay = self.sm["liveDelay"].lateralDelay + self.lat_smooth_seconds
+    lat_delay = self.sm["liveDelay"].lateralDelay + effective_lat_smoothing
     actuators.curvature = float(self.desired_curvature)
     steer, steeringAngleDeg, lac_log = self.LaC.update(CC.latActive, CS, self.VM, lp,
                                                        self.steer_limited_by_safety, self.desired_curvature,

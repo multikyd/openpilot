@@ -103,6 +103,32 @@ def desired_follow_distance(v_ego, v_lead, comfort_brake, stop_distance, t_follo
   return get_safe_obstacle_distance(v_ego, t_follow, comfort_brake, stop_distance) - get_stopped_equivalence_factor(v_lead)
 
 
+def stopped_lead_settings(leads, v_ego, t_follow, comfort_brake, stop_distance,
+                          danger_factor, active):
+  # Strengthen the existing MPC distance objective for confirmed slow/stopped
+  # leads. Keep moving-lead following and all physical accel limits unchanged.
+  if not active or not np.all(np.isfinite([v_ego, t_follow, comfort_brake, stop_distance, danger_factor])) or comfort_brake <= 0:
+    return stop_distance, danger_factor, 0.0
+  weight = 0.0
+  nearest = float('inf')
+  for lead in leads:
+    if not lead.status or not (lead.radar or lead.modelProb > 0.9):
+      continue
+    if not np.all(np.isfinite([lead.dRel, lead.vLead])):
+      continue
+    if not 0 < lead.dRel < max(20.0, max(v_ego, 0.0) * 6.0 + stop_distance):
+      continue
+    slow_weight = float(np.interp(max(lead.vLead, 0.0), [0.5, 2.0], [1.0, 0.0]))
+    if slow_weight > 0:
+      weight = max(weight, slow_weight)
+      nearest = min(nearest, lead.dRel + get_stopped_equivalence_factor(max(lead.vLead, 0.0)))
+  gap = stop_distance + weight * max(0.0, 5.0 - stop_distance)
+  desired = get_safe_obstacle_distance(max(v_ego, 0.0), t_follow, comfort_brake, gap)
+  urgency = weight * float(np.clip((desired - nearest) / max(5.0, desired * 0.25), 0.0, 1.0))
+  danger = max(danger_factor, danger_factor + weight * max(0.0, 0.95 - danger_factor))
+  return gap, danger, urgency
+
+
 def gen_long_model():
   model = AcadosModel()
   model.name = MODEL_NAME
@@ -286,6 +312,7 @@ class LongitudinalMpc:
     self.x0 = np.zeros(X_DIM)
     self.lead_loss_armed = False
     self.lead_loss_remaining = 0.0
+    self.stopped_lead_urgency = 0.0
     self.set_weights()
 
   def set_cost_weights(self, cost_weights, constraint_cost_weights):
@@ -309,7 +336,7 @@ class LongitudinalMpc:
     if self.mode == 'acc':
       a_change_cost = self.a_change_cost if prev_accel_constraint else a_change_cost_starting
       cost_weights = [X_EGO_OBSTACLE_COST, X_EGO_COST, V_EGO_COST, A_EGO_COST, jerk_factor * a_change_cost, jerk_factor * J_EGO_COST]
-      constraint_cost_weights = [LIMIT_COST, LIMIT_COST, LIMIT_COST, DANGER_ZONE_COST]
+      constraint_cost_weights = [LIMIT_COST, LIMIT_COST, LIMIT_COST, DANGER_ZONE_COST * (1.0 + 4.0 * self.stopped_lead_urgency)]
     elif self.mode == 'blended':
       a_change_cost = 40.0 if prev_accel_constraint else 0
       cost_weights = [0., 0.1, 0.2, 5.0, a_change_cost, 1.0]
@@ -434,6 +461,9 @@ class LongitudinalMpc:
     lead_0_obstacle = lead_xv_0[:,0] + get_stopped_equivalence_factor(lead_xv_0[:,1])
     lead_1_obstacle = lead_xv_1[:,0] + get_stopped_equivalence_factor(lead_xv_1[:,1])
     
+    stop_distance, lead_danger_factor2, self.stopped_lead_urgency = stopped_lead_settings(
+      (radarstate.leadOne, radarstate.leadTwo), v_ego, t_follow, comfort_brake,
+      stop_distance, lead_danger_factor2, mode == 'acc' and not reset_state)
     self.desired_distance = desired_follow_distance(v_ego, lead_v_0, comfort_brake, stop_distance, t_follow)
 
     self.params[:,0] = ACCEL_MIN if not reset_state else a_ego
@@ -484,6 +514,10 @@ class LongitudinalMpc:
         self.a_change_cost = np.interp(abs(self.j_lead), [0.3, 2.0], [A_CHANGE_COST, a_change_cost2])
       else:
         self.a_change_cost = A_CHANGE_COST
+
+      # When stopping room is insufficient, do not let acceleration-change
+      # smoothing dominate the lead-distance objective.
+      self.a_change_cost += self.stopped_lead_urgency * (min(self.a_change_cost, 40.0) - self.a_change_cost)
 
       #safe_distance = lead_0_obstacle[0] - get_safe_obstacle_distance(v_ego, comfort_brake, stop_distance)
       self.lead_danger_factor = lead_danger_factor2 #np.interp(safe_distance, [-30.0, 0.0], [0.9, LEAD_DANGER_FACTOR]) # 이걸적용하니, 사고방지턱 감속시 너무 급정거하는것 같음.
