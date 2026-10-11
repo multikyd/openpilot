@@ -129,6 +129,23 @@ def stopped_lead_settings(leads, v_ego, t_follow, comfort_brake, stop_distance,
   return gap, danger, urgency
 
 
+def recovering_lead_tau(lead, a_lead_tau):
+  # Only shorten persistence when a moving radar lead's braking is easing,
+  # relative closing speed is small, and its current deceleration is mild.
+  # A stopped/slow lead, strong braking, or rapid closing keeps the original
+  # conservative prediction.
+  values = [lead.vLead, lead.vRel, lead.aLeadK, lead.jLead, a_lead_tau]
+  if not lead.status or not lead.radar or not np.all(np.isfinite(values)):
+    return a_lead_tau
+  if lead.vLead <= 4.0 or not -0.75 < lead.aLeadK < 0.0 or lead.vRel <= -2.0 or lead.jLead <= 0.0:
+    return a_lead_tau
+  weight = (float(np.interp(lead.vLead, [4.0, 6.0], [0.0, 1.0])) *
+            float(np.interp(lead.aLeadK, [-0.75, -0.25], [0.0, 1.0])) *
+            float(np.interp(lead.vRel, [-2.0, -0.5], [0.0, 1.0])) *
+            float(np.interp(lead.jLead, [0.0, 0.5], [0.0, 1.0])))
+  return a_lead_tau + weight * max(0.0, _LEAD_ACCEL_TAU - a_lead_tau)
+
+
 def gen_long_model():
   model = AcadosModel()
   model.name = MODEL_NAME
@@ -370,6 +387,8 @@ class LongitudinalMpc:
       v_lead = lead.vLead
       a_lead = lead.aLeadK
       a_lead_tau = lead.aLeadTau
+      if self.mode == 'acc':
+        a_lead_tau = recovering_lead_tau(lead, a_lead_tau)
     else:
       # Fake a fast lead car, so mpc can keep running in the same mode
       x_lead = 50.0

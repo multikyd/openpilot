@@ -684,10 +684,9 @@ class RadarD:
         )
         if self.leadTwo is not None:
           self.leadTwo = copy.deepcopy(self.leadTwo)
-          #gap = self.leadTwo['dRel'] - self.radar_state.leadOne.dRel
-          #offset = 3.0 + min(gap * 0.2, 10)
-          #self.leadTwo['dRel'] = self.radar_state.leadOne.dRel + offset
-          self.leadTwo['dRel'] = max(self.radar_state.leadOne.dRel + 3.0, self.leadTwo['dRel'] - 8.0) # lead+1 차를 뒤로 8M후퇴하여, mpc에서  감자하도록함.. 최소 lead보다 3M앞에 위치하도록
+          # Keep the measured distance of the second lead. MPC already
+          # considers its predicted motion; a fixed 8m shift double-counts
+          # anticipation and can make moving traffic look much closer.
     else:
       self.leadCenter = None
 
