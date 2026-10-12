@@ -236,10 +236,10 @@ class Car:
     self.pm.send('carState', cs_send)
 
     if RD is not None:
-      tracks_msg = messaging.new_message('liveTracks')
+      tracks_msg = messaging.new_message('radarTracks')
       tracks_msg.valid = not any(RD.errors.to_dict().values())
-      tracks_msg.liveTracks = RD
-      self.pm.send('liveTracks', tracks_msg)
+      tracks_msg.radarTracks = RD
+      self.pm.send('radarTracks', tracks_msg)
 
   def controls_update(self, CS: car.CarState, CC: car.CarControl):
     """control update loop, driven by carControl"""

@@ -4,6 +4,8 @@ from typing import cast
 import capnp
 import functools
 import traceback
+import sys
+import argparse
 
 from openpilot.cereal import messaging, log
 from opendbc.car.structs import car
@@ -17,7 +19,7 @@ from openpilot.selfdrive.modeld.fill_model_msg import fill_xyz_poly, fill_lane_l
 from openpilot.selfdrive.test.process_replay.vision_meta import meta_from_encode_index
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_from_plan, should_stop
 from openpilot.system.manager.process_config import managed_processes
-from openpilot.tools.lib.logreader import LogIterable
+from openpilot.tools.lib.logreader import LogIterable, LogReader, save_log
 
 MessageWithIndex = tuple[int, capnp.lib.capnp._DynamicStructReader]
 MigrationOps = tuple[list[tuple[int, capnp.lib.capnp._DynamicStructReader]], list[capnp.lib.capnp._DynamicStructReader], list[int]]
@@ -40,7 +42,7 @@ def migrate_all(lr: LogIterable, manager_states: bool = False, panda_states: boo
     migrate_controlsState,
     migrate_carState,
     migrate_liveLocationKalman,
-    migrate_livePose,
+    migrate_deviceMotion,
     migrate_liveTracks,
     migrate_driverAssistance,
     migrate_drivingModelData,
@@ -149,7 +151,7 @@ def migrate_drivingModelData(msgs):
   add_ops = []
   for _, msg in msgs:
     dmd = messaging.new_message('drivingModelData', valid=msg.valid, logMonoTime=msg.logMonoTime)
-    for field in ["frameId", "frameIdExtra", "frameDropPerc", "modelExecutionTime", "action"]:
+    for field in ["frameId", "frameIdExtra", "frameDropPerc", "modelExecutionTime", "big", "action"]:
       setattr(dmd.drivingModelData, field, getattr(msg.modelV2, field))
     for meta_field in ["laneChangeState", "laneChangeState"]:
       setattr(dmd.drivingModelData.meta, meta_field, getattr(msg.modelV2.meta, meta_field))
@@ -161,11 +163,11 @@ def migrate_drivingModelData(msgs):
   return [], add_ops, []
 
 
-@migration(inputs=["liveTracksDEPRECATED"], product="liveTracks")
+@migration(inputs=["liveTracksDEPRECATED"], product="radarTracks")
 def migrate_liveTracks(msgs):
   ops = []
   for index, msg in msgs:
-    new_msg = messaging.new_message('liveTracks')
+    new_msg = messaging.new_message('radarTracks')
     new_msg.valid = msg.valid
     new_msg.logMonoTime = msg.logMonoTime
 
@@ -179,42 +181,42 @@ def migrate_liveTracks(msgs):
       pt.vRel = track.vRel
       pts.append(pt)
 
-    new_msg.liveTracks.points = pts
+    new_msg.radarTracks.points = pts
     ops.append((index, as_reader(new_msg)))
   return ops, [], []
 
 
-@migration(inputs=["liveLocationKalmanDEPRECATED"], product="livePose")
+@migration(inputs=["liveLocationKalmanDEPRECATED"], product="deviceMotion")
 def migrate_liveLocationKalman(msgs):
   nans = [float('nan')] * 3
   ops = []
   for index, msg in msgs:
-    m = messaging.new_message('livePose')
+    m = messaging.new_message('deviceMotion')
     m.valid = msg.valid
     m.logMonoTime = msg.logMonoTime
-    m.livePose.timestamp = msg.logMonoTime
+    m.deviceMotion.timestamp = msg.logMonoTime
     for field in ["orientationNED", "velocityDevice", "accelerationDevice", "angularVelocityDevice"]:
-      lp_field, llk_field = getattr(m.livePose, field), getattr(msg.liveLocationKalmanDEPRECATED, field)
+      lp_field, llk_field = getattr(m.deviceMotion, field), getattr(msg.liveLocationKalmanDEPRECATED, field)
       lp_field.x, lp_field.y, lp_field.z = llk_field.value or nans
       lp_field.xStd, lp_field.yStd, lp_field.zStd = llk_field.std or nans
       lp_field.valid = llk_field.valid
     for flag in ["inputsOK", "posenetOK", "sensorsOK"]:
-      setattr(m.livePose, flag, getattr(msg.liveLocationKalmanDEPRECATED, flag))
+      setattr(m.deviceMotion, flag, getattr(msg.liveLocationKalmanDEPRECATED, flag))
     ops.append((index, as_reader(m)))
   return ops, [], []
 
 
-@migration(inputs=["livePose"])
-def migrate_livePose(msgs):
+@migration(inputs=["deviceMotion"])
+def migrate_deviceMotion(msgs):
   ops = []
-  needs_migration = all(msg.livePose.timestamp == 0 for _, msg in msgs if msg.which() == 'livePose')
+  needs_migration = all(msg.deviceMotion.timestamp == 0 for _, msg in msgs if msg.which() == 'deviceMotion')
   if not needs_migration:
     return [], [], []
 
   for index, msg in msgs:
-    if msg.which() == "livePose":
+    if msg.which() == "deviceMotion":
       new_msg = msg.as_builder()
-      new_msg.livePose.timestamp = msg.logMonoTime
+      new_msg.deviceMotion.timestamp = msg.logMonoTime
       ops.append((index, as_reader(new_msg)))
   return ops, [], []
 
@@ -313,7 +315,7 @@ def migrate_pandaStates(msgs):
     "CHEVROLET_BOLT_EUV": GMSafetyFlags.EV | GMSafetyFlags.HW_CAM,
   }
   # TODO: get new Ford route
-  safety_param_migration |= dict.fromkeys((set(FORD) - FORD.with_flags(FordFlags.CANFD)), FordSafetyFlags.LONG_CONTROL)
+  safety_param_migration |= dict.fromkeys({p for p in FORD if not (p.config.flags & FordFlags.CANFD)}, FordSafetyFlags.LONG_CONTROL)
 
   # Migrate safety param base on carParams
   CP = next((m.carParams for _, m in msgs if m.which() == 'carParams'), None)
@@ -387,7 +389,7 @@ def migrate_cameraStates(msgs):
 
     encode_id = frame_to_encode_id[msg.which()].get(camera_state.frameId)
     if encode_id is None:
-      print(f"Missing encoded frame for camera feed {msg.which()} with frameId: {camera_state.frameId}")
+      print(f"Missing encoded frame for camera feed {msg.which()} with frameId: {camera_state.frameId}", file=sys.stderr)
       if len(frame_to_encode_id[msg.which()]) != 0:
         del_ops.append(index)
         continue
@@ -395,7 +397,7 @@ def migrate_cameraStates(msgs):
       # fallback mechanism for logs without encodeIdx (e.g. logs from before 2022 with driver recording disabled)
       # try to fake encode_id by subtracting lowest frameId
       encode_id = camera_state.frameId - min_frame_id[msg.which()]
-      print(f"Faking encodeId to {encode_id} for camera feed {msg.which()} with frameId: {camera_state.frameId}")
+      print(f"Faking encodeId to {encode_id} for camera feed {msg.which()} with frameId: {camera_state.frameId}", file=sys.stderr)
 
     new_msg = messaging.new_message(msg.which())
     new_camera_state = getattr(new_msg, new_msg.which())
@@ -527,3 +529,14 @@ def migrate_driverMonitoringState(msgs):
     ops.append((index, as_reader(new_msg)))
 
   return ops, [], []
+
+
+if __name__ == '__main__':
+  parser = argparse.ArgumentParser(description="Migrate logs")
+  parser.add_argument("input_path", help="Segment identifier or path to file")
+  parser.add_argument("output_path", help="Path to output file")
+  args = parser.parse_args()
+
+  mlr = migrate_all(LogReader(args.input_path))
+  print(f"Saving migrated log to {args.output_path}", file=sys.stderr)
+  save_log(args.output_path , mlr)

@@ -88,9 +88,9 @@ class SelfdriveD:
     if REPLAY:
       # no vipc in replay will make them ignored anyways
       ignore += ['narrowRoadCameraState', 'wideRoadCameraState']
-    self.sm = messaging.SubMaster(['deviceState', 'pandaStates', 'peripheralState', 'modelV2', 'liveCalibration',
-                                   'carOutput', 'driverMonitoringState', 'longitudinalPlan', 'livePose', 'liveDelay',
-                                   'managerState', 'liveParameters', 'radarState', 'liveTorqueParameters',
+    self.sm = messaging.SubMaster(['deviceState', 'pandaStates', 'peripheralState', 'modelV2', 'extrinsicsCalibration',
+                                   'carOutput', 'driverMonitoringState', 'longitudinalPlan', 'deviceMotion', 'lateralDelay',
+                                   'managerState', 'vehicleParameters', 'radarState', 'lateralTorqueParameters',
                                    'controlsState', 'carControl', 'driverAssistance', 'alertDebug', 'userBookmark', 'carrotMan',
                                    'lateralManeuverPlan'] + \
                                    self.camera_packets + self.sensor_packets + self.gps_packets,
@@ -192,19 +192,20 @@ class SelfdriveD:
       self.events.add(EventName.joystickDebug)
       self.startup_event = None
 
-    loading = self.params.get_bool("UsbGpuLoading")
+    loading = self.params.get_bool("ChestnutLoading")
     if self.big_model_loading and not loading:
       self.big_model_ready_t = time.monotonic()
     self.big_model_loading = loading
     if self.big_model_loading:
       self.events.add(EventName.bigModelLoading)
 
-    big_active = self.params.get("UsbGpuActive")
-    usbgpu_present = self.sm['deviceState'].chestnutPresent
+    big_active = self.params.get("ChestnutActive")
+    chestnut_present = self.sm['deviceState'].chestnutPresent
     model_unavailable = big_active is True and self.sm.seen['modelV2'] and not self.sm.alive['modelV2']
-    big_failed = big_active is False or model_unavailable or (self.big_model_active and not usbgpu_present)
+    big_failed = big_active is False or model_unavailable or (self.big_model_active and not chestnut_present)
     if big_failed and not self.big_model_failed:
       self.events.add(EventName.bigModelFailed)
+      self.big_model_ready_t = time.monotonic()
     self.big_model_failed = big_failed
 
     # soft disable if the big model fails
@@ -232,7 +233,9 @@ class SelfdriveD:
 
     # Check for user bookmark press
     if self.sm.updated['userBookmark']:
-      self.events.add(EventName.userBookmark)
+      prime_type = self.params.get("PrimeType")
+      paired = prime_type is not None and int(prime_type) >= 0
+      self.events.add(EventName.userBookmark if paired else EventName.userBookmarkNotPaired)
 
     # Don't add any more events while in dashcam mode
     if self.CP.passive:
@@ -308,11 +311,11 @@ class SelfdriveD:
         self.last_functional_fan_frame = self.sm.frame
 
     # Handle calibration status
-    cal_status = self.sm['liveCalibration'].calStatus
-    if cal_status != log.LiveCalibrationData.Status.calibrated:
-      if cal_status == log.LiveCalibrationData.Status.uncalibrated:
+    cal_status = self.sm['extrinsicsCalibration'].calStatus
+    if cal_status != log.ExtrinsicsCalibration.Status.calibrated:
+      if cal_status == log.ExtrinsicsCalibration.Status.uncalibrated:
         self.events.add(EventName.calibrationIncomplete)
-      elif cal_status == log.LiveCalibrationData.Status.recalibrating:
+      elif cal_status == log.ExtrinsicsCalibration.Status.recalibrating:
         if not self.recalibrating_seen:
           set_offroad_alert("Offroad_Recalibration", True)
         self.recalibrating_seen = True
@@ -329,13 +332,13 @@ class SelfdriveD:
     #  NOTE: To fork maintainers.
     #  Disabling or nerfing safety features will get you and your users banned from our servers.
     #  We recommend that you do not change these numbers from the defaults.
-    if self.sm.updated['liveCalibration']:
-      self.pose_calibrator.feed_live_calib(self.sm['liveCalibration'])
-    if self.sm.updated['livePose']:
-      device_pose = Pose.from_live_pose(self.sm['livePose'])
-      self.calibrated_pose = self.pose_calibrator.build_calibrated_pose(device_pose)
+    if self.sm.updated['extrinsicsCalibration']:
+      self.pose_calibrator.feed_extrinsics_calibration(self.sm['extrinsicsCalibration'])
+    if self.sm.updated['deviceMotion']:
+      device_motion = Pose.from_device_motion(self.sm['deviceMotion'])
+      self.calibrated_pose = self.pose_calibrator.build_calibrated_pose(device_motion)
 
-    if self.calibrated_pose is not None:
+    if self.calibrated_pose is not None and not self.CP.notCar:
       excessive_actuation = self.excessive_actuation_check.update(self.sm, CS, self.calibrated_pose)
       if not self.excessive_actuation and excessive_actuation is not None:
         set_offroad_alert("Offroad_ExcessiveActuation", True, extra_text=str(excessive_actuation))
@@ -394,6 +397,9 @@ class SelfdriveD:
     # Order is very intentional here. Be careful when modifying this.
     # All events here should at least have NO_ENTRY and SOFT_DISABLE.
     num_events = len(self.events)
+
+    if self.big_model_active and big_failed:
+      self.events.add(EventName.bigModelFailed)
 
     not_running = {p.name for p in self.sm['managerState'].processes if not p.running and p.shouldBeRunning}
     if self.sm.recv_frame['managerState'] and len(not_running):
@@ -486,11 +492,13 @@ class SelfdriveD:
       self.logged_comm_issue = None
 
     if not self.CP.notCar and not big_model_settling:  # localization has nothing to work with during the load
-      if not self.sm['livePose'].posenetOK:
+      # the defaults of a message that was never received are not a localizer failure
+      if self.sm.seen['deviceMotion'] and not self.sm['deviceMotion'].posenetOK:
         self.events.add(EventName.posenetInvalid)
-      if not self.sm['livePose'].inputsOK:
+      if self.sm.seen['deviceMotion'] and not self.sm['deviceMotion'].inputsOK:
         self.events.add(EventName.locationdTemporaryError)
-      if not self.sm['liveParameters'].valid and cal_status == log.LiveCalibrationData.Status.calibrated and not TESTING_CLOSET and (not SIMULATION or REPLAY):
+      if (self.sm.seen['vehicleParameters'] and not self.sm['vehicleParameters'].valid and cal_status == log.ExtrinsicsCalibration.Status.calibrated and
+          not TESTING_CLOSET and (not SIMULATION or REPLAY)):
         self.events.add(EventName.paramsdTemporaryError)
 
     # conservative HW alert. if the data or frequency are off, locationd will throw an error
@@ -530,7 +538,7 @@ class SelfdriveD:
 
     # GPS checks
     gps_ok = self.sm.recv_frame[self.gps_location_service] > 0 and (self.sm.frame - self.sm.recv_frame[self.gps_location_service]) * DT_CTRL < 2.0
-    if not gps_ok and self.sm['livePose'].inputsOK and (self.distance_traveled > 1500):
+    if not gps_ok and self.sm['deviceMotion'].inputsOK and (self.distance_traveled > 1500):
       self.events.add(EventName.noGps)
     #if gps_ok:
     #  self.distance_traveled = 0
@@ -538,7 +546,7 @@ class SelfdriveD:
 
     # TODO: fix simulator
     if not SIMULATION or REPLAY:
-      if self.sm['modelV2'].frameDropPerc > 20:
+      if self.sm['modelV2'].frameDropPerc > 20 and not big_model_settling:
         self.events.add(EventName.modeldLagging)
 
     # Decrement personality on distance button press

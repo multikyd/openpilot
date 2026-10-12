@@ -128,6 +128,7 @@ struct OnroadEvent @0xc4fa6047f024e718 {
     personalityChanged @91;
     aeb @92;
     userBookmark @95;
+    userBookmarkNotPaired @104;
     excessiveActuation @96;
     bigModelLoading @100;
     bigModelFailed @102;
@@ -140,19 +141,19 @@ struct OnroadEvent @0xc4fa6047f024e718 {
     bigModelReadyDEPRECATED @101;
 
     # kisa
-    trafficStopping @104;
-    audioPrompt @105;
-    audioRefuse @106;
-    stopStop @107;
-    audioLaneChange @108;
-    trafficSignGreen @109;
-    trafficSignChanged @110;
-    turningLeft @111;
-    turningRight @112;
-    chimeAtResume @113;
-    laneChangeMerging @114;
-    laneChangeFinish @115;
-    softHold @116;
+    trafficStopping @105;
+    audioPrompt @106;
+    audioRefuse @107;
+    stopStop @108;
+    audioLaneChange @109;
+    trafficSignGreen @110;
+    trafficSignChanged @111;
+    turningLeft @112;
+    turningRight @113;
+    chimeAtResume @114;
+    laneChangeMerging @115;
+    laneChangeFinish @116;
+    softHold @117;
   }
 }
 
@@ -182,12 +183,7 @@ struct InitData {
   gitSrcCommit @23 :Text;
   gitSrcCommitDate @24 :Text;
 
-  androidProperties @16 :Map(Text, Text);
-
-  pandaInfo @8 :PandaInfo;
-
   dirty @9 :Bool;
-  passive @12 :Bool;
   params @17 :Map(Text, Data);
 
   commands @19 :Map(Text, Data);
@@ -205,6 +201,17 @@ struct InitData {
     mici @7;  # comma four
   }
 
+  deprecated :group {
+    gctx @1 :Text;
+    androidBuildInfo @5 :Deprecated.AndroidBuildInfo;
+    androidSensors @6 :List(Deprecated.AndroidSensor);
+    chffrAndroidExtra @7 :ChffrAndroidExtra;
+    pandaInfo @8 :PandaInfo;
+    passive @12 :Bool;
+    iosBuildInfo @14 :Deprecated.IosBuildInfo;
+    androidProperties @16 :Map(Text, Text);
+  }
+
   struct PandaInfo {
     hasPanda @0 :Bool;
     dongleId @1 :Text;
@@ -214,14 +221,6 @@ struct InitData {
 
   struct ChffrAndroidExtra {
     allCameraCharacteristics @0 :Map(Text, Text);
-  }
-
-  deprecated :group {
-    gctx @1 :Text;
-    androidBuildInfo @5 :Deprecated.AndroidBuildInfo;
-    androidSensors @6 :List(Deprecated.AndroidSensor);
-    chffrAndroidExtra @7 :ChffrAndroidExtra;
-    iosBuildInfo @14 :Deprecated.IosBuildInfo;
   }
 }
 
@@ -589,6 +588,9 @@ struct PandaState @0xa7649e2575e4591e {
   controlsAllowedRESERVED1 @38 :Bool;
   controlsAllowedRESERVED2 @39 :Bool;
 
+  nmiReset @40 :Bool;
+  hardfaultReset @41 :Bool;
+
   enum FaultStatus {
     none @0;
     faultTemp @1;
@@ -711,6 +713,7 @@ struct PeripheralState {
 
 struct UsbState {
   devices @0 :List(Device);
+  connected @1 :Bool;
 
   struct Device {
     busnum @0 :UInt8;
@@ -721,6 +724,13 @@ struct UsbState {
     manufacturer @6 :Text;
     product @5 :Text;
     linkErrorCount @7 :UInt16;
+    usb3Lane @8 :Usb3Lane;
+
+    enum Usb3Lane {
+      unknown @0;
+      a @1;
+      b @2;
+    }
   }
 }
 
@@ -735,6 +745,7 @@ struct ChestnutState {
   pcieLtssm @7 :UInt8;
   supplyVoltage @8 :UInt16;  # mV
   supplyCurrent @9 :Int16;  # mA
+  supplyFault @10 :Bool;
 }
 
 struct RadarState @0x9a185389d6fdd05f {
@@ -789,7 +800,7 @@ struct RadarState @0x9a185389d6fdd05f {
   }
 }
 
-struct LiveCalibrationData {
+struct ExtrinsicsCalibration @0x96df70754d8390bc {
   calStatus @11 :Status;
   calCycle @2 :Int32;
   calPerc @3 :Int8;
@@ -1049,6 +1060,7 @@ struct DrivingModelData {
   frameIdExtra @1 :UInt32;
   frameDropPerc @6 :Float32;
   modelExecutionTime @7 :Float32;
+  big @8 :Bool;
 
   action @2 :ModelDataV2.Action;
 
@@ -1290,24 +1302,25 @@ struct LongitudinalPlan @0xe00b5b3eba12876c {
   shouldStop @37: Bool;
   allowThrottle @38: Bool;
   allowBrake @39: Bool;
+  accelBoost @40 :Float32;
 
-  xState @40: Int32;
-  trafficState @41: Int32;
-  events @42:List(OnroadEvent);
-  vTargetNow @43: Float32;
-  cruiseTarget @44: Float32;
-  jTargetNow @45: Float32;
-  tFollow @46: Float32;
-  desiredDistance @47: Float32;
-  myDrivingMode @48: Int32;
+  xState @41: Int32;
+  trafficState @42: Int32;
+  events @43:List(OnroadEvent);
+  vTargetNow @44: Float32;
+  cruiseTarget @45: Float32;
+  jTargetNow @46: Float32;
+  tFollow @47: Float32;
+  desiredDistance @48: Float32;
+  myDrivingMode @49: Int32;
 
   solverExecutionTime @35 :Float32;
 
-  e2eX @49 :List(Float64);
-  lead0Obstacle @50 :List(Float64);
-  lead1Obstacle @51 :List(Float64);
-  personality @52: UInt8;
-  enableSpeedTF @53: Int8;
+  e2eX @50 :List(Float64);
+  lead0Obstacle @51 :List(Float64);
+  lead1Obstacle @52 :List(Float64);
+  personality @53: UInt8;
+  enableSpeedTF @54: Int8;
 
   enum LongitudinalPlanSource {
     cruise @0;
@@ -1466,7 +1479,7 @@ struct LiveLocationKalman {
 }
 
 
-struct LivePose {
+struct DeviceMotion @0xc24ca2b57206b44d {
   # More info on reference frames:
   # https://github.com/commaai/openpilot/tree/master/openpilot/common/transformations
   orientationNED @0 :XYZMeasurement;
@@ -2307,6 +2320,7 @@ struct DriverMonitoringState {
       pose @0: Bool;
       eye @1: Bool;
       phone @2: Bool;
+      sleep @3: Bool;
     }
 
     struct Pose {
@@ -2348,7 +2362,7 @@ struct Boot {
   }
 }
 
-struct LiveParametersData {
+struct VehicleParameters @0xd9058dcb967c2753 {
   valid @0 :Bool;
   gyroBias @1 :Float32;
   angleOffsetDeg @2 :Float32;
@@ -2382,8 +2396,8 @@ struct LiveParametersData {
   }
 }
 
-struct LiveTorqueParametersData {
-  liveValid @0 :Bool;
+struct LateralTorqueParameters @0xe61690eb0b091692 {
+  valid @0 :Bool;
   latAccelFactorRaw @1 :Float32;
   latAccelOffsetRaw @2 :Float32;
   frictionCoefficientRaw @3 :Float32;
@@ -2399,7 +2413,7 @@ struct LiveTorqueParametersData {
   calPerc @13 :Int8;
 }
 
-struct LiveDelayData {
+struct LateralDelay @0x98dfdb22c44df8d4 {
   lateralDelay @0 :Float32;
   validBlocks @1 :Int32;
   status @2 :Status;
@@ -2617,9 +2631,9 @@ struct Event {
     pandaStates @81 :List(PandaState);
     peripheralState @80 :PeripheralState;
     radarState @13 :RadarState;
-    liveTracks @131 :Car.RadarData;
+    radarTracks @131 :Car.RadarData;
     sendcan @17 :List(CanData);
-    liveCalibration @19 :LiveCalibrationData;
+    extrinsicsCalibration @19 :ExtrinsicsCalibration;
     carState @22 :Car.CarState;
     carControl @23 :Car.CarControl;
     carOutput @127 :Car.CarOutput;
@@ -2630,15 +2644,15 @@ struct Event {
     qcomGnss @31 :QcomGnss;
     gpsLocationExternal @48 :GpsLocationData;
     gpsLocation @21 :GpsLocationData;
-    liveParameters @61 :LiveParametersData;
-    liveTorqueParameters @94 :LiveTorqueParametersData;
-    liveDelay @146 : LiveDelayData;
+    vehicleParameters @61 :VehicleParameters;
+    lateralTorqueParameters @94 :LateralTorqueParameters;
+    lateralDelay @146 : LateralDelay;
     cameraOdometry @63 :CameraOdometry;
     thumbnail @66: Thumbnail;
     onroadEvents @134: List(OnroadEvent);
     carParams @69: Car.CarParams;
     driverMonitoringState @151 :DriverMonitoringState;
-    livePose @129 :LivePose;
+    deviceMotion @129 :DeviceMotion;
     modelV2 @75 :ModelDataV2;
     drivingModelData @128 :DrivingModelData;
     driverStateV2 @92 :DriverStateV2;
@@ -2667,6 +2681,7 @@ struct Event {
     clocks @35 :Clocks;
     deviceState @6 :DeviceState;
     chestnutState @152 :ChestnutState;
+    chestnutGpuState @153 :ChestnutState;
     logMessage @18 :Text;
     errorLogMessage @85 :Text;
 
@@ -2777,8 +2792,8 @@ struct Event {
     driverMonitoringStateDEPRECATED @71 :DriverMonitoringStateDEPRECATED;
     gpsNMEADEPRECATED @3 :GPSNMEAData;
     uploaderStateDEPRECATED @79 :UploaderState;
-    navInstructionDEPRECATED @82 :NavInstruction;
-    navRouteDEPRECATED @83 :NavRoute;
+    navInstruction @82 :NavInstruction;
+    navRoute @83 :NavRoute;
     navThumbnailDEPRECATED @84 :Thumbnail;
     gnssMeasurementsDEPRECATED @91 :GnssMeasurements;
     mapRenderStateDEPRECATED @105: MapRenderState;

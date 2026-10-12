@@ -14,7 +14,7 @@ from openpilot.common.transformations.camera import DEVICE_CAMERAS, DeviceCamera
 from openpilot.common.transformations.orientation import rot_from_euler
 
 OpState = log.SelfdriveState.OpenpilotState
-CALIBRATED = log.LiveCalibrationData.Status.calibrated
+CALIBRATED = log.ExtrinsicsCalibration.Status.calibrated
 NARROW_ROAD_CAM = VisionStreamType.VISION_STREAM_NARROW_ROAD
 WIDE_CAM = VisionStreamType.VISION_STREAM_WIDE_ROAD
 DEFAULT_DEVICE_CAMERA = DEVICE_CAMERAS["tici", "ar0231"]
@@ -25,8 +25,8 @@ BORDER_COLORS = {
   UIStatus.ENGAGED: rl.Color(0x16, 0x7F, 0x40, 0xFF),  # Green for engaged state
 }
 
-WIDE_CAM_MAX_SPEED = 10.0  # m/s (22 mph)
-ROAD_CAM_MIN_SPEED = 15.0  # m/s (34 mph)
+WIDE_CAM_MAX_SPEED = 5.0  # m/s (11 mph)
+ROAD_CAM_MIN_SPEED = 10.0  # m/s (22 mph)
 INF_POINT = np.array([1000.0, 0.0, 0.0])
 
 
@@ -131,11 +131,11 @@ class AugmentedRoadView(CameraView):
     if not self.device_camera and sm.seen['narrowRoadCameraState'] and sm.seen['deviceState']:
       self.device_camera = DEVICE_CAMERAS[(str(sm['deviceState'].deviceType), str(sm['narrowRoadCameraState'].sensor))]
 
-    # Check if live calibration data is available and valid
-    if not (sm.updated["liveCalibration"] and sm.valid['liveCalibration']):
+    # Check if camera calibration data is available and valid
+    if not (sm.updated["extrinsicsCalibration"] and sm.valid['extrinsicsCalibration']):
       return
 
-    calib = sm['liveCalibration']
+    calib = sm['extrinsicsCalibration']
     if len(calib.rpyCalib) != 3 or calib.calStatus != CALIBRATED:
       return
 
@@ -151,7 +151,7 @@ class AugmentedRoadView(CameraView):
   def _calc_frame_matrix(self, rect: rl.Rectangle) -> np.ndarray:
     # Check if we can use cached matrix
     cache_key = (
-      ui_state.sm.recv_frame['liveCalibration'],
+      ui_state.sm.recv_frame['extrinsicsCalibration'],
       self._content_rect.width,
       self._content_rect.height,
       self.stream_type

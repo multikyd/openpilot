@@ -1,11 +1,12 @@
 import colorsys
 import numpy as np
 import pyray as rl
-from openpilot.cereal import messaging
+from openpilot.cereal import log, messaging
 from opendbc.car.structs import car
 from dataclasses import dataclass, field
 from openpilot.common.params import Params
 from openpilot.common.filter_simple import FirstOrderFilter
+from openpilot.selfdrive.controls.radard import RADAR_TO_CAMERA
 from openpilot.selfdrive.locationd.calibrationd import HEIGHT_INIT
 from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus
 from openpilot.selfdrive.ui.mici.onroad import blend_colors
@@ -16,6 +17,8 @@ from openpilot.system.ui.widgets import Widget
 CLIP_MARGIN = 500
 MIN_DRAW_DISTANCE = 10.0
 MAX_DRAW_DISTANCE = 100.0
+LEAD_BAR_LENGTH = 12.0  # px
+LEAD_BAR_WIDTH = 1.8  # m
 
 THROTTLE_COLORS = [
   rl.Color(13, 248, 122, 102),   # HSLF(148/360, 0.94, 0.51, 0.4)
@@ -55,11 +58,12 @@ class ModelPoints:
   projected_points: np.ndarray = field(default_factory=lambda: np.empty((0, 2), dtype=np.float32))
 
 
-@dataclass
 class LeadVehicle:
-  glow: list[tuple[float, float]] = field(default_factory=list)
-  chevron: list[tuple[float, float]] = field(default_factory=list)
-  fill_alpha: int = 0
+  def __init__(self):
+    self.bar = np.empty((0, 2), dtype=np.float32)
+    self.d_filter = FirstOrderFilter(0.0, 0.2, 1 / gui_app.target_fps, initialized=False)
+    self.y_filter = FirstOrderFilter(0.0, 0.2, 1 / gui_app.target_fps, initialized=False)
+    self.fade_filter = FirstOrderFilter(0.0, 0.1, 1 / gui_app.target_fps)
 
 
 class ModelRenderer(Widget):
@@ -113,7 +117,7 @@ class ModelRenderer(Widget):
     self._torque_filter.update(-ui_state.sm['carOutput'].actuatorsOutput.torque)
 
     # Check if data is up-to-date
-    if (sm.recv_frame["liveCalibration"] < ui_state.started_frame or
+    if (sm.recv_frame["extrinsicsCalibration"] < ui_state.started_frame or
         sm.recv_frame["modelV2"] < ui_state.started_frame):
       return
 
@@ -125,8 +129,8 @@ class ModelRenderer(Widget):
     # Update state
     self._experimental_mode = sm['selfdriveState'].experimentalMode
 
-    live_calib = sm['liveCalibration']
-    self._path_offset_z = live_calib.height[0] if live_calib.height else HEIGHT_INIT[0]
+    extrinsics_calibration = sm['extrinsicsCalibration']
+    self._path_offset_z = extrinsics_calibration.height[0] if extrinsics_calibration.height else HEIGHT_INIT[0]
 
     if sm.updated['carParams']:
       self._longitudinal_control = sm['carParams'].openpilotLongitudinalControl
@@ -147,8 +151,6 @@ class ModelRenderer(Widget):
         return
 
       self._update_model(lead_one, path_x_array)
-      if render_lead_indicator:
-        self._update_leads(radar_state, path_x_array)
       self._transform_dirty = False
 
     # Draw elements (hide when disengaged)
@@ -156,8 +158,11 @@ class ModelRenderer(Widget):
       self._draw_lane_lines()
       self._draw_path(sm)
 
-    if render_lead_indicator and radar_state:
+    if render_lead_indicator:
+      self._update_leads(sm)
       self._draw_lead_indicator()
+    else:
+      self._lead_vehicles = [LeadVehicle(), LeadVehicle()]
 
   def _update_raw_points(self, model):
     """Update raw 3D points from model data"""
