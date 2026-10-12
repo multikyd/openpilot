@@ -196,7 +196,12 @@ class HudRenderer(Widget):
       if ui_state.bumpTarget <= 0 and ui_state.bumpLearningText:
         # A brief result strip, confined to the middle; retain all left-side status icons.
         text = ui_state.bumpLearningText
-        if not ui_state.is_metric and ('다음 ' in text or '유지 ' in text):
+        for old, new in (("큰 충격 · 다음", "Hard bump: next"), ("부드러움 · 다음", "Smooth: next"),
+                         ("목표 유지", "Keep target"), ("노면 충격 저장", "Impact saved")):
+          text = text.replace(old, new)
+        if not text.isascii():
+          text = "Impact saved"
+        if not ui_state.is_metric and ('next ' in text or 'target ' in text):
           prefix, speed = text.rsplit(' ', 1)
           text = f"{prefix} {round(float(speed) * KM_TO_MILE)}"
         size = 22
@@ -212,7 +217,7 @@ class HudRenderer(Widget):
     rl.draw_texture_pro(img, rl.Rectangle(0, 0, img.width, img.height), icon, rl.Vector2(0, 0), 0, rl.WHITE)
     speed = round(target * (1 if ui_state.is_metric else KM_TO_MILE))
     for text, y, size, color in (
-        ("목표" if ui_state.is_metric else "TARGET", 105, 24, rl.WHITE),
+        ("TARGET", 105, 24, rl.WHITE),
         (str(speed), 129, 64, rl.Color(255, 220, 70, 255)),
         (f"{max(0, distance):.0f}m", 198, 32, rl.WHITE)):
       width = measure_text_cached(self._font_bold, text, size).x
