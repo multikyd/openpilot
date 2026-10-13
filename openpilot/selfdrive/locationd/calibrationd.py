@@ -280,7 +280,7 @@ def main() -> NoReturn:
 
       yaw_trim_deg = params_reader.get("CameraYawTrimDeg")
       trim_active = abs(yaw_trim_deg) > 1e-6
-      calib_done = calibrator.cal_status == log.LiveCalibrationData.Status.calibrated
+      calib_done = calibrator.cal_status == log.ExtrinsicsCalibration.Status.calibrated
 
       freeze_calibration = trim_active and calib_done
       if not freeze_calibration:

@@ -259,7 +259,6 @@ class CarInterface(CarInterfaceBase):
     params = Params()
     if params.get("EnableRadarTracks") > 0 and not CP.flags & HyundaiFlags.CANFD:
       result = enable_radar_tracks(CP, can_recv, can_send)
-      params.put_bool("EnableRadarTracksResult", result)
 
     # for blinkers
     if CP.flags & HyundaiFlags.ENABLE_BLINKERS:
