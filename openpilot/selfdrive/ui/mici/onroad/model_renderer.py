@@ -73,6 +73,8 @@ class ModelRenderer(Widget):
     self._experimental_mode = False
     self._blend_filter = FirstOrderFilter(1.0, 0.25, 1 / gui_app.target_fps)
     self._prev_allow_throttle = True
+    self._path_gradient_key = None
+    self._path_gradient: Gradient | None = None
     self._lane_line_probs = np.zeros(4, dtype=np.float32)
     self._road_edge_stds = np.zeros(2, dtype=np.float32)
     self._lead_vehicles = [LeadVehicle(), LeadVehicle()]
@@ -108,8 +110,10 @@ class ModelRenderer(Widget):
       self._longitudinal_control = cp.openpilotLongitudinalControl
 
   def set_transform(self, transform: np.ndarray):
-    self._car_space_transform = transform.astype(np.float32)
-    self._transform_dirty = True
+    transform = transform.astype(np.float32)
+    if not np.array_equal(self._car_space_transform, transform):
+      self._car_space_transform = transform
+      self._transform_dirty = True
 
   def _render(self, rect: rl.Rectangle):
     sm = ui_state.sm
@@ -150,7 +154,7 @@ class ModelRenderer(Widget):
       if path_x_array.size == 0:
         return
 
-      self._update_model(lead_one, path_x_array)
+      self._update_model(lead_one, path_x_array, update_lane_lines=model_updated or self._transform_dirty)
       self._transform_dirty = False
 
     # Draw elements (hide when disengaged)
@@ -218,23 +222,25 @@ class ModelRenderer(Widget):
     bar[[1, 2]] = far + (near - far) * np.clip(length, 3.0, LEAD_BAR_LENGTH) / length
     return bar.astype(np.float32)
 
-  def _update_model(self, lead, path_x_array):
+  def _update_model(self, lead, path_x_array, update_lane_lines=True):
     """Update model visualization data based on model message"""
     max_distance = np.clip(path_x_array[-1], MIN_DRAW_DISTANCE, MAX_DRAW_DISTANCE)
-    max_idx = self._get_path_length_idx(self._lane_lines[0].raw_points[:, 0], max_distance)
+    # Radar updates affect path clipping and leads, not lane geometry.
+    if update_lane_lines:
+      max_idx = self._get_path_length_idx(self._lane_lines[0].raw_points[:, 0], max_distance)
 
-    # Update lane lines using raw points
-    line_width_factor = 0.12
-    for i, lane_line in enumerate(self._lane_lines):
-      if i in (1, 2):
-        line_width_factor = 0.16
-      lane_line.projected_points = self._map_line_to_polygon(
-        lane_line.raw_points, line_width_factor * self._lane_line_probs[i], 0.0, max_idx
-      )
+      # Update lane lines using raw points
+      line_width_factor = 0.12
+      for i, lane_line in enumerate(self._lane_lines):
+        if i in (1, 2):
+          line_width_factor = 0.16
+        lane_line.projected_points = self._map_line_to_polygon(
+          lane_line.raw_points, line_width_factor * self._lane_line_probs[i], 0.0, max_idx
+        )
 
-    # Update road edges using raw points
-    for road_edge in self._road_edges:
-      road_edge.projected_points = self._map_line_to_polygon(road_edge.raw_points, line_width_factor, 0.0, max_idx)
+      # Update road edges using raw points
+      for road_edge in self._road_edges:
+        road_edge.projected_points = self._map_line_to_polygon(road_edge.raw_points, line_width_factor, 0.0, max_idx)
 
     # Update path using raw points
     if lead and lead.present:
@@ -364,16 +370,20 @@ class ModelRenderer(Widget):
     else:
       # Blend throttle/no throttle colors based on transition
       blend_factor = round(self._blend_filter.x * 100) / 100
-      if ui_state.activeLaneLine:
-        blended_colors = self._blend_colors(NO_THROTTLE_COLORS, THROTTLE_COLORS, blend_factor)
-      else:
-        blended_colors = self._blend_colors(LL_NO_THROTTLE_COLORS, LL_THROTTLE_COLORS, blend_factor)
-      gradient = Gradient(
-        start=(0.0, 1.0),  # Bottom of path
-        end=(0.0, 0.0),  # Top of path
-        colors=blended_colors,
-        stops=[0.0, 0.5, 1.0],
-      )
+      gradient_key = (ui_state.activeLaneLine, blend_factor)
+      if self._path_gradient_key != gradient_key:
+        if ui_state.activeLaneLine:
+          blended_colors = self._blend_colors(NO_THROTTLE_COLORS, THROTTLE_COLORS, blend_factor)
+        else:
+          blended_colors = self._blend_colors(LL_NO_THROTTLE_COLORS, LL_THROTTLE_COLORS, blend_factor)
+        self._path_gradient = Gradient(
+          start=(0.0, 1.0),  # Bottom of path
+          end=(0.0, 0.0),  # Top of path
+          colors=blended_colors,
+          stops=[0.0, 0.5, 1.0],
+        )
+        self._path_gradient_key = gradient_key
+      gradient = self._path_gradient
 
       if ui_state.status == UIStatus.DISENGAGED:
         draw_polygon(self._rect, path_pts, rl.Color(0, 0, 0, 90))

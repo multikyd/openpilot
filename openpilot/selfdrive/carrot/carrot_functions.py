@@ -1,6 +1,11 @@
 import time
 from enum import Enum
 from collections import deque
+import json
+import os
+import time
+from openpilot.common.swaglog import cloudlog
+from openpilot.selfdrive.carrot.signal_follow import SignalFollowAssist
 
 from openpilot.cereal import log
 from openpilot.common.params import Params
@@ -173,6 +178,13 @@ class CarrotPlanner:
 
     self._stop_x_rl = None
     self.last_event_time = 0.0
+    self.signal_follow = SignalFollowAssist(os.getenv("TMAP_SIGNAL_FOLLOW", "1") != "0")
+    self._signal_memory = Params("/dev/shm/params")
+    self._signal_snapshot = {}
+    self._signal_read_time = -1.0
+    self._signal_log_time = -1.0
+    self._signal_was_active = False
+
 
   def _params_update(self):
     self.frame += 1
@@ -220,6 +232,31 @@ class CarrotPlanner:
     elif self.params_count >= 100:
 
       self.params_count = 0
+
+  def _update_signal_follow(self, sm):
+    now = time.monotonic()
+    if self.signal_follow.enabled and now - self._signal_read_time >= .2:
+      self._signal_read_time = now
+      try:
+        raw = self._signal_memory.get("TrafficLight")
+        decoded = json.loads(raw) if raw else {}
+        self._signal_snapshot = decoded.get("directional", {}) if isinstance(decoded, dict) else {}
+      except (ValueError, TypeError):
+        self._signal_snapshot = {}
+    cs = sm['carState']
+    active = bool(sm.alive['carControl'] and sm.alive['radarState'] and sm.alive['carrotMan'] and
+                  sm['carControl'].longActive and not sm['selfdriveState'].experimentalMode and
+                  self.trafficLightDetectMode > 0)
+    override = cs.gasPressed or cs.brakePressed or cs.leftBlinker or cs.rightBlinker or self.desireState > .1
+    self.signal_follow.update(self._signal_snapshot, now, DT_MDL, cs.vEgo,
+                              sm['radarState'].leadOne, active, override)
+    is_active = self.signal_follow.strength > 0 or self.signal_follow.gap_extra > 0
+    signal_seen = bool(self._signal_snapshot) and active and sm['radarState'].leadOne.present
+    if ((is_active or signal_seen) and now - self._signal_log_time >= 10.0) or (self._signal_was_active and not is_active):
+      self._signal_log_time = now
+      cloudlog.event("tmap_signal_follow", strength=float(self.signal_follow.strength),
+                     extra_gap_s=float(self.signal_follow.gap_extra), reason=self.signal_follow.reason)
+    self._signal_was_active = is_active
 
   def get_carrot_accel(self, v_ego):
     cruiseMaxVals = [self.cruiseMaxVals0, self.cruiseMaxVals1, self.cruiseMaxVals2, self.cruiseMaxVals3, self.cruiseMaxVals4, self.cruiseMaxVals5, self.cruiseMaxVals6]
@@ -359,6 +396,8 @@ class CarrotPlanner:
 
       t_follow = np.clip(t_follow, 0.3, 2.0)
 
+    if lead.present and self.desireState <= .1:
+      t_follow += self.signal_follow.gap_extra
     return self.apply_t_follow(t_follow, 0.0)
 
 
@@ -504,6 +543,7 @@ class CarrotPlanner:
     v_ego_cluster_kph = v_ego_cluster * CV.MS_TO_KPH
 
     leadOne = radarstate.leadOne
+    self._update_signal_follow(sm)
     self.mySafeFactor = 1.0
     if self.myDrivingMode == DrivingMode.Eco: # eco
       self.mySafeFactor = self.myEcoModeFactor

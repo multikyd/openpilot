@@ -78,6 +78,7 @@ def check_selfdrive_timeout_alert(sm):
 class Soundd:
   def __init__(self):
     self.soundVolumeAdjust = float(Params().get("SoundVolumeAdjust"))/100.
+    self.bump_sound_sequence = None
     self.load_sounds()
 
     self.current_alert = AudibleAlert.none
@@ -159,9 +160,20 @@ class Soundd:
       self.current_sound = new_alert
       self.current_sound_frame = 0
 
+  def update_carrot_alert(self, sm, new_alert):
+    cm = sm['carrotMan']
+    sequence = cm.bumpSoundSequence
+    changed = self.bump_sound_sequence is not None and sequence > self.bump_sound_sequence
+    self.bump_sound_sequence = sequence
+    if (changed and cm.bumpSoundEnabled and not 0 <= cm.leftSec <= 11 and
+        sm.valid['carrotMan'] and sm.alive['carrotMan'] and
+        time.monotonic() - sm.recv_time['carrotMan'] < 1 and new_alert == AudibleAlert.none):
+      return AudibleAlert.dingdong
+    return new_alert
+
   def get_audible_alert(self, sm):
     if sm.updated['selfdriveState']:
-      new_alert = sm['selfdriveState'].alertSound.raw
+      new_alert = self.update_carrot_alert(sm, sm['selfdriveState'].alertSound.raw)
       self.update_alert(new_alert)
     elif check_selfdrive_timeout_alert(sm):
       self.update_alert(AudibleAlert.warningImmediate)
@@ -186,7 +198,7 @@ class Soundd:
     import sounddevice as sd
     micd.patch_sounddevice(sd)
 
-    sm = messaging.SubMaster(['selfdriveState', 'soundPressure'])
+    sm = messaging.SubMaster(['selfdriveState', 'soundPressure', 'carrotMan'])
 
     with self.get_stream(sd) as stream:
       rk = Ratekeeper(20)

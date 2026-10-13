@@ -195,12 +195,10 @@ def triangulate(pts: np.ndarray) -> list[tuple[float, float]]:
   if len(pts) % 2 != 0:
     pts = pts[:-1]
 
-  tri_strip = []
-  for i in range(len(pts) // 2):
-    tri_strip.append(pts[i])
-    tri_strip.append(pts[-i - 1])
-
-  return cast(list, np.array(tri_strip).tolist())
+  tri_strip = np.empty_like(pts)
+  tri_strip[0::2] = pts[:len(pts) // 2]
+  tri_strip[1::2] = pts[len(pts) // 2:][::-1]
+  return cast(list, tri_strip.tolist())
 
 
 def draw_polygon(origin_rect: rl.Rectangle, points: np.ndarray,

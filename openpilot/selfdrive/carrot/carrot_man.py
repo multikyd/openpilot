@@ -249,6 +249,8 @@ class CarrotMan:
     self.pm = messaging.PubMaster(['carrotMan'])
 
     self.carrot_serv = CarrotServ()
+    # Drain every IMU sample at 10 Hz; SubMaster would retain only the newest.
+    self.bump_accel_sock = messaging.sub_sock("accelerometer")
 
     self.show_panda_debug = False
     self.broadcast_ip = self.get_broadcast_address()
@@ -334,6 +336,10 @@ class CarrotMan:
     while self.is_running:
       try:
         self.sm.update(0)
+        for event in messaging.drain_sock(self.bump_accel_sock):
+          accel = event.accelerometer
+          if event.valid and accel.which() == "acceleration":
+            self.carrot_serv.bump_memory.sensor(accel.timestamp * 1e-9, accel.acceleration.v)
         remote_addr = self.remote_addr
         remote_ip = remote_addr[0] if remote_addr is not None else ""
         vturn_speed = self.carrot_curve_speed(self.sm)
@@ -910,6 +916,26 @@ class CarrotMan:
       except Exception as e:
         print("NavDestination put error:", e)
 
+  def _put_directional_signal(self, data):
+    from openpilot.selfdrive.carrot.signal_follow import directional_signal
+    now = time.monotonic()
+    serv = self.carrot_serv
+    navigation = {
+      "age": now - serv.last_update_gps_time_navi,
+      "lat": serv.vpPosPointLatNavi, "lon": serv.vpPosPointLonNavi,
+      "bearing": serv.nPosAngle, "speed": serv.nPosSpeed,
+      "turn": serv.nTBTTurnType, "turn_distance": serv.nTBTDist,
+    }
+    gps = self.sm[self.gps_location_service]
+    physical_gps = {
+      "valid": bool(self.sm.valid[self.gps_location_service] and gps.hasFix),
+      "age": now - self.sm.recv_time[self.gps_location_service],
+      "lat": gps.latitude, "lon": gps.longitude, "bearing": gps.bearingDeg,
+      "speed": gps.speed, "accuracy": gps.horizontalAccuracy,
+    }
+    self._directional_signal = directional_signal(data, now, navigation, physical_gps)
+    self.params_memory.put("TrafficLight", json.dumps({"directional": self._directional_signal}))
+
   def _put_traffic_light(self, lamp: str, remain: Any, distance: Any = 0, lat: Any = None, lon: Any = None):
     try:
       remain_int = int(float(remain or 0))
@@ -939,6 +965,9 @@ class CarrotMan:
     except Exception:
       pass
 
+    directional = getattr(self, "_directional_signal", None)
+    if directional is not None:
+      traffic_light["directional"] = directional
     self.params_memory.put("TrafficLight", json.dumps(traffic_light))
 
   def handle_traffic_light(self, d: dict):
@@ -985,6 +1014,9 @@ class CarrotMan:
   def handle_traffic_light_detail(self, d: dict):
     if not isinstance(d, dict):
       return
+
+    # Preserve all directions before legacy display logic chooses one color.
+    self._put_directional_signal(d)
 
     green_checks = (
       ("left", "left", "left_remain_time"),

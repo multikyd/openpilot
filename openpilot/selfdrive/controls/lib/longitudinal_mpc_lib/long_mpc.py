@@ -103,6 +103,23 @@ def desired_follow_distance(v_ego, v_lead, comfort_brake, stop_distance, t_follo
   return get_safe_obstacle_distance(v_ego, t_follow, comfort_brake, stop_distance) - get_stopped_equivalence_factor(v_lead)
 
 
+def recovering_lead_tau(lead, a_lead_tau):
+  # Only shorten persistence when a moving radar lead's braking is easing,
+  # relative closing speed is small, and its current deceleration is mild.
+  # A stopped/slow lead, strong braking, or rapid closing keeps the original
+  # conservative prediction.
+  values = [lead.vLead, lead.vRel, lead.aLeadK, lead.jLead, a_lead_tau]
+  if not lead.present or not lead.radar or not np.all(np.isfinite(values)):
+    return a_lead_tau
+  if lead.vLead <= 4.0 or not -0.75 < lead.aLeadK < 0.0 or lead.vRel <= -2.0 or lead.jLead <= 0.0:
+    return a_lead_tau
+  weight = (float(np.interp(lead.vLead, [4.0, 6.0], [0.0, 1.0])) *
+            float(np.interp(lead.aLeadK, [-0.75, -0.25], [0.0, 1.0])) *
+            float(np.interp(lead.vRel, [-2.0, -0.5], [0.0, 1.0])) *
+            float(np.interp(lead.jLead, [0.0, 0.5], [0.0, 1.0])))
+  return a_lead_tau + weight * max(0.0, _LEAD_ACCEL_TAU - a_lead_tau)
+
+
 def gen_long_model():
   model = AcadosModel()
   model.name = MODEL_NAME
@@ -284,6 +301,8 @@ class LongitudinalMpc:
     self.time_linearization = 0.0
     self.time_integrator = 0.0
     self.x0 = np.zeros(X_DIM)
+    self.lead_loss_armed = False
+    self.lead_loss_remaining = 0.0
     self.set_weights()
 
   def set_cost_weights(self, cost_weights, constraint_cost_weights):
@@ -341,6 +360,8 @@ class LongitudinalMpc:
       v_lead = lead.vLead
       a_lead = lead.aLeadK
       a_lead_tau = lead.aLeadTau
+      if self.mode == 'acc':
+        a_lead_tau = recovering_lead_tau(lead, a_lead_tau)
     else:
       # Fake a fast lead car, so mpc can keep running in the same mode
       x_lead = 50.0
@@ -369,7 +390,36 @@ class LongitudinalMpc:
     self.cruise_min_a = min_a
     self.max_a = max_a
 
-  def update(self, carrot, reset_state, radarstate, v_cruise, x, v, a, j, personality=log.LongitudinalPersonality.standard):
+  def cruise_accel_after_lead_loss(self, lead_one, lead_two, v_ego, reset_state, mode):
+    # Briefly soften cruise acceleration after losing a nearby slowing lead.
+    # Do not synthesize a lead or change braking/obstacle constraints.
+    if reset_state or mode != 'acc' or not 1.5 <= v_ego <= 15.0:
+      self.lead_loss_armed = False
+      self.lead_loss_remaining = 0.0
+      return self.max_a
+
+    if lead_one.present or lead_two.present:
+      self.lead_loss_remaining = 0.0
+      self.lead_loss_armed = any(
+        lead.present and 0.0 < lead.dRel < max(10.0, 1.8 * v_ego) and
+        (lead.vRel < -0.3 or lead.aLeadK < -0.5 or lead.vLead < 2.0)
+        for lead in (lead_one, lead_two))
+      return self.max_a
+
+    if self.lead_loss_armed:
+      self.lead_loss_remaining = 0.8
+      self.lead_loss_armed = False
+
+    if self.lead_loss_remaining <= 0.0:
+      return self.max_a
+
+    # Hold for 0.5 s, then release over 0.3 s. Never raise the normal limit.
+    cruise_accel = min(self.max_a, float(np.interp(
+      self.lead_loss_remaining, [0.0, 0.3], [self.max_a, 0.2])))
+    self.lead_loss_remaining = max(0.0, self.lead_loss_remaining - self.dt)
+    return cruise_accel
+
+  def update(self, carrot, reset_state, radarstate, v_cruise, x, v, a, j, personality=log.LongitudinalPersonality.standard, prev_accel_constraint=True):
     v_ego = self.x0[1]
     a_ego = self.x0[2]
     t_follow = carrot.get_T_FOLLOW(personality, v_ego, a_ego)
@@ -409,6 +459,11 @@ class LongitudinalMpc:
     # negative accel constraint causes problems because negative speed is not allowed
     self.params[:,1] = max(0.0, self.max_a if not reset_state else a_ego)
 
+    cruise_max_a = self.cruise_accel_after_lead_loss(
+      radarstate.leadOne, radarstate.leadTwo, v_ego, reset_state, mode)
+    if mode == 'acc' and not reset_state:
+      cruise_max_a = min(cruise_max_a, carrot.signal_follow.cruise_accel(self.max_a))
+
     # Update in ACC mode or ACC/e2e blend
     if mode == 'acc':
       #self.params[:,5] = LEAD_DANGER_FACTOR
@@ -416,7 +471,7 @@ class LongitudinalMpc:
       # when the leads are no factor.
       v_lower = v_ego + (T_IDXS * self.cruise_min_a * 1.05)
       # TODO does this make sense when max_a is negative?
-      v_upper = v_ego + (T_IDXS * self.max_a * 1.05)
+      v_upper = v_ego + (T_IDXS * max(self.cruise_min_a, cruise_max_a) * 1.05)
       v_cruise_clipped = np.clip(v_cruise * np.ones(N+1),
                                  v_lower,
                                  v_upper)
@@ -489,6 +544,9 @@ class LongitudinalMpc:
 
     self.t_follow = t_follow
 
+    # Apply this cycle's follow/jerk factor and lead acceleration-change cost.
+    self.set_weights(prev_accel_constraint, personality=personality,
+                     jerk_factor=carrot.jerk_factor_apply, a_change_cost_starting=carrot.aChangeCostStarting)
     self.run()
     if (np.any(lead_xv_0[FCW_IDXS,0] - self.x_sol[FCW_IDXS,0] < CRASH_DISTANCE) and
             radarstate.leadOne.modelProb > 0.9):

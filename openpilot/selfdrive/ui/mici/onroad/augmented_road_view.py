@@ -162,8 +162,8 @@ class AugmentedRoadView(CameraView):
     self.view_from_calib = view_frame_from_device_frame.copy()
     self.view_from_wide_calib = view_frame_from_device_frame.copy()
 
-    self._matrix_cache_key: tuple | None = None
     self._cached_matrix: np.ndarray | None = None
+    self._frame_matrix_cache_key = None
     self._content_rect = rl.Rectangle()
     self._last_click_time = 0.0
 
@@ -319,18 +319,9 @@ class AugmentedRoadView(CameraView):
       self.view_from_wide_calib = view_frame_from_device_frame @ wide_from_device @ device_from_calib
 
   def _calc_frame_matrix(self, rect: rl.Rectangle) -> np.ndarray:
-    cache_key = (
-      ui_state.sm.recv_frame['extrinsicsCalibration'],
-      int(self._content_rect.width),
-      int(self._content_rect.height),
-      self.stream_type,
-      round(ui_state.sm['carState'].vEgo, 1),
-    )
-
-    if cache_key == self._matrix_cache_key and self._cached_matrix is not None:
-      return self._cached_matrix
-
     # Get camera configuration
+    calib_time = ui_state.sm.recv_frame['extrinsicsCalibration']
+    current_dims = (self._content_rect.width, self._content_rect.height)
     device_camera = self.device_camera or DEFAULT_DEVICE_CAMERA
     is_wide_camera = self.stream_type == WIDE_CAM
     intrinsic = device_camera.wide_road.intrinsics if is_wide_camera else device_camera.narrow_road.intrinsics
@@ -339,6 +330,13 @@ class AugmentedRoadView(CameraView):
       zoom = 0.7 * 1.5
     else:
       zoom = np.interp(ui_state.sm['carState'].vEgo, [10, 30], [0.8, 1.0])
+
+    # Calibration matrices are replaced by _update_calibration; camera configs are constant.
+    # Include position as well as size, since overlay coordinates use the viewport origin.
+    cache_key = (calib_time, self._content_rect.x, self._content_rect.y, *current_dims,
+                 self.stream_type, zoom, id(device_camera), id(calibration))
+    if self._cached_matrix is not None and self._frame_matrix_cache_key == cache_key:
+      return self._cached_matrix
 
     # Calculate transforms for vanishing point
     inf_point = np.array([1000.0, 0.0, 0.0])
@@ -368,7 +366,6 @@ class AugmentedRoadView(CameraView):
       x_offset, y_offset = 0, 0
 
     # Cache the computed transformation matrix to avoid recalculations
-    self._matrix_cache_key = cache_key
     self._cached_matrix = np.array([
       [zoom * 2 * cx / w, 0, -x_offset / w * 2],
       [0, zoom * 2 * cy / h, -y_offset / h * 2],
@@ -382,6 +379,7 @@ class AugmentedRoadView(CameraView):
       [0.0, 0.0, 1.0]
     ])
     self._model_renderer.set_transform(video_transform @ calib_transform)
+    self._frame_matrix_cache_key = cache_key
 
     return self._cached_matrix
 

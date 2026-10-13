@@ -195,6 +195,7 @@ class VCruiseCarrot:
     self.desiredSpeed = 250
     self.road_limit_kph = 30
     self.nRoadLimitSpeed_last = 30
+    self._road_limit_sync_last = None
 
     self.carrot_cmd_index_last = 0
     self.carrot_cmd_index = 0
@@ -329,6 +330,9 @@ class VCruiseCarrot:
     if CC.enabled:
       self._cruise_ready = False
     v_cruise_kph = self._update_cruise_buttons(CS, CC, self.v_cruise_kph)
+    road_limit_valid = (sm.alive['carrotMan'] and sm.valid['carrotMan'] and
+                        (sm['carrotMan'].activeCarrot > 0 or CS.roadLimitSpeed > 0))
+    v_cruise_kph = self._sync_road_limit_speed(CS, CC, v_cruise_kph, road_limit_valid)
 
     if self._activate_cruise > 0:
       #self.events.append(EventName.buttonEnable)
@@ -491,21 +495,19 @@ class VCruiseCarrot:
             road_limit_kph = self.nRoadLimitSpeed * self.autoSpeedUptoRoadSpeedLimit
             if road_limit_kph > 1.0:
               v_cruise_kph = max(v_cruise_kph, road_limit_kph)
-        elif self._v_cruise_kph_at_brake > 0 and v_cruise_kph <= self._v_cruise_kph_at_brake:
-          v_cruise_kph = self._v_cruise_kph_at_brake
-          self._v_cruise_kph_at_brake = 0
-        elif self.v_cruise_kph_prev != 0:
-          v_cruise_kph = self.v_cruise_kph_prev
-          self.v_cruise_kph_prev = 0
-        elif self._cruise_button_mode == 0:
-          v_cruise_kph = button_kph
         else:
-          v_cruise_kph = self._v_cruise_desired(CS, v_cruise_kph)
+          # While cruising, RES increments the current setting, not old memory.
+          step_kph = self.autoRoadSpeedLimitOffset if self.autoRoadSpeedLimitOffset > 0 else (
+            self._cruise_speed_unit_basic if self.is_metric else self._cruise_speed_unit_basic * CV.MPH_TO_KPH)
+          v_cruise_kph += step_kph
+          self._v_cruise_kph_at_brake = 0
+          self.v_cruise_kph_prev = 0
         self.carrot_cruise_active = False
 
       elif button_type == ButtonType.decelCruise:
         self._lat_enabled = True
         self._pause_auto_speed_up = True
+        self.v_cruise_kph_prev = 0
         #self.carrot_cruise_active = False
 
         if 0 < self.nRoadLimitSpeed < 150:
@@ -519,7 +521,7 @@ class VCruiseCarrot:
           self._paddle_decel_active = True
           pass
         elif not CC.enabled:
-          v_cruise_kph = max(self.v_ego_kph_set, self._cruise_speed_min)
+          v_cruise_kph = set_speed_kph if 0 < self.nRoadLimitSpeed < 150 else max(self.v_ego_kph_set, self._cruise_speed_min)
         elif self.v_ego_kph_set > v_cruise_kph + 2 and self._cruise_button_mode in [2, 3]:
           v_cruise_kph = max(self.v_ego_kph_set, self._cruise_speed_min)
         elif self._cruise_button_mode in [0, 1]:
@@ -570,6 +572,7 @@ class VCruiseCarrot:
         self._pause_auto_speed_up = True
         v_cruise_kph = button_kph
         self._v_cruise_kph_at_brake = 0
+        self.v_cruise_kph_prev = 0
       elif button_type == ButtonType.gapAdjustCruise:
         self.params.put("MyDrivingMode", self.params.get("MyDrivingMode") % 4 + 1) # 1,2,3,4 (1:eco, 2:safe, 3:normal, 4:high speed)
       elif button_type == ButtonType.lfaButton:
@@ -618,6 +621,31 @@ class VCruiseCarrot:
           v_cruise_kph = speed
           break
     return v_cruise_kph
+
+  def _sync_road_limit_speed(self, CS, CC, v_cruise_kph, road_limit_valid):
+    # Road-limit mode must update the set speed every cycle, independently of
+    # lead-car auto-speed-up and the optional pedal/resume state machine.
+    road_limit = self.nRoadLimitSpeed
+    if not road_limit_valid or not math.isfinite(road_limit) or not 0 < road_limit < 150:
+      return v_cruise_kph
+    previous = self._road_limit_sync_last
+    self._road_limit_sync_last = road_limit
+    if self.autoRoadSpeedAdjust >= 0:
+      return v_cruise_kph
+    self.nRoadLimitSpeed_last = road_limit
+    if previous is None or previous == road_limit:
+      return v_cruise_kph
+    if not CC.enabled or not CS.cruiseState.enabled or CS.brakePressed:
+      return v_cruise_kph
+    target = (road_limit * self.autoNaviSpeedSafetyFactor if self.autoRoadSpeedLimitOffset < 0
+              else road_limit + self.autoRoadSpeedLimitOffset)
+    self._v_cruise_kph_at_brake = 0
+    self.v_cruise_kph_prev = 0
+    # A held RES belongs to the old limit. Require another press after reset.
+    self.button_cnt = 0
+    self.long_pressed = False
+    self._add_log(f"Road limit changed {previous} -> {road_limit}: set {target:.1f}")
+    return target
 
   def _auto_speed_up(self, v_cruise_kph):
     #if self._pause_auto_speed_up:

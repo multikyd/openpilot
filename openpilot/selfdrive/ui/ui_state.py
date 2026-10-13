@@ -105,6 +105,8 @@ class UIState:
     self.started: bool = False
     self.ignition: bool = False
     self.recording_audio: bool = False
+    self._record_audio_enabled: bool = False
+    self._display_param_update_time: float = 0.0
     self.panda_type: log.PandaState.PandaType = log.PandaState.PandaType.unknown
     self.personality: log.LongitudinalPersonality = log.LongitudinalPersonality.standard
     self.has_longitudinal_control: bool = False
@@ -154,11 +156,15 @@ class UIState:
     self.xSpdType: int = 0
     self.desiredSpeed: int = 0
     self.desiredSource: str = ""
+    self.bumpTarget: int = 0
+    self.bumpDistance: int = 0
+    self.bumpLearningText: str = ""
 
     # Callbacks
     self._offroad_transition_callbacks: list[Callable[[], None]] = []
     self._engaged_transition_callbacks: list[Callable[[], None]] = []
     self._on_body_changed_callbacks: list[Callable[[], None]] = []
+    self._update_display_params()
 
   def add_offroad_transition_callback(self, callback: Callable[[], None]):
     self._offroad_transition_callbacks.append(callback)
@@ -186,6 +192,8 @@ class UIState:
       self._params_thread.start()
 
     self.sm.update(0)
+    if time.monotonic() - self._display_param_update_time >= 1.0:
+      self._update_display_params()
     self._update_state()
     self._update_status()
     self._update_chestnut_state()
@@ -226,6 +234,8 @@ class UIState:
       self.is_body = self.CP.notCar
       for callback in self._on_body_changed_callbacks:
         callback()
+    # Update recording audio state
+    self.recording_audio = self._record_audio_enabled and self.started
 
     # Kisa states update
     if self.sm.updated["controlsState"]:
@@ -267,6 +277,12 @@ class UIState:
       self.xSpdType = carrotman_state.xSpdType
       self.desiredSpeed = carrotman_state.desiredSpeed
       self.desiredSource = carrotman_state.desiredSource
+      self.bumpTarget = carrotman_state.bumpTarget
+      self.bumpDistance = carrotman_state.bumpDistance
+      self.bumpLearningText = carrotman_state.bumpLearningText
+    if not self.started or time.monotonic() - self.sm.recv_time['carrotMan'] > 1:
+      self.bumpTarget = self.bumpDistance = 0
+      self.bumpLearningText = ""
 
   def _update_status(self) -> None:
     if self.started and self.sm.updated["selfdriveState"]:
@@ -322,6 +338,13 @@ class UIState:
     else:
       self.chestnut_state = ChestnutState.ACTIVE
 
+  def _update_display_params(self) -> None:
+    # These preferences need not hit parameter storage on every rendered frame.
+    self._record_audio_enabled = self.params.get_bool("RecordAudio")
+    self.is_metric = self.params.get_bool("IsMetric")
+    self.always_on_dm = self.params.get_bool("AlwaysOnDM")
+    self._display_param_update_time = time.monotonic()
+
   def update_params(self) -> None:
     # For slower operations
     # Update longitudinal control state
@@ -333,7 +356,8 @@ class UIState:
       else:
         self.has_longitudinal_control = self.CP.openpilotLongitudinalControl
 
-    self.recording_audio = self.params.get_bool("RecordAudio") and self.started
+    self._record_audio_enabled = self.params.get_bool("RecordAudio")
+    self.recording_audio = self._record_audio_enabled and self.started
     self.is_metric = self.params.get_bool("IsMetric")
     self.always_on_dm = self.params.get_bool("AlwaysOnDM")
     self.experimental_mode = self.params.get_bool("ExperimentalMode")

@@ -13,6 +13,7 @@ from datetime import datetime
 from ftplib import FTP
 from openpilot.cereal import log
 import openpilot.cereal.messaging as messaging
+from openpilot.selfdrive.carrot.bump_learning import BumpMemory
 from openpilot.common.realtime import Ratekeeper
 from openpilot.common.params import Params
 from openpilot.common.hardware import PC
@@ -79,6 +80,10 @@ import collections
 class CarrotServ:
   def __init__(self):
     self.params = Params()
+    self.bump_memory = BumpMemory(self.params.get("BumpLearningData"))
+    self.bump_display = None
+    self.bump_save_time = 0.0
+    self.bump_button_last = 0
 
     self.nRoadLimitSpeed = 30
     self.nRoadLimitSpeed_last = 30
@@ -189,6 +194,8 @@ class CarrotServ:
 
     self.desired_speed_vcruise = 0
     self.desired_speed_vcruise_prev = 0
+    self.res_speed_override = False
+    self.cruise_button_last = 0
 
     self.debugText = ""
 
@@ -901,10 +908,47 @@ class CarrotServ:
       self.xDistToTurnNext = 0
       self.xTurnInfoNext = -1
 
+    bump_now = time.monotonic()
+    learning_enabled = self.params.get("BumpLearningEnabled", return_default=True)
+    if learning_enabled and CS is not None and sm.valid['carState']:
+      gps = sm[gps_service]
+      if (sm.valid[gps_service] and sm.alive[gps_service] and gps.hasFix and
+          math.isfinite(gps.bearingAccuracyDeg) and 0 <= gps.bearingAccuracyDeg <= 20):
+        self.bump_memory.gps(sm.recv_time[gps_service], gps.latitude, gps.longitude,
+                             gps.bearingDeg, gps.horizontalAccuracy)
+      else:
+        self.bump_memory.position = None
+      self.bump_memory.base = self.autoNaviSpeedBumpSpeed
+      self.bump_memory.raise_limit = float(self.params.get("BumpLearningRaise", return_default=True) or 0)
+      button_changed = CS.cruiseButtons != self.bump_button_last and CS.cruiseButtons != 0
+      self.bump_button_last = CS.cruiseButtons
+      manual = not sm['carControl'].longActive or CS.brakePressed or CS.gasPressed or button_changed
+      lead = sm['radarState'].leadOne
+      following = lead.present and lead.dRel < max(30, v_ego * 4)
+      eligible = (sm.valid['carControl'] and sm.alive['carControl'] and
+                  sm.valid['radarState'] and sm.alive['radarState'] and not following and
+                  sm['carControl'].longActive and not manual)
+      nav_bump = self.xSpdDist if self.xSpdType == 22 and self.active_carrot > 1 else None
+      self.bump_display = self.bump_memory.tick(bump_now, v_ego_kph, nav_bump, manual, eligible)
+      if self.bump_memory.dirty and bump_now - self.bump_save_time > 5:
+        self.params.put("BumpLearningData", self.bump_memory.export())
+        self.bump_memory.dirty = False
+        self.bump_save_time = bump_now
+    else:
+      self.bump_memory.pending = None
+      self.bump_display = None
+    learned_bump_speed = 250
+    if self.bump_display is not None and self.autoNaviSpeedCtrlMode >= 2:
+      # Keep the cap until the car is beyond the recorded location; do not release at d=0.
+      learned_bump_speed = self.calculate_current_speed(max(0, self.bump_display['distance']),
+                            self.bump_display['target'], self.autoNaviSpeedBumpTime, self.autoNaviSpeedDecelRate)
+
     sdi_speed = 250
     hda_active = False
     ### 과속카메라, 사고방지턱
     if (self.xSpdDist > 0 or self.xSpdType in [100, 101]) and self.active_carrot > 0:
+      if self.xSpdType == 22 and self.bump_display is not None and abs(self.xSpdDist-self.bump_display['distance']) < 15:
+        self.xSpdLimit = self.bump_display['target']
       safe_sec = self.autoNaviSpeedBumpTime if self.xSpdType == 22 else self.autoNaviSpeedCtrlEnd
       decel = self.autoNaviSpeedDecelRate
       sdi_speed = min(sdi_speed, self.calculate_current_speed(self.xSpdDist, self.xSpdLimit, safe_sec, decel))
@@ -949,10 +993,13 @@ class CarrotServ:
       self.atcType = "none"
 
 
+    sdi_source = "hda" if hda_active else "bump" if self.xSpdType == 22 else "section" if self.xSpdType == 4 else "police" if self.xSpdType == 100 else "waze" if self.xSpdType == 101 else "cam"
+    if learned_bump_speed < sdi_speed:
+      sdi_speed, sdi_source = learned_bump_speed, "bump"
     speed_n_sources = [
       (atc_desired, "atc"),
       (atc_desired_next, "atc2"),
-      (sdi_speed, "hda" if hda_active else "bump" if self.xSpdType == 22 else "section" if self.xSpdType == 4 else "police" if self.xSpdType == 100 else "waze" if self.xSpdType == 101 else "cam"),
+      (sdi_speed, sdi_source),
       (limit_speed, "road"),
     ]
     if self.turnSpeedControlMode in [1,2]:
@@ -972,6 +1019,15 @@ class CarrotServ:
 
     desired_speed, source = min(speed_n_sources, key=lambda x: x[0])
 
+    # Clear overrides even when carState is temporarily unavailable. Otherwise
+    # the one-cycle road-change event can be consumed without clearing memory.
+    if road_speed_limit_changed:
+      self.gas_override_speed = 0
+      self.desired_speed_vcruise = 0
+      self.desired_speed_vcruise_prev = 0
+      self.res_speed_override = False
+      self.cruise_button_last = Buttons.RES_ACCEL
+
     if CS is not None:
       if source != self.source_last:
         self.gas_override_speed = 0
@@ -983,6 +1039,7 @@ class CarrotServ:
         self.gas_override_speed = 0
         self.desired_speed_vcruise = 0
         self.desired_speed_vcruise_prev = 0
+        self.res_speed_override = False
       elif CS.gasPressed and not self.gas_pressed_state and self.autoGasSync:
         #self.gas_override_speed = max(v_ego_kph, self.gas_override_speed)
         self.gas_override_speed = max(CS.vEgoCluster*CV.MS_TO_KPH, self.gas_override_speed)
@@ -991,7 +1048,15 @@ class CarrotServ:
           self.gas_override_speed = 0
         if self.desired_speed_vcruise != 0:
           self.desired_speed_vcruise = 0
-      elif CS.cruiseButtons == Buttons.RES_ACCEL or CS.gasTok:
+        self.desired_speed_vcruise_prev = 0
+        self.res_speed_override = False
+      elif CS.cruiseButtons == Buttons.RES_ACCEL and self.cruise_button_last != Buttons.RES_ACCEL:
+        # cruise.py owns the RES increment; do not add the offset twice here.
+        self.desired_speed_vcruise = CS.vCruiseCluster
+        self.res_speed_override = True
+        self.gas_override_speed = 0
+      elif CS.gasTok:
+        self.res_speed_override = False
         self.desired_speed_vcruise = CS.vCruiseCluster + self.autoRoadSpeedLimitOffset
         if self.desired_speed_vcruise <= desired_speed:
           self.desired_speed_vcruise = desired_speed + self.autoRoadSpeedLimitOffset
@@ -999,6 +1064,7 @@ class CarrotServ:
       else:
         self.gas_pressed_state = False
       self.source_last = source
+      self.cruise_button_last = CS.cruiseButtons
 
       if self.desired_speed_vcruise != 0 and desired_speed < self.desired_speed_vcruise and source in ["cam", "section", "police", "bump", "hda"]:
         self.desired_speed_vcruise_prev = self.desired_speed_vcruise
@@ -1007,12 +1073,21 @@ class CarrotServ:
         self.desired_speed_vcruise = self.desired_speed_vcruise_prev
         self.desired_speed_vcruise_prev = 0
 
+      # Button and cruise updates arrive independently; track the final setting.
+      if self.res_speed_override and self.desired_speed_vcruise != 0:
+        self.desired_speed_vcruise = CS.vCruiseCluster
+
       if desired_speed < self.gas_override_speed:
         source = "gas"
         desired_speed = self.gas_override_speed
       elif source == "road" and desired_speed < self.desired_speed_vcruise:
         source = "road++"
         desired_speed = self.desired_speed_vcruise
+
+      # Road-limit override must still respect a camera/section/bump target.
+      if source == "road++" and sdi_speed < desired_speed:
+        desired_speed = sdi_speed
+        source = sdi_source
 
       self.debugText += f"route={route_speed:.1f}"#f"desired={desired_speed:.1f},{source},g={self.gas_override_speed:.0f}"
 
@@ -1089,6 +1164,14 @@ class CarrotServ:
     coords_str = ";".join([f"{x:.2f},{y:.2f},{d:.2f}" for (x, y), d in zip(coords, distances, strict=False)])
     msg.carrotMan.naviPaths = coords_str
 
+    msg.carrotMan.bumpTarget = int(self.bump_display['target']) if self.bump_display else 0
+    msg.carrotMan.bumpDistance = int(max(0, self.bump_display['distance'])) if self.bump_display else 0
+    msg.carrotMan.bumpLearningText = (self.bump_memory.notice if learning_enabled and
+                                    bump_now < self.bump_memory.notice_until else "")
+    msg.carrotMan.bumpSoundSequence = self.bump_memory.sound_seq if learning_enabled else 0
+    msg.carrotMan.bumpSoundEnabled = bool(self.params.get("BumpLearningSound", return_default=True))
+    msg.carrotMan.bumpImpact = float(self.bump_memory.last_peak)
+    msg.carrotMan.bumpPassSpeed = float(self.bump_memory.last_pass_speed)
     msg.carrotMan.leftSec = int(self.carrot_left_sec)
     pm.send('carrotMan', msg)
 
