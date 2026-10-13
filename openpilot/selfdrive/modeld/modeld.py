@@ -67,7 +67,7 @@ def get_lat_smooth_seconds_dynamic(model_output: dict[str, np.ndarray],
 def get_action_from_model(model_output: dict[str, np.ndarray], prev_action: log.ModelDataV2.Action,
                           lat_action_t: float, long_action_t: float, v_ego: float, lat_smooth_seconds: float, vEgoStopping: float) -> log.ModelDataV2.Action:
   plan = model_output['plan'][0]
-  desired_accel, should_stop, _, desired_velocity_now = get_accel_from_plan(plan[:,Plan.VELOCITY][:,0],
+  desired_accel, should_stop, desired_velocity_now, _ = get_accel_from_plan(plan[:,Plan.VELOCITY][:,0],
                                                    plan[:,Plan.ACCELERATION][:,0],
                                                    ModelConstants.T_IDXS,
                                                    action_t=long_action_t,
@@ -410,7 +410,7 @@ def main(demo=False):
     if sm.updated["extrinsicsCalibration"] and sm.seen['narrowRoadCameraState'] and sm.seen['deviceState']:
       device_from_calib_euler = np.array(sm["extrinsicsCalibration"].rpyCalib, dtype=np.float32)
 
-      calib_done = sm["extrinsicsCalibration"].calStatus == log.extrinsicsCalibration.Status.calibrated
+      calib_done = sm["extrinsicsCalibration"].calStatus == log.ExtrinsicsCalibration.Status.calibrated
       applied_yaw_trim_deg = camera_yaw_trim_deg if calib_done else 0.0
 
       if applied_yaw_trim_deg != 0.0:

@@ -172,7 +172,7 @@ class LongitudinalPlanner:
       # Clip aEgo to cruise limits to prevent large accelerations when becoming active
       self.a_desired = np.clip(sm['carState'].aEgo, accel_limits[0], accel_limits[1])
       
-      self.mpc.prev_a = np.full(N+1, self.a_desired) ## carrot
+      self.mpc.a_prev = np.full(N+1, self.a_desired) ## carrot
 
       self.reset_decel_timer = int(RESET_DECEL_RAMP_TIME / self.dt)
       self.reset_decel_start_a = self.a_desired
