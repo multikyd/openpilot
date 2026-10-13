@@ -1,7 +1,7 @@
 import math
 import os
 
-from opendbc import DBC_PATH
+from opendbc import DBC_PATH, get_generated_dbcs
 from opendbc.can import CANParser
 from opendbc.car import Bus, structs
 from opendbc.car.interfaces import RadarInterfaceBase
@@ -51,7 +51,7 @@ def get_corner_object_can_parser(CP, enabled):
     return None
 
   dbc_path = os.path.join(DBC_PATH, f"{CORNER_OBJECT_235_DBC}.dbc")
-  if not os.path.exists(dbc_path):
+  if not os.path.exists(dbc_path) and CORNER_OBJECT_235_DBC not in get_generated_dbcs():
     print(f"RadarInterface: missing {CORNER_OBJECT_235_DBC}.dbc, 0x235 corner radar disabled")
     return None
 
@@ -64,7 +64,7 @@ def get_corner_object_180_can_parser(CP, enabled):
     return None
 
   dbc_path = os.path.join(DBC_PATH, f"{CORNER_OBJECT_180_DBC}.dbc")
-  if not os.path.exists(dbc_path):
+  if not os.path.exists(dbc_path) and CORNER_OBJECT_180_DBC not in get_generated_dbcs():
     print(f"RadarInterface: missing {CORNER_OBJECT_180_DBC}.dbc, 0x180 corner radar disabled")
     return None
 

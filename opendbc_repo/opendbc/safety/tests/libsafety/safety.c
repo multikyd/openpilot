@@ -2,6 +2,11 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+// Match the firmware logging function used by custom safety hooks.
+static void print(const char *message) {
+  (void)fputs(message, stdout);
+}
+
 // TODO: time should just be passed into the hooks we expose
 uint32_t timer_cnt = 0;
 uint32_t microsecond_timer_get(void);

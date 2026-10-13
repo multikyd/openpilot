@@ -160,6 +160,7 @@ class RadarInterfaceBase(ABC):
     self.rcp = None
     self.tracks: dict[int, MyTrack] = {}
     self.pts: dict[int, structs.RadarData.RadarPoint] = {}
+    self.track_id: int = 0
     self.frame = 0
     delay = CP.radarDelay
     self.v_ego_hist = deque([0.0], maxlen=int(round(delay / DT_CTRL)) + 1)
