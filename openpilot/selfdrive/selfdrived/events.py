@@ -1011,6 +1011,10 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
     ET.PERMANENT: NormalPermanentAlert("Bookmark Saved", duration=1.5),
   },
 
+  EventName.userBookmarkNotPaired: {
+    ET.PERMANENT: NormalPermanentAlert("Bookmark Saved", "pair to connect\nto view", duration=1.5),
+  },
+
   EventName.softHold: {
     ET.WARNING: Alert(
       "SoftHold",

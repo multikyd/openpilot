@@ -172,9 +172,11 @@ class SelfdriveD:
               cpus.append(vals)
         return cpus
 
-      a = read_stat()
-      time.sleep(0.1)
       b = read_stat()
+      a = getattr(self, "_cpu_stat_prev", None)
+      self._cpu_stat_prev = b
+      if a is None:
+        return []
 
       usage = []
       for x, y in zip(a, b):
@@ -447,6 +449,8 @@ class SelfdriveD:
         'not_freq_ok': [s for s, freq_ok in self.sm.freq_ok.items() if not freq_ok],
       }
       if logs != self.logged_comm_issue:
+        # Keep the comparison state separate from the extra diagnostic fields.
+        self.logged_comm_issue = logs.copy()
         try:
           cpu_usage = get_cpu_percent_per_core()
 
@@ -487,7 +491,6 @@ class SelfdriveD:
           logs['cpu_log_error'] = str(e)
 
         cloudlog.event("commIssue", error=True, **logs)
-        self.logged_comm_issue = logs
     else:
       self.logged_comm_issue = None
 
