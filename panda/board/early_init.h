@@ -1,3 +1,5 @@
+#pragma once
+
 // Early bringup
 #define ENTER_BOOTLOADER_MAGIC 0xdeadbeefU
 #define ENTER_SOFTLOADER_MAGIC 0xdeadc0deU
@@ -57,8 +59,23 @@ void early_initialization(void) {
 
   if (enter_bootloader_mode == ENTER_BOOTLOADER_MAGIC) {
     led_init();
-    current_board->init_bootloader();
     led_set(LED_GREEN, 1);
     jump_to_bootloader();
   }
+}
+
+// we might hit NMI / HardFault close to brown-out.
+// we don't want to infinitely loop, so let's set a logging cookie and reset.
+#define NMI_COOKIE 0x4E4D4921U
+#define HARDFAULT_COOKIE 0x48464C54U
+extern uint32_t fault_cookie;
+
+void NMI_Handler(void) {
+  fault_cookie = NMI_COOKIE;
+  NVIC_SystemReset();
+}
+
+void HardFault_Handler(void) {
+  fault_cookie = HARDFAULT_COOKIE;
+  NVIC_SystemReset();
 }

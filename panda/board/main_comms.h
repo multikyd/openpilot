@@ -1,3 +1,5 @@
+#pragma once
+
 extern int _app_start[0xc000]; // Only first 3 sectors of size 0x4000 are used
 
 // Prototypes
@@ -9,13 +11,19 @@ static int get_health_pkt(void *dat) {
   struct health_t * health = (struct health_t*)dat;
 
   health->uptime_pkt = uptime_cnt;
-  health->voltage_pkt = current_board->read_voltage_mV();
-  health->current_pkt = current_board->read_current_mA();
+  health->voltage_pkt = (uint16_t)MIN(current_board->read_voltage_mV(), 0xFFFFU);
+  health->current_pkt = (uint16_t)MIN(current_board->read_current_mA(), 0xFFFFU);
 
-  health->ignition_line_pkt = (uint8_t)(harness_check_ignition());
-  health->ignition_can_pkt = ignition_can;
+  health->flags_pkt = 0U;
+  health->flags_pkt |= harness_check_ignition() ? HEALTH_FLAG_IGNITION_LINE : 0U;
+  health->flags_pkt |= ignition_can ? HEALTH_FLAG_IGNITION_CAN : 0U;
+  health->flags_pkt |= controls_allowed ? HEALTH_FLAG_CONTROLS_ALLOWED : 0U;
+  health->flags_pkt |= power_save_enabled ? HEALTH_FLAG_POWER_SAVE_ENABLED : 0U;
+  health->flags_pkt |= heartbeat_lost ? HEALTH_FLAG_HEARTBEAT_LOST : 0U;
+  health->flags_pkt |= safety_rx_checks_invalid ? HEALTH_FLAG_SAFETY_RX_CHECKS_INVALID : 0U;
+  health->flags_pkt |= bootkick_reset_triggered ? HEALTH_FLAG_SOM_RESET_TRIGGERED : 0U;
+  health->flags_pkt |= reset_flags;
 
-  health->controls_allowed_pkt = controls_allowed;
   health->safety_tx_blocked_pkt = safety_tx_blocked;
   health->safety_rx_invalid_pkt = safety_rx_invalid;
   health->tx_buffer_overflow_pkt = tx_buffer_overflow;
@@ -24,56 +32,37 @@ static int get_health_pkt(void *dat) {
   health->safety_mode_pkt = (uint8_t)(current_safety_mode);
   health->safety_param_pkt = current_safety_param;
   health->alternative_experience_pkt = alternative_experience;
-  health->power_save_enabled_pkt = power_save_enabled;
-  health->heartbeat_lost_pkt = heartbeat_lost;
-  health->safety_rx_checks_invalid_pkt = safety_rx_checks_invalid;
 
   health->spi_error_count_pkt = spi_error_count;
 
   health->fault_status_pkt = fault_status;
   health->faults_pkt = faults;
 
-  health->interrupt_load_pkt = interrupt_load;
+  float interrupt_load_scaled = (CLAMP(interrupt_load, 0.0f, 1.0f) * 255.0f) + 0.5f;
+  health->interrupt_load_pkt = (uint8_t)interrupt_load_scaled;
 
   health->fan_power = fan_state.power;
 
   health->sbu1_voltage_mV = harness.sbu1_voltage_mV;
   health->sbu2_voltage_mV = harness.sbu2_voltage_mV;
 
-  health->som_reset_triggered = bootkick_reset_triggered;
-
   health->sound_output_level_pkt = sound_output_level;
 
-  health->temperature = dts_get_temperature();
+  float temperature_encoded = (CLAMP(dts_get_temperature(), -40.0f, 214.5f) + 40.0f) + 0.5f;
+  health->temperature_pkt = (uint8_t)temperature_encoded;
 
   return sizeof(*health);
 }
 
-// send on serial, first byte to select the ring
+// Endpoint 2 is only used by the bootstub for flashing.
 void comms_endpoint2_write(const uint8_t *data, uint32_t len) {
-  uart_ring *ur = get_ring_by_number(data[0]);
-  if ((len != 0U) && (ur != NULL)) {
-    if ((data[0] < 2U) || (data[0] >= 4U)) {
-      for (uint32_t i = 1; i < len; i++) {
-        while (!put_char(ur, data[i])) {
-          // wait
-        }
-      }
-    }
-  }
+  UNUSED(data);
+  UNUSED(len);
 }
 
 int comms_control_handler(ControlPacket_t *req, uint8_t *resp) {
   unsigned int resp_len = 0;
-  uart_ring *ur = NULL;
   uint32_t time;
-
-#ifdef DEBUG_COMMS
-  print("raw control request: "); hexdump(req, sizeof(ControlPacket_t)); print("\n");
-  print("- request "); puth(req->request); print("\n");
-  print("- param1 "); puth(req->param1); print("\n");
-  print("- param2 "); puth(req->param2); print("\n");
-#endif
 
   switch (req->request) {
     // **** 0xa8: get microsecond timer
@@ -107,6 +96,12 @@ int comms_control_handler(ControlPacket_t *req, uint8_t *resp) {
       stop_mode_requested = true;
       break;
     #endif
+    // **** 0xb6: read debug logs
+    case 0xb6:
+      while ((resp_len < req->length) && (resp_len < USBPACKET_MAX_SIZE) && debug_get_char((char*)&resp[resp_len])) {
+        ++resp_len;
+      }
+      break;
     // **** 0xc0: reset communications state
     case 0xc0:
       comms_can_reset();
@@ -248,20 +243,6 @@ int comms_control_handler(ControlPacket_t *req, uint8_t *resp) {
       // you can only set this if you are in a non car safety mode
       if (!is_car_safety_mode(current_safety_mode)) {
         alternative_experience = req->param1;
-      }
-      break;
-    // **** 0xe0: uart read
-    case 0xe0:
-      ur = get_ring_by_number(req->param1);
-      if (!ur) {
-        break;
-      }
-
-      // read
-      uint16_t req_length = MIN(req->length, USBPACKET_MAX_SIZE);
-      while ((resp_len < req_length) &&
-                         get_char(ur, (char*)&resp[resp_len])) {
-        ++resp_len;
       }
       break;
     // **** 0xe5: set CAN loopback (for testing)
