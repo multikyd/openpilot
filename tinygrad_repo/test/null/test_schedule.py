@@ -1,12 +1,13 @@
 # schedule tests that pass on NULL backend (no copyout needed)
-import gc, unittest, time
+import unittest, time, gc
 from typing import cast
 from tinygrad import nn, dtypes, Device, Tensor, getenv
-from tinygrad.uop.ops import UOp, Ops, GroupOp, UPat, KernelInfo, AxisType
-from tinygrad.helpers import GlobalCounters, Context
+from tinygrad.helpers import GlobalCounters, Context, all_same
+from tinygrad.uop.ops import UOp, Ops, GroupOp, UPat, KernelInfo
+from tinygrad.dtype import AddrSpace
 from tinygrad.engine.realize import run_linear, compile_linear
 from tinygrad.codegen import to_program, full_rewrite_to_sink
-from test.helpers import check_schedule, assert_kernel_count, KernelCountException
+from test.helpers import check_schedule, assert_kernel_count, KernelCountException, jit_cache_count
 
 def _realize_weights(m):
   for p in nn.state.get_parameters(m): p.realize()
@@ -15,6 +16,10 @@ class TestBufferUOp(unittest.TestCase):
   # BUFFER has a ShapeTracker of shape=(n,) and stride=(1,)
   def test_buffer_has_buffer(self):
     buf = Tensor.empty(10)
+    self.assertIs(buf.uop.op, Ops.ALLOC)
+    self.assertTrue(buf.uop.arg.bind_on_realize)
+    self.assertIsNone(buf.uop.arg.buffer)
+    buf.realize()
     self.assertIsNotNone(buf.uop.buffer)
     self.assertEqual(buf.uop.shape, (10,))
     # the device Buffer remains unallocated until it's we run the schedule
@@ -26,10 +31,18 @@ class TestBufferUOp(unittest.TestCase):
     self.assertTrue(buf.uop.buffer.is_allocated())
 
   def test_buffer_has_unique_buffer(self):
-    buf = Tensor.empty(10)
+    buf = Tensor.empty(10).realize()
     buf1 = buf.uop.buffer
     buf2 = buf.uop.buffer
     self.assertIs(buf1, buf2)
+
+  def test_empty_aliases_bind_together(self):
+    a, other = Tensor.empty(6), Tensor.empty(6)
+    b = a.reshape(2, 3)
+    self.assertIsNot(a.uop, other.uop)
+    b.realize()
+    self.assertIs(a.uop.buffer, b.uop.buffer)
+    self.assertIs(other.uop.op, Ops.ALLOC)
 
   # we also allow VIEW(BUFFER) to access the underlying device Buffer, as long as it's contiguous
   def test_buffer_view_allowed(self):
@@ -48,7 +61,7 @@ class TestBufferUOp(unittest.TestCase):
     # accessing realized will return None
     self.assertIsNone(a.uop.realized)
     # accessing Buffer will assert
-    with self.assertRaisesRegex(AssertionError, "must be BUFFER"):
+    with self.assertRaisesRegex(AssertionError, "must be a realized BUFFER"):
       a.uop.buffer # there is no BUFFER on an unrealized ADD
     # Buffer only exists once we realize it
     a.realize()
@@ -75,15 +88,16 @@ class TestBufferUOp(unittest.TestCase):
   def test_view_does_not_realize(self):
     a = Tensor.randn(1, 4).expand(4, 4)
     a.realize()
-    self.assertEqual(a.uop.base.realized.size, 4)
+    self.assertEqual(a.uop.base.realized.nbytes, 4 * a.dtype.itemsize)
     a2 = a.contiguous().realize()
-    self.assertEqual(a2.uop.base.realized.size, 16)
+    self.assertEqual(a2.uop.base.realized.nbytes, 16 * a2.dtype.itemsize)
 
 class TestContiguous(unittest.TestCase):
   def test_contiguous_buffer(self):
     a = Tensor.empty(4)
     b = a.contiguous()
     check_schedule(b, 0)
+    self.assertIs(b, a)
 
   def test_contiguous_buffer_view(self):
     a = Tensor.empty(4)
@@ -109,13 +123,13 @@ class TestContiguous(unittest.TestCase):
     a = Tensor.empty(4)
     b = a.expand((4, 4))
     check_schedule(b, 0)
-    self.assertEqual(b.uop.base.buffer.size, 4)
+    self.assertEqual(b.uop.base.buffer.nbytes, 4 * b.dtype.itemsize)
 
   def test_contiguous_view_realizes(self):
     a = Tensor.empty(4)
     b = a.expand((4, 4)).contiguous()
     check_schedule(b, 1)
-    self.assertEqual(b.uop.base.buffer.size, 16)
+    self.assertEqual(b.uop.base.buffer.nbytes, 16 * b.dtype.itemsize)
 
 class TestSimpleSchedule(unittest.TestCase):
   def test_reduce_doesnt_split(self):
@@ -582,8 +596,8 @@ class TestSchedule(unittest.TestCase):
     p = P[0]
     p = p.pad(((1, 0), ))
     p = p.repeat([2])
-    # TODO: this should be 3 if fix store hazard worked correctly
-    check_schedule(p, 4)
+    # assign on a pending contiguous overwrites the whole value, no store hazard
+    check_schedule(p, 3)
 
   def test_conv2d(self, allowed=4, dtype=dtypes.float):
     self.enterContext(Context(DEFAULT_FLOAT=dtype))
@@ -597,6 +611,7 @@ class TestSchedule(unittest.TestCase):
   def test_conv2d_half(self): self.test_conv2d(4, dtype=dtypes.half)
 
   def test_schedule_mem_used_with_inputs(self):
+    Tensor.ones(256).contiguous().realize() # hcq2 caches the linked schedule with its buffers
     gc.collect()
     base = GlobalCounters.mem_used
     x = Tensor.ones(256).contiguous().realize()
@@ -610,7 +625,7 @@ class TestSchedule(unittest.TestCase):
         x, y, z = Tensor.empty((64, 64), dtype='float'), Tensor.empty((64, 64), dtype='float'), Tensor.empty((64, 64), dtype='float')
         a = (x @ y).relu()
         linear = compile_linear(((a @ z).relu() + a).schedule_linear())
-        return len([call for call in linear.src if call.src[0].op is Ops.PROGRAM])
+        return jit_cache_count(linear)
 
       with Context(IMAGE=1):
         got = cnt()
@@ -626,7 +641,7 @@ class TestSchedule(unittest.TestCase):
         b16, c16 = Tensor.empty((512, 16), dtype='float'), Tensor.empty((16,), dtype='float')
         b32, c32 = Tensor.empty((512, 32), dtype='float'), Tensor.empty((32,), dtype='float')
         linear = compile_linear(Tensor.schedule_linear((rb @ b16 + c16).relu(), (rb @ b32 + c32).relu()))
-        return len([call for call in linear.src if call.src[0].op is Ops.PROGRAM])
+        return jit_cache_count(linear)
 
       with Context(IMAGE=1):
         got = cnt()
@@ -656,18 +671,18 @@ class TestSchedule(unittest.TestCase):
     a = Tensor.arange(4).reshape(1, 4).clone().realize()
     casted_view = a.pad(((0, 1), (0, 0))).cast(dtypes.float)
     casted_view.realize()
-    self.assertEqual(casted_view.uop.base.realized.size, 8)
+    self.assertEqual(casted_view.uop.base.realized.nbytes, 8 * casted_view.dtype.itemsize)
     contig = casted_view.contiguous().realize()
-    self.assertEqual(contig.uop.base.realized.size, 8)
+    self.assertEqual(contig.uop.base.realized.nbytes, 8 * contig.dtype.itemsize)
 
   # NOTE: we only reorder CAST if it's an EXPAND
   def test_cast_after_shrink(self):
     a = Tensor.arange(4).reshape(1, 4).clone().realize()
     casted_view = a.shrink(((0, 1), (0, 2))).cast(dtypes.float)
     casted_view.realize()
-    self.assertEqual(casted_view.uop.base.realized.size, 2)
+    self.assertEqual(casted_view.uop.base.realized.nbytes, 2 * casted_view.dtype.itemsize)
     realized_view = casted_view.contiguous().realize()
-    self.assertEqual(realized_view.uop.base.realized.size, 2)
+    self.assertEqual(realized_view.uop.base.realized.nbytes, 2 * realized_view.dtype.itemsize)
 
   def test_cast_const_view(self):
     a = Tensor.ones((4, 4), dtype=dtypes.float32, buffer=False)
@@ -707,7 +722,7 @@ class TestSchedule(unittest.TestCase):
       for call in linear.src:
         if call.src[0].op is not Ops.SINK: continue
         sink = full_rewrite_to_sink(call.src[0], Device[call.device].renderer)
-        reduce_kernels += any(u.op is Ops.RANGE and u.arg[-1] is AxisType.REDUCE for u in sink.toposort())
+        reduce_kernels += any(u.op is Ops.STORE and u.addrspace is AddrSpace.REG and u.ranges for u in sink.toposort())
       self.assertEqual(reduce_kernels, 1)
 
   def test_push_through_reshape(self):
@@ -783,7 +798,7 @@ class TestSchedule(unittest.TestCase):
     b = Tensor(2) * 4
     self.assertIsNone(b.uop.device)
     run_linear(*check_schedule(b, 0, filter_sink=False))
-    assert b.item() == 8
+    assert b.uop.ssimplify() == 8
 
   def test_mnist_val(self):
     # from tinygrad.nn.datasets import mnist
@@ -836,17 +851,15 @@ class TestSchedule(unittest.TestCase):
     self.assertLess(names.index("kb"), names.index("kc"))
     self.assertLess(names.index("kd"), names.index("kc"))
 
-  @unittest.skipIf(Device.DEFAULT == "CPU", "devices must mismatch")
   def test_error_on_device_mismatch(self):
-    a = Tensor.empty(10)
-    b = Tensor.empty(10, device="CPU")
+    a = Tensor.empty(10, device="NULL")
+    b = Tensor.empty(10, device="NULL:1")
     c = a+b
     with self.assertRaisesRegex(RuntimeError, "all buffers must be on the same device"): check_schedule(c, 1)
 
-  @unittest.skipIf(Device.DEFAULT == "CPU", "devices must mismatch")
   def test_error_on_device_mismatch_alt(self):
-    a = Tensor.empty(10)
-    b = Tensor.empty((1,), device="CPU").expand(10).contiguous()
+    a = Tensor.empty(10, device="NULL")
+    b = Tensor.empty((1,), device="NULL:1").expand(10).contiguous()
     c = a+b
     with self.assertRaisesRegex(RuntimeError, "all buffers must be on the same device"): check_schedule(c, 2)
 
@@ -857,6 +870,65 @@ class TestSchedule(unittest.TestCase):
   def test_rand_recompute_arange(self):
     x = Tensor.rand(32)
     check_schedule(x, 1, [Tensor._device_rng_counters[x.device]])
+
+  # **** custom kernel realize tests
+
+  @staticmethod
+  def _copy_fxn(name:str="copy"):
+    def copy_kernel(out:UOp, inp:UOp) -> UOp:
+      i = UOp.range(inp.numel(), 0)
+      return UOp.group(out[i].store(inp[i])).end(i).sink(arg=KernelInfo(name=name))
+    return copy_kernel
+
+  def _copy_call(self, out:Tensor, expr:Tensor, name:str="copy") -> Tensor:
+    # forge a custom kernel call with params and call args, like llm/kernels does (no Tensor.custom_kernel contiguous)
+    params = tuple(UOp.placeholder_like(u, slot=i) for i,u in enumerate((out.uop, expr.uop)))
+    return Tensor(out.uop.after(self._copy_fxn(name)(*params).call(out.uop, expr.uop)))
+
+  def test_custom_kernel_buffer_src(self):
+    # custom kernels need buffers: a buffer input must never add a realize kernel
+    y = Tensor.ones(64).contiguous().realize()
+    out = Tensor.empty_like(y)
+    check_schedule(self._copy_call(out, y), 1)
+
+  def test_custom_kernel_view_src(self):
+    # a RESHAPE over a buffer resolves to the buffer state (RESHAPEs on call args are stripped), no realize kernel
+    y = Tensor.ones(64).contiguous().realize()
+    out = Tensor.empty_like(y)
+    check_schedule(self._copy_call(out, y.reshape(8, 8).reshape(64)), 1)
+
+  def test_custom_kernel_elementwise_src(self):
+    # a computed input is not a buffer state: the call args are unwrapped to their base buffer,
+    # so the compute would be silently dropped. this must raise instead of producing wrong results
+    y = Tensor.ones(64).contiguous().realize()
+    out = Tensor.empty_like(y)
+    check_schedule(self._copy_call(out, y + y), 2)
+
+  def test_custom_kernel_lazy_const_src(self):
+    # a lazy const expression above the call has no buffer at all. this used to crash rangeify with a KeyError
+    x = Tensor.linspace(-1.0, 1.0, 64)
+    out = Tensor.empty_like(x)
+    check_schedule(self._copy_call(out, x), 2)
+
+  def test_custom_kernel_offset_view_src(self):
+    # a SHRINK with an offset over a buffer is not a buffer state either, the offset would be silently dropped
+    y = Tensor.ones(128).contiguous().realize()
+    out = Tensor.empty(64)
+    check_schedule(self._copy_call(out, y[16:80]), 2)
+
+  def test_custom_kernel_computed_src_api(self):
+    # the supported way to pass computed inputs: Tensor.custom_kernel makes inputs contiguous (one realize kernel)
+    y = Tensor.ones(64).contiguous().realize()
+    out = Tensor.empty_like(y)
+    check_schedule(Tensor.custom_kernel(out, y + y, fxn=self._copy_fxn())[0], 2)
+
+  def test_custom_kernel_on_custom_kernel(self):
+    # the output of a custom kernel is a buffer state, chaining custom kernels must not add kernels
+    y = Tensor.ones(64).contiguous().realize()
+    k1 = self._copy_call(Tensor.empty_like(y), y, name="k1")
+    k2 = self._copy_call(Tensor.empty_like(y), k1, name="k2")
+    sched, _ = check_schedule(k2, 2)
+    self.assertEqual([call.src[0].arg.name for call in sched.src], ["k1", "k2"])
 
   def test_empty_is_not_realized(self):
     a = Tensor.empty(10)
@@ -1626,6 +1698,7 @@ class TestSchedule(unittest.TestCase):
     check_schedule(out, 2)
 
   def test_schedule_mem_used(self):
+    Tensor.ones(256).contiguous().realize() # hcq2 caches the linked schedule with its buffers
     gc.collect()
     base = GlobalCounters.mem_used
     Tensor.ones(256).contiguous().realize()
@@ -1739,7 +1812,7 @@ class TestUOpBecome(unittest.TestCase):
     a = Tensor.empty(4, 1)
     b = a.expand(4, 4).reciprocal()
     check_schedule(b, 1)
-    self.assertEqual(b.uop.base.buffer.size, 4)
+    self.assertEqual(b.uop.base.buffer.nbytes, 4 * b.dtype.itemsize)
     self.assertEqual(b.uop.shape, (4, 4))
 
   def test_reorder_expand_alt(self):
@@ -1998,6 +2071,38 @@ class TestInvalidTensor(unittest.TestCase):
     from tinygrad.dtype import Invalid
     t = Tensor.full((4,), Invalid, dtype=dtypes.float)
     check_schedule(t, 0)
+
+class TestLimitBufs(unittest.TestCase):
+  def test_limit_bufs_linear_scaling(self):
+    def sched_time(n):
+      with Context(TRACK_MATCH_STATS=0, DEBUG=0, PARALLEL=0):
+        bufs = [Tensor.ones(16).contiguous().realize() for _ in range(4)]
+        root = bufs[0]
+        for i in range(n): root = root + bufs[i % 4]
+        with Context(MAX_KERNEL_BUFFERS=8, SCACHE=0):
+          st = time.perf_counter()
+          root.schedule_linear()
+          return time.perf_counter() - st
+    sched_time(400)
+    t1, t2 = min(sched_time(400) for _ in range(3)), min(sched_time(1600) for _ in range(3))
+    self.assertLess(t2/t1, 8, f"{t1*1e3:.1f}ms -> {t2*1e3:.1f}ms")
+
+class TestCopyFolding(unittest.TestCase):
+  def test_one_hot_with_copy(self):
+    y = Tensor([1, 2, 3], device="NULL").to("NULL:1")
+    x = y.one_hot(10).int()
+    check_schedule(x, 3, filter_sink=False)
+
+  def test_alu_after_copy(self):
+    a = Tensor.ones((4,), device="NULL").to("NULL:1")
+    b = Tensor.empty(4, device="NULL:1")
+    add = a+b
+    assert all_same([x.device for x in add.uop.src]), f"ALU has different devices! {[x.device for x in add.src]}"
+    add.schedule_linear()
+
+  def test_clone(self):
+    a = Tensor.empty(4)
+    check_schedule(a.clone(), 1, filter_sink=False)
 
 if __name__ == '__main__':
   unittest.main(verbosity=2)
