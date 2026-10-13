@@ -20,7 +20,7 @@
 - Python: 3.x
 - 실행 위치:
   ```bash
-  /data/openpilot/selfdrive/kisapilot
+  /data/openpilot/openpilot/selfdrive/kisapilot
   ```
 
 ---
@@ -48,7 +48,7 @@ selfdrive/kisapilot/
 
 ## 설치 및 준비
 ```bash
-cd /data/openpilot/selfdrive/kisapilot
+cd /data/openpilot/openpilot/selfdrive/kisapilot
 chmod +x kisa_agent.py
 ```
 
@@ -76,7 +76,7 @@ nohup python3 kisa_agent.py &
 ```
 
 프로세스 등록 예시:
-- PythonProcess("kisa_agent", "selfdrive.kisapilot.kisa_agent", always_run)
+- PythonProcess("kisa_agent", "openpilot.selfdrive.kisapilot.kisa_agent", always_run)
 ---
 
 
@@ -110,3 +110,10 @@ nohup python3 kisa_agent.py &
 ## 라이선스
 내부 사용 목적
 
+
+## 모델 변경 기능 제거
+
+2026-10-13부터 웹 에이전트의 모델 다운로드·변경·원본 복원 기능을 제공하지 않습니다.
+`/model/change`, `/model/restore_original`, `/log/download`, `/log/restore` API는 제거되어 404를 반환합니다.
+현재 모델은 저장소의 modeld 빌드 설정으로 관리합니다. 웹 로그·파일 관리·파라미터·터미널·Git 및 재부팅 기능은 유지합니다.
+기존 안드로이드 APK에 모델 변경 메뉴가 남아 있어도 서버에서는 해당 요청을 처리하지 않습니다.
