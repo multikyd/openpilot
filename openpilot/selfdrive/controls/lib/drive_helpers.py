@@ -100,6 +100,11 @@ def clip_curvature(v_ego, prev_curvature, new_curvature, roll) -> tuple[float, b
   return float(new_curvature), limited_accel or limited_max_curv
 
 
+def should_stop(v_ego: float, a_target: float) -> bool:
+  return bool(v_ego < 0.3 and a_target < 0.1)
+
+
+
 def get_accel_from_plan(speeds, accels, t_idxs, action_t=DT_MDL, vEgoStopping=0.05):
   if len(speeds) == len(t_idxs):
     v_now = speeds[0]

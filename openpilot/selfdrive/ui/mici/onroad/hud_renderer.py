@@ -197,8 +197,7 @@ class HudRenderer(Widget):
     if self.is_cruise_set:
       self._draw_set_speed(rect)
 
-    if ui_state.usbgpu and ui_state.usbgpu_compiled:
-      self._draw_model_source(rect)
+    self._draw_model_source(rect)
 
     self._draw_steering_wheel(rect)
     self._draw_current_speed(rect)
@@ -208,33 +207,24 @@ class HudRenderer(Widget):
       self._draw_speed_limit_sign(rect)
 
   def _draw_model_source(self, rect: rl.Rectangle) -> None:
-    if ui_state.sm.recv_frame['selfdriveState'] < ui_state.started_frame:
-      return
-
-    big_failed = (ui_state.usbgpu_active is False or not ui_state.sm['deviceState'].chestnutPresent or
-                  (ui_state.usbgpu_active is True and ui_state.sm.recv_frame['modelV2'] > ui_state.started_frame and
-                   not ui_state.sm.alive['modelV2']) or
-                  (ui_state.usbgpu_active is None and ui_state.sm.recv_frame['modelV2'] > ui_state.started_frame))
-    self._small_model_engaged &= big_failed
-    loading = ui_state.usbgpu_loading or (ui_state.usbgpu_active is None and not big_failed)
+    loading = ui_state.chestnut_state == ChestnutState.LOADING
     if loading:
-      pulse = 0.5 - 0.5 * math.cos(rl.get_time() * 6.0)
-      icon = self._txt_egpu
-      opacity = 0.35 + 0.65 * pulse
-    elif self._small_model_engaged:
-      icon = self._txt_egpu_crossed
-      opacity = 0.65
-    elif big_failed:
-      icon = self._txt_egpu_orange
+      icon = self._txt_chestnut
+      opacity = 0.35 + 0.65 * (0.5 - 0.5 * math.cos(rl.get_time() * 6.0))
+    elif ui_state.chestnut_state in (ChestnutState.UNCOMPILED, ChestnutState.FAILED):
+      icon = self._txt_chestnut_orange
+      opacity = 1.0
+    elif ui_state.chestnut_state == ChestnutState.ACTIVE:
+      icon = self._txt_chestnut_green
       opacity = 1.0
     else:
-      icon = self._txt_egpu_green
-      opacity = 1.0
+      return
 
-    if icon is not self._egpu_icon:
-      self._egpu_fade_time = rl.get_time()
-      self._egpu_icon = icon
-    alpha = self._egpu_alpha_filter.update(loading or 0 < rl.get_time() - self._egpu_fade_time < SET_SPEED_PERSISTENCE)
+    if icon is not self._chestnut_icon:
+      self._chestnut_fade_time = rl.get_time()
+      self._chestnut_icon = icon
+    visible = loading or rl.get_time() - self._chestnut_fade_time < SET_SPEED_PERSISTENCE
+    alpha = self._chestnut_alpha_filter.update(visible)
     if alpha < 1e-2:
       return
 
