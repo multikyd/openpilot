@@ -94,11 +94,6 @@ class Controls:
     self.lat_smooth_seconds = LAT_SMOOTH_SECONDS if self.params.get("LatSmoothSec", return_default=True) < 0 else self.params.get("LatSmoothSec", return_default=True)
     self.steer_actuator_delay = self.params.get("SteerActuatorDelay", return_default=True)
 
-    self.sr_rate = self.params.get("SteerRatioRate")
-    self.custom_sr = self.params.get("CustomSR")
-    self.use_lane_line_curve_speed = self.params.get("UseLaneLineCurveSpeed")
-    self.lat_smooth_seconds = self.params.get("LatSmoothSec")
-    self.steer_actuator_delay = self.params.get("SteerActuatorDelay")
 
   def update(self):
     self.sm.update(15)
@@ -116,7 +111,9 @@ class Controls:
       self.sr_rate = self.params.get("SteerRatioRate")
       self.custom_sr = self.params.get("CustomSR")
       self.use_lane_line_curve_speed = self.params.get("UseLaneLineCurveSpeed")
-      self.lat_smooth_seconds = self.params.get("LatSmoothSec")
+      self.lat_smooth_seconds = self.params.get("LatSmoothSec", return_default=True)
+      if self.lat_smooth_seconds < 0:
+        self.lat_smooth_seconds = LAT_SMOOTH_SECONDS
       self.steer_actuator_delay = self.params.get("SteerActuatorDelay")
 
     CS = self.sm['carState']

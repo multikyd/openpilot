@@ -38,7 +38,7 @@ class DeviceFeedback:
       return self.sm.valid[service] and since <= stamp <= now and now - stamp < 1.0
     if not fresh('deviceState'):
       return False
-    if not self.sm['deviceState'].started and not params.get_bool('IsOnroad'):
+    if not self.sm['deviceState'].started and params.get_bool('IsOffroad'):
       if fresh('carControl') and (self.sm['carControl'].enabled or self.sm['carControl'].latActive or self.sm['carControl'].longActive):
         return False
       if fresh('selfdriveState') and (self.sm['selfdriveState'].enabled or self.sm['selfdriveState'].active):

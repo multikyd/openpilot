@@ -139,11 +139,17 @@ function launch {
 
     # kisa agent start
     python3 /data/openpilot/openpilot/selfdrive/kisapilot/kisa_agent.py &
+    KISA_BOOT_AGENT_PID=$!
 
   # start manager
   cd openpilot/system/manager
   if [ ! -f "$DIR/prebuilt" ]; then
     ./build.py
+  fi
+  # Hand the early logging agent over to the process manager.
+  if [ -n "${KISA_BOOT_AGENT_PID:-}" ]; then
+    kill "$KISA_BOOT_AGENT_PID" 2>/dev/null || true
+    wait "$KISA_BOOT_AGENT_PID" 2>/dev/null || true
   fi
   ./manager.py
 
