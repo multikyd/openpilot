@@ -976,34 +976,39 @@ FW_QUERY_CONFIG = FwQueryConfig(
   match_fw_to_car_fuzzy=match_fw_to_car_fuzzy,
 )
 
+
+def _cars_with_flags(flags: HyundaiFlags) -> set[CAR]:
+  return {platform for platform in CAR if platform.config.flags & flags}
+
+
 CHECKSUM = {
-  "crc8": CAR.with_flags(HyundaiFlags.CHECKSUM_CRC8),
-  "6B": CAR.with_flags(HyundaiFlags.CHECKSUM_6B),
+  "crc8": _cars_with_flags(HyundaiFlags.CHECKSUM_CRC8),
+  "6B": _cars_with_flags(HyundaiFlags.CHECKSUM_6B),
 }
 
 CAN_GEARS = {
   # which message has the gear. hybrid and EV use ELECT_GEAR
-  "use_cluster_gears": CAR.with_flags(HyundaiFlags.CLUSTER_GEARS),
-  "use_tcu_gears": CAR.with_flags(HyundaiFlags.TCU_GEARS),
+  "use_cluster_gears": _cars_with_flags(HyundaiFlags.CLUSTER_GEARS),
+  "use_tcu_gears": _cars_with_flags(HyundaiFlags.TCU_GEARS),
   "send_mdps12": {CAR.GENESIS_G90, CAR.GENESIS_G90_2019, CAR.KIA_K9, CAR.KIA_K7},
 }
 
-CANFD_CAR = CAR.with_flags(HyundaiFlags.CANFD)
-CANFD_RADAR_SCC_CAR = CAR.with_flags(HyundaiFlags.RADAR_SCC)  # TODO: merge with UNSUPPORTED_LONGITUDINAL_CAR
+CANFD_CAR = _cars_with_flags(HyundaiFlags.CANFD)
+CANFD_RADAR_SCC_CAR = _cars_with_flags(HyundaiFlags.RADAR_SCC)  # TODO: merge with UNSUPPORTED_LONGITUDINAL_CAR
 
-CANFD_UNSUPPORTED_LONGITUDINAL_CAR = CAR.with_flags(HyundaiFlags.CANFD_NO_RADAR_DISABLE)  # TODO: merge with UNSUPPORTED_LONGITUDINAL_CAR
+CANFD_UNSUPPORTED_LONGITUDINAL_CAR = _cars_with_flags(HyundaiFlags.CANFD_NO_RADAR_DISABLE)  # TODO: merge with UNSUPPORTED_LONGITUDINAL_CAR
 
-CAMERA_SCC_CAR = CAR.with_flags(HyundaiFlags.CAMERA_SCC)
+CAMERA_SCC_CAR = _cars_with_flags(HyundaiFlags.CAMERA_SCC)
 
-HYBRID_CAR = CAR.with_flags(HyundaiFlags.HYBRID)
+HYBRID_CAR = _cars_with_flags(HyundaiFlags.HYBRID)
 
-EV_CAR = CAR.with_flags(HyundaiFlags.EV)
+EV_CAR = _cars_with_flags(HyundaiFlags.EV)
 
-LEGACY_SAFETY_MODE_CAR = CAR.with_flags(HyundaiFlags.LEGACY)
+LEGACY_SAFETY_MODE_CAR = _cars_with_flags(HyundaiFlags.LEGACY)
 
 # TODO: another PR with (HyundaiFlags.LEGACY | HyundaiFlags.UNSUPPORTED_LONGITUDINAL | HyundaiFlags.CAMERA_SCC |
 #       HyundaiFlags.CANFD_RADAR_SCC | HyundaiFlags.CANFD_NO_RADAR_DISABLE | )
-UNSUPPORTED_LONGITUDINAL_CAR = CAR.with_flags(HyundaiFlags.LEGACY) | CAR.with_flags(HyundaiFlags.UNSUPPORTED_LONGITUDINAL)
+UNSUPPORTED_LONGITUDINAL_CAR = _cars_with_flags(HyundaiFlags.LEGACY) | _cars_with_flags(HyundaiFlags.UNSUPPORTED_LONGITUDINAL)
 
 DBC = CAR.create_dbc_map()
 
