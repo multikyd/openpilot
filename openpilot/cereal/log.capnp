@@ -1321,6 +1321,7 @@ struct LongitudinalPlan @0xe00b5b3eba12876c {
   lead1Obstacle @52 :List(Float64);
   personality @53: UInt8;
   enableSpeedTF @54: Int8;
+  signalCoastActive @55: Bool; # validated TMAP assistance is reducing the acceleration target
 
   enum LongitudinalPlanSource {
     cruise @0;

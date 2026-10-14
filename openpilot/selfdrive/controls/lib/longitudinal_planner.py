@@ -280,6 +280,9 @@ class LongitudinalPlanner:
     longitudinalPlan.shouldStop = bool(self.output_should_stop)
     longitudinalPlan.allowBrake = True
     longitudinalPlan.allowThrottle = bool(self.allow_throttle and carrot.signal_follow.strength < 0.999)
+    longitudinalPlan.signalCoastActive = bool(
+      self.mpc.mode == 'acc' and carrot.signal_follow.strength > 0 and
+      carrot.signal_follow.reason.startswith('active') and self.output_a_target <= 0.05)
 
     longitudinalPlan.xState = carrot.xState.value
     longitudinalPlan.trafficState = carrot.trafficState.value
