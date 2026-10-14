@@ -40,6 +40,9 @@ class BumpMemory:
           clean['passes'] = max(0, int(r.get('passes', 0)))
           clean['smooth'] = max(0, min(2, int(r.get('smooth', 0))))
           clean['confirmed'] = bool(r.get('confirmed', False))
+          # Recover legacy impact provenance when it is supported by the saved peak.
+          peak = float(r.get('last_peak', 0))
+          clean['impact_learned'] = bool(r.get('impact_learned', False)) or (math.isfinite(peak) and peak >= ROUGH_PEAK)
           cap = float(r.get('manual_cap', 50))
           if not math.isfinite(cap):
             continue
@@ -106,7 +109,7 @@ class BumpMemory:
     r = self._find(lat, lon, heading)
     if r is None:
       r = dict(lat=lat, lon=lon, heading=heading, target=self.base, confirmed=known,
-               passes=0, smooth=0, manual_cap=50)
+               passes=0, smooth=0, manual_cap=50, impact_learned=not known)
       self.records.append(r)
       if len(self.records) > MAX_RECORDS:
         self.records.pop(0)
@@ -132,6 +135,7 @@ class BumpMemory:
       record['target'] = min(old, record['manual_cap'])
     # A sustained hard impact reduces the target even after a driver's slowdown.
     if peak >= ROUGH_PEAK and above >= 2:
+      record['impact_learned'] = True
       record['target'] = max(10, min(record['target'] - 5, math.floor((speed - 5)/5)*5))
       record['smooth'] = 0
       self._notify(now, f"큰 충격 · 다음 {record['target']:.0f}")
@@ -213,7 +217,8 @@ class BumpMemory:
           self.pending = None
     if nearest is not None and nearest['confirmed'] and nearest_d >= -8:
       target = min(nearest['target'], self.base + self.raise_limit, nearest['manual_cap'])
-      if 0 < nearest_d < 120 and now-self.sound_last >= 15 and getattr(self, '_announced', None) != id(nearest):
+      notify = nearest.get('impact_learned', False) or abs(target - self.base) >= 0.5
+      if notify and 0 < nearest_d < 120 and now-self.sound_last >= 15 and getattr(self, '_announced', None) != id(nearest):
         self.sound_seq += 1
         self.sound_last = now
         # One sound per encounter, independently of passing/learning success.

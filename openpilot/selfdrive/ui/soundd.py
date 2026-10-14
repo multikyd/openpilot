@@ -35,6 +35,7 @@ if HARDWARE.get_device_type() == "tizi":
 
 AudibleAlert = log.SelfdriveState.AudibleAlert
 CRITICAL_MAX = -1 # internal sound key, not an AudibleAlert
+BUMP_CHIME = -2 # dedicated one-shot bump tone, local to soundd
 
 
 sound_list: dict[int, tuple[str, int | None, float]] = {
@@ -63,6 +64,7 @@ sound_list: dict[int, tuple[str, int | None, float]] = {
   AudibleAlert.speedDown:  ("audio_speed_down.wav", None, MAX_VOLUME),
   AudibleAlert.reverseGear: ("reverse_gear.wav", 1, MAX_VOLUME),
   AudibleAlert.dingdong: ("dingdong.wav", 1, MAX_VOLUME),
+  BUMP_CHIME: ("bump_ding.wav", 1, 0.7),
 }
 
 def check_selfdrive_timeout_alert(sm):
@@ -168,7 +170,7 @@ class Soundd:
     if (changed and cm.bumpSoundEnabled and not 0 <= cm.leftSec <= 11 and
         sm.valid['carrotMan'] and sm.alive['carrotMan'] and
         time.monotonic() - sm.recv_time['carrotMan'] < 1 and new_alert == AudibleAlert.none):
-      return AudibleAlert.dingdong
+      return BUMP_CHIME
     return new_alert
 
   def get_audible_alert(self, sm):
