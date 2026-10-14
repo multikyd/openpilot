@@ -1,3 +1,4 @@
+from openpilot.common.swaglog import cloudlog
 import hashlib
 import errno
 
@@ -349,6 +350,7 @@ class CarrotMan:
         #print("coords=", coords)
         #print("curvatures=", curvatures)
         self.carrot_serv.update_navi(remote_ip, self.sm, self.pm, vturn_speed, coords, distances, route_speed, self.gps_location_service)
+        self._refresh_signal_context()
 
         now = time.monotonic()
         if now >= next_broadcast_time:
@@ -916,9 +918,7 @@ class CarrotMan:
       except Exception as e:
         print("NavDestination put error:", e)
 
-  def _put_directional_signal(self, data):
-    from openpilot.selfdrive.carrot.signal_follow import directional_signal
-    now = time.monotonic()
+  def _signal_context(self, now):
     serv = self.carrot_serv
     navigation = {
       "age": now - serv.last_update_gps_time_navi,
@@ -933,7 +933,23 @@ class CarrotMan:
       "lat": gps.latitude, "lon": gps.longitude, "bearing": gps.bearingDeg,
       "speed": gps.speed, "accuracy": gps.horizontalAccuracy,
     }
+    return navigation, physical_gps
+
+  def _refresh_signal_context(self):
+    now = time.monotonic()
+    if not getattr(self, '_directional_signal', None):
+      return
+    navigation, gps = self._signal_context(now)
+    self.params_memory.put_nonblocking("TrafficLightContext", json.dumps(
+      {"ts": now, "navigation": navigation, "gps": gps}))
+
+  def _put_directional_signal(self, data):
+    from openpilot.selfdrive.carrot.signal_follow import directional_signal
+    now = time.monotonic()
+    navigation, physical_gps = self._signal_context(now)
     self._directional_signal = directional_signal(data, now, navigation, physical_gps)
+    cloudlog.event("tmap_signal_rx", raw=data, normalized=self._directional_signal)
+    self._refresh_signal_context()
     self.params_memory.put("TrafficLight", json.dumps({"directional": self._directional_signal}))
 
   def _put_traffic_light(self, lamp: str, remain: Any, distance: Any = 0, lat: Any = None, lon: Any = None):
@@ -973,6 +989,7 @@ class CarrotMan:
   def handle_traffic_light(self, d: dict):
     if not isinstance(d, dict):
       return
+    cloudlog.event("tmap_sinf_rx", raw=d)
 
     # {'distance': 120, 'greenLightRemainTime': 0, 'leftLightRemainTime': 0, 'location': {'coordString': 'x:127.045286, y:37.477032', 'latitude': 37.47703188722564, 'longitude': 127.04528634430659},
     #       'redLightRemainTime': 15, 'rightLightRemainTime': 0, 'uturnLightRemainTime': 0, 'greenLightOn': False, 'leftLightOn': False, 'redLightOn': True, 'rightLightOn': False, 'uturnLightOn': False}
@@ -998,6 +1015,10 @@ class CarrotMan:
     if lamp is None:
       return
 
+    from openpilot.selfdrive.carrot.signal_follow import normalized_position, signal_from_sinf
+    # Prefer a recent direction-specific ssinf, but support legacy sinf-only feeds.
+    if time.monotonic() - getattr(self, "_ssinf_time", -100.0) > 1.5:
+      self._put_directional_signal(signal_from_sinf(d))
     location = d.get("location", {})
     lat = None
     lon = None
@@ -1009,14 +1030,19 @@ class CarrotMan:
           lon = float(location.get("longitude"))
     except Exception:
       pass
+    lat, lon = normalized_position(lat, lon)
     self._put_traffic_light(lamp, remain, d.get("distance", 0), lat, lon)
 
   def handle_traffic_light_detail(self, d: dict):
     if not isinstance(d, dict):
       return
 
+    from openpilot.selfdrive.carrot.signal_follow import normalized_position
+    d = dict(d)
+    self._ssinf_time = time.monotonic()
     # Preserve all directions before legacy display logic chooses one color.
     self._put_directional_signal(d)
+    d['lat'], d['lon'] = normalized_position(d.get('lat'), d.get('lon'))
 
     green_checks = (
       ("left", "left", "left_remain_time"),

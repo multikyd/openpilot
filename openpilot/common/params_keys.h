@@ -284,5 +284,6 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"CarrotNaviDebug", {CLEAR_ON_MANAGER_START, STRING}},
     {"CarrotNaviImage", {CLEAR_ON_MANAGER_START, STRING}},
     {"TrafficLight", {CLEAR_ON_MANAGER_START, STRING}},
+    {"TrafficLightContext", {CLEAR_ON_MANAGER_START, STRING}},
     {"LeadDangerFactor", {PERSISTENT, FLOAT, "0.75"}},
 };

@@ -174,6 +174,8 @@ class Controls:
     # accel PID loop
     pid_accel_limits = self.CI.get_pid_accel_limits(self.CP, CS.vEgo, CS.vCruise * CV.KPH_TO_MS)
     t_since_plan = (self.sm.frame - self.sm.recv_frame['longitudinalPlan']) * DT_CTRL
+    if self.sm.valid['longitudinalPlan'] and 0 <= t_since_plan < 0.3 and not long_plan.allowThrottle:
+      pid_accel_limits = (pid_accel_limits[0], min(pid_accel_limits[1], 0.0))
     accel, aTarget, jerk = self.LoC.update(CC.longActive, CS, long_plan, pid_accel_limits, t_since_plan, self.sm['radarState'])
     actuators.accel = float(accel)
     actuators.aTarget = float(aTarget)
@@ -184,16 +186,16 @@ class Controls:
     #self.lanefull_mode_enabled = (lat_plan.useLaneLines and abs(self.sm['carrotMan'].vTurnSpeed) > self.use_lane_line_curve_speed)
     v_turn = abs(self.sm['carrotMan'].vTurnSpeed)
     if lat_plan.useLaneLines:
-      buffer = 5.0  # ¼Óµµ ¹öÆÛ (¡¾5.0)
-      HOLD_FRAMES = 50  # ¾à 0.5ÃÊ À¯Áö (100Hz ±âÁØ: 50ÇÁ·¹ÀÓ)
+      buffer = 5.0  # ì†ë„ ë²„í¼ (Â±5.0)
+      HOLD_FRAMES = 50  # ì•½ 0.5ì´ˆ ìœ ì§€ (100Hz ê¸°ì¤€: 50í”„ë ˆì„)
 
-      # 1. ¼Óµµ Á¶°Ç ÆÇ´Ü (ÇöÀç ¸ğµå »óÅÂ¿¡ µû¸¥ È÷½ºÅ×¸®½Ã½º)
+      # 1. ì†ë„ ì¡°ê±´ íŒë‹¨ (í˜„ì¬ ëª¨ë“œ ìƒíƒœì— ë”°ë¥¸ íˆìŠ¤í…Œë¦¬ì‹œìŠ¤)
       if getattr(self, 'lanefull_mode_enabled', False):
         target_request = (v_turn > (self.use_lane_line_curve_speed - buffer))
       else:
         target_request = (v_turn > (self.use_lane_line_curve_speed + buffer))
 
-      # 2. ½Ã°£ Áö¿¬(Timer) ÆÇÁ¤: Á¶°Ç º¯È­ ÈÄ 0.5ÃÊ µ¿¾È À¯ÁöµÇ¾î¾ß¸¸ ÃÖÁ¾ ÀüÈ¯
+      # 2. ì‹œê°„ ì§€ì—°(Timer) íŒì •: ì¡°ê±´ ë³€í™” í›„ 0.5ì´ˆ ë™ì•ˆ ìœ ì§€ë˜ì–´ì•¼ë§Œ ìµœì¢… ì „í™˜
       if target_request != getattr(self, 'lanefull_mode_enabled', False):
         self.lanefull_timer = getattr(self, 'lanefull_timer', 0) + 1
         if self.lanefull_timer >= HOLD_FRAMES:
@@ -202,7 +204,7 @@ class Controls:
       else:
         self.lanefull_timer = 0
     else:
-      # Â÷¼± À¯½Ç ½Ã ½Ã°£ Áö¿¬ ¾øÀÌ Áï½Ã ¾ÈÀüÇÏ°Ô ÇØÁ¦
+      # ì°¨ì„  ìœ ì‹¤ ì‹œ ì‹œê°„ ì§€ì—° ì—†ì´ ì¦‰ì‹œ ì•ˆì „í•˜ê²Œ í•´ì œ
       self.lanefull_mode_enabled = False
       self.lanefull_timer = 0
 

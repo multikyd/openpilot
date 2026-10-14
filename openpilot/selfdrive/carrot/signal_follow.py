@@ -2,6 +2,35 @@
 import math
 
 
+def normalized_position(lat, lon):
+  try:
+    lat, lon = float(lat), float(lon)
+    valid = lambda a, b: math.isfinite(a) and math.isfinite(b) and -90 < a < 90 and -180 < b < 180
+    if valid(lat, lon):
+      return lat, lon
+    if valid(lon, lat):
+      return lon, lat
+  except (TypeError, ValueError, OverflowError):
+    pass
+  return None, None
+
+
+def signal_from_sinf(data):
+  # Legacy sinf red is straight/general; it does not establish a left/right red.
+  location = data.get('location', {})
+  location = location if isinstance(location, dict) else {}
+  lat, lon = normalized_position(location.get('latitude'), location.get('longitude'))
+  out = dict(lat=lat, lon=lon, distance=data.get('distance'))
+  for direction, key in (('straight', 'green'), ('left', 'left'), ('right', 'right'), ('uturn', 'uturn')):
+    on = bool(data.get(key + 'LightOn'))
+    state = 'GREEN_LIGHT_ON' if on else 'UNAVAILABLE'
+    remain = data.get(key + 'LightRemainTime', 0)
+    if direction == 'straight' and data.get('redLightOn') and not on:
+      state, remain = 'RED_LIGHT_ON', data.get('redLightRemainTime', 0)
+    out[direction], out[direction + '_remain_time'] = state, remain
+  return out
+
+
 def directional_signal(data, now, navigation, gps):
   movements = {}
   for direction in ('straight', 'left', 'right', 'uturn'):
@@ -11,7 +40,8 @@ def directional_signal(data, now, navigation, gps):
     except (TypeError, ValueError):
       remain = 0.0
     movements[direction] = {'state': state, 'remain': remain}
-  return {'ts': now, 'lat': data.get('lat'), 'lon': data.get('lon'),
+  lat, lon = normalized_position(data.get('lat'), data.get('lon'))
+  return {'ts': now, 'lat': lat, 'lon': lon,
           'distance': data.get('distance'), 'movements': movements,
           'navigation': navigation, 'gps': gps}
 
@@ -30,10 +60,11 @@ def red_approach(signal, now, v_ego):
   """Only fresh straight-through route signals corroborated by vehicle GPS."""
   try:
     age = now - float(signal['ts'])
-    if not 0 <= age <= 2.0:
+    if not 0 <= age <= 3.0:
       return False, 'signal_age'
     nav, gps = signal['navigation'], signal['gps']
-    if not gps['valid'] or not 0 <= float(gps['age']) + age <= 2.0 or not 0 <= float(nav['age']) + age <= 2.0:
+    context_age = now - float(signal.get('context_ts', signal['ts']))
+    if not gps['valid'] or not 0 <= float(gps['age']) + context_age <= 3.0 or not 0 <= float(nav['age']) + context_age <= 3.0:
       return False, 'position_age'
     accuracy = float(gps['accuracy'])
     if not math.isfinite(accuracy) or not 0 < accuracy <= 15.0:
@@ -60,16 +91,24 @@ def red_approach(signal, now, v_ego):
     if not 20 < distance < min(250.0, max(50.0, v_ego * 12.0)) or ahead <= 0 or lateral > 15:
       return False, 'signal_geometry'
     reported = float(signal['distance'])
-    if not math.isfinite(reported) or reported <= 0 or abs(reported - distance) > max(25.0, distance * .25):
+    reported_now = max(0.0, reported - max(0.0, gps_speed) * age)
+    if not math.isfinite(reported) or reported <= 0 or abs(reported_now - distance) > max(25.0, distance * .25):
       return False, 'distance_mismatch'
     turn, turn_distance = int(nav['turn']), float(nav['turn_distance'])
-    # Version 1 supports straight approaches only. Unknown and near turns are excluded.
-    if turn not in (0, 11, 202) and not (turn in (12, 16, 13, 19, 14) and turn_distance > distance + 40):
+    movement = 'straight'
+    near_turn = 0 < turn_distance <= distance + 40
+    if near_turn and turn in (12, 16, 1000):
+      movement = 'left'
+    elif near_turn and turn in (13, 19, 1001):
+      movement = 'right'
+    elif near_turn and turn == 14:
+      movement = 'uturn'
+    elif turn not in (-1, 0, 11, 202, 12, 16, 1000, 13, 19, 1001, 14):
       return False, 'route_direction'
-    straight = signal['movements']['straight']
-    remaining = float(straight['remain']) - age
-    if straight['state'] != 'RED_LIGHT_ON' or not 2.0 < remaining <= 300:
-      return False, 'straight_not_red'
+    light = signal['movements'][movement]
+    remaining = float(light['remain']) - age
+    if light['state'] != 'RED_LIGHT_ON' or not 2.0 < remaining <= 300:
+      return False, movement + '_not_red'
     return True, 'red_ahead'
   except (KeyError, TypeError, ValueError, OverflowError):
     return False, 'invalid_data'
@@ -100,9 +139,8 @@ class SignalFollowAssist:
     except (AttributeError, TypeError, ValueError):
       lead_valid = False
       self.last_distance = None
-    self.confirm_time = min(1.0, self.confirm_time + dt) if valid and lead_valid else 0.0
-    if valid and not lead_valid:
-      self.reason = 'lead_unconfirmed'
+    self.confirm_time = min(1.0, self.confirm_time + dt) if valid else 0.0
+    # A verified red signal can suppress acceleration without a lead.
     target = 1.0 if self.confirm_time >= .5 else 0.0
     self.strength += max(-.4 * dt, min(.5 * dt, target - self.strength))
     slowing = lead_valid and (lead.aLeadK < -.4 or lead.vRel < -.5 or lead.vLead < 2.0)
@@ -110,7 +148,7 @@ class SignalFollowAssist:
     fade = max(0.0, min(1.0, (v_ego - 2.0) / 2.0))
     gap_target = .25 * self.strength * fade if valid and slowing else 0.0
     self.gap_extra += max(-.1 * dt, min(.05 * dt, gap_target - self.gap_extra))
-    self.reason = 'active' if target else self.reason
+    self.reason = ('active_follow' if slowing else 'active_coast') if target else self.reason
 
   def cruise_accel(self, normal_max):
-    return min(normal_max, normal_max * (1.0 - self.strength) + min(normal_max, .3) * self.strength)
+    return min(normal_max, normal_max * (1.0 - self.strength) + min(normal_max, 0.0) * self.strength)

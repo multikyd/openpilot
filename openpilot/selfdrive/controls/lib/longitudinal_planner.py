@@ -279,7 +279,7 @@ class LongitudinalPlanner:
     longitudinalPlan.jTargetNow = float(self.output_j_target_now)
     longitudinalPlan.shouldStop = bool(self.output_should_stop)
     longitudinalPlan.allowBrake = True
-    longitudinalPlan.allowThrottle = bool(self.allow_throttle)
+    longitudinalPlan.allowThrottle = bool(self.allow_throttle and carrot.signal_follow.strength < 0.999)
 
     longitudinalPlan.xState = carrot.xState.value
     longitudinalPlan.trafficState = carrot.trafficState.value

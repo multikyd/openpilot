@@ -241,6 +241,12 @@ class CarrotPlanner:
         raw = self._signal_memory.get("TrafficLight")
         decoded = json.loads(raw) if raw else {}
         self._signal_snapshot = decoded.get("directional", {}) if isinstance(decoded, dict) else {}
+        context_raw = self._signal_memory.get("TrafficLightContext")
+        context = json.loads(context_raw) if context_raw else {}
+        if self._signal_snapshot and isinstance(context, dict) and 'ts' in context:
+          self._signal_snapshot = dict(self._signal_snapshot)
+          self._signal_snapshot.update(context_ts=context['ts'], navigation=context.get('navigation', {}),
+                                       gps=context.get('gps', {}))
       except (ValueError, TypeError):
         self._signal_snapshot = {}
     cs = sm['carState']
@@ -251,11 +257,13 @@ class CarrotPlanner:
     self.signal_follow.update(self._signal_snapshot, now, DT_MDL, cs.vEgo,
                               sm['radarState'].leadOne, active, override)
     is_active = self.signal_follow.strength > 0 or self.signal_follow.gap_extra > 0
-    signal_seen = bool(self._signal_snapshot) and active and sm['radarState'].leadOne.present
-    if ((is_active or signal_seen) and now - self._signal_log_time >= 10.0) or (self._signal_was_active and not is_active):
+    signal_seen = bool(self._signal_snapshot) and active
+    if ((is_active or signal_seen) and now - self._signal_log_time >= 1.0) or (self._signal_was_active and not is_active):
       self._signal_log_time = now
       cloudlog.event("tmap_signal_follow", strength=float(self.signal_follow.strength),
-                     extra_gap_s=float(self.signal_follow.gap_extra), reason=self.signal_follow.reason)
+                     extra_gap_s=float(self.signal_follow.gap_extra), reason=self.signal_follow.reason,
+                     signal=self._signal_snapshot, v_ego=float(cs.vEgo),
+                     accel_cap=float(self.signal_follow.cruise_accel(1.0)))
     self._signal_was_active = is_active
 
   def get_carrot_accel(self, v_ego):

@@ -463,6 +463,9 @@ class LongitudinalMpc:
       radarstate.leadOne, radarstate.leadTwo, v_ego, reset_state, mode)
     if mode == 'acc' and not reset_state:
       cruise_max_a = min(cruise_max_a, carrot.signal_follow.cruise_accel(self.max_a))
+      if carrot.signal_follow.strength > 0:
+        # Also bound the solver's acceleration: a nearby lead must not undo the signal cap.
+        self.params[:,1] = np.minimum(self.params[:,1], max(0.0, cruise_max_a))
 
     # Update in ACC mode or ACC/e2e blend
     if mode == 'acc':
