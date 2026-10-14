@@ -5,6 +5,7 @@ from opendbc.car.structs import car
 from openpilot.common.constants import CV
 
 from openpilot.common.params import Params
+from openpilot.common.swaglog import cloudlog
 from opendbc.car import structs
 GearShifter = structs.CarState.GearShifter
 
@@ -644,7 +645,7 @@ class VCruiseCarrot:
     # A held RES belongs to the old limit. Require another press after reset.
     self.button_cnt = 0
     self.long_pressed = False
-    self._add_log(f"Road limit changed {previous} -> {road_limit}: set {target:.1f}")
+    cloudlog.info(f"Road limit changed {previous} -> {road_limit}: set {target:.1f}")
     return target
 
   def _auto_speed_up(self, v_cruise_kph):

@@ -1190,6 +1190,25 @@ class CarrotMan:
     except Exception:
       return 0
 
+  def _extract_route_points(self, route):
+    # External navigation sends x=longitude, y=latitude, as in handle_route.
+    if not isinstance(route, list):
+      return []
+    points = []
+    for point in route:
+      if not isinstance(point, dict) or not point.get("valid", True):
+        continue
+      lon = self._safe_float_or_none(point.get("x"), minimum=-180, maximum=180)
+      lat = self._safe_float_or_none(point.get("y"), minimum=-90, maximum=90)
+      if lon is not None and lat is not None:
+        points.append((lon, lat))
+    return points
+
+  def _route_summary(self, route):
+    points = self._extract_route_points(route)
+    return {"pointCount": len(points), "firstPoint": points[0] if points else None,
+            "lastPoint": points[-1] if points else None}
+
   def _summarize_navi_event(self, event_type: str, obj: Any) -> Dict[str, Any]:
     summary: Dict[str, Any] = {"type": event_type}
     if not isinstance(obj, dict):
