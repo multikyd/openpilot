@@ -63,7 +63,7 @@ sound_list: dict[int, tuple[str, int | None, float]] = {
   AudibleAlert.speedDown:  ("audio_speed_down.wav", None, MAX_VOLUME),
   AudibleAlert.reverseGear: ("reverse_gear.wav", 1, MAX_VOLUME),
   AudibleAlert.dingdong: ("dingdong.wav", 1, MAX_VOLUME),
-  AudibleAlert.bumpChime: ("bump_ding.wav", 1, 0.7),
+  AudibleAlert.bumpChime: ("bump_ding.wav", 1, MAX_VOLUME),
   AudibleAlert.signalCoast: ("audio_signal_coast.wav", 1, MAX_VOLUME),
 }
 

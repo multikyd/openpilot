@@ -1049,8 +1049,7 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
                         Priority.LOWEST, VisualAlert.none, AudibleAlert.bumpChime, .2),
   },
   EventName.signalCoast: {
-    ET.PERMANENT: Alert("", "", AlertStatus.normal, AlertSize.none,
-                        Priority.LOWEST, VisualAlert.none, AudibleAlert.signalCoast, .2),
+    ET.WARNING: EngagementAlert(AudibleAlert.signalCoast),
   },
   EventName.audioPrompt: {
      ET.WARNING: EngagementAlert(AudibleAlert.prompt),

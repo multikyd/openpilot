@@ -211,8 +211,10 @@ class SignalMemory:
   def update(self, signal, now, wall, gps, nav, vision, speed, lead_start=False,
              left_blinker=False, right_blinker=False, steering_angle=0., model_hint=0, lead_present=False):
     out = blank()
-    if not all(math.isfinite(v) for v in (now,wall,speed)) or wall<1600000000 or speed<0:
+    if not all(math.isfinite(v) for v in (now,wall,speed)) or wall<1600000000 or speed < -.01:
       self._reset_tracking();return out
+    # The speed filter can undershoot zero while stopped (up to 1 cm/s).
+    speed = max(0., speed)
     if not gps.get('valid') or not 0 <= number(gps.get('age'), 99) < 3:
       self._reset_tracking();return out
     lat, lon = normalized_position(gps.get('lat'), gps.get('lon'))
