@@ -940,7 +940,7 @@ class CarrotMan:
     if not getattr(self, '_directional_signal', None):
       return
     navigation, gps = self._signal_context(now)
-    self.params_memory.put_nonblocking("TrafficLightContext", json.dumps(
+    self.params_memory.put("TrafficLightContext", json.dumps(
       {"ts": now, "navigation": navigation, "gps": gps}))
 
   def _put_directional_signal(self, data):
