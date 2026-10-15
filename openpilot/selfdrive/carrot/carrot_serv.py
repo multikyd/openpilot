@@ -13,7 +13,8 @@ from datetime import datetime
 from ftplib import FTP
 from openpilot.cereal import log
 import openpilot.cereal.messaging as messaging
-from openpilot.selfdrive.carrot.bump_learning import BumpMemory
+from openpilot.selfdrive.carrot.bump_learning import BumpMemory, BumpPassage
+from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.carrot.signal_memory import SignalMemory, blank as blank_signal
 from openpilot.common.realtime import Ratekeeper
 from openpilot.common.params import Params
@@ -90,6 +91,7 @@ class CarrotServ:
     self.sharp_turn_speed_active = False
     self.bump_memory = BumpMemory(self.params.get("BumpLearningData"))
     self.bump_display = None
+    self.bump_passage = BumpPassage()
     self.bump_save_time = 0.0
     self.bump_button_last = 0
 
@@ -968,7 +970,7 @@ class CarrotServ:
     bump_now = time.monotonic()
     self._update_signal_display(sm, gps_service, CS, bump_now)
     learning_enabled = self.params.get("BumpLearningEnabled", return_default=True)
-    if learning_enabled and CS is not None and sm.valid['carState']:
+    if CS is not None and sm.valid['carState']:
       gps = sm[gps_service]
       if (sm.valid[gps_service] and sm.alive[gps_service] and gps.hasFix and
           math.isfinite(gps.bearingAccuracyDeg) and 0 <= gps.bearingAccuracyDeg <= 20):
@@ -976,6 +978,9 @@ class CarrotServ:
                              gps.bearingDeg, gps.horizontalAccuracy)
       else:
         self.bump_memory.position = None
+    else:
+      self.bump_memory.position = None
+    if learning_enabled and CS is not None and sm.valid['carState']:
       self.bump_memory.base = self.autoNaviSpeedBumpSpeed
       self.bump_memory.raise_limit = float(self.params.get("BumpLearningRaise", return_default=True) or 0)
       button_changed = CS.cruiseButtons != self.bump_button_last and CS.cruiseButtons != 0
@@ -995,6 +1000,25 @@ class CarrotServ:
     else:
       self.bump_memory.pending = None
       self.bump_display = None
+    nav_distance = self.xSpdDist if self.xSpdType == 22 and self.active_carrot > 1 else None
+    passage_distance = nav_distance if nav_distance is not None else self.bump_display['distance'] if self.bump_display else None
+    self.bump_passage.update(bump_now, v_ego_kph, passage_distance, self.bump_memory.position,
+                             self.bump_memory.samples, self.bump_memory.sensor_last,
+                             enabled=CS is not None and sm.valid['carState'] and abs(CS.steeringAngleDeg) < 30.)
+    nav_bump_passed = False
+    if self.bump_memory.position is not None:
+      stamp, lat, lon, heading = self.bump_memory.position
+      from openpilot.selfdrive.carrot.bump_learning import offset
+      lat, lon = offset(lat, lon, heading, max(0., v_ego)*(bump_now-stamp))
+      if nav_distance is not None:
+        nav_bump_passed = self.bump_passage.matches(bump_now, (*offset(lat, lon, heading, nav_distance), heading))
+      if self.bump_display is not None and self.bump_passage.matches(
+          bump_now, (*offset(lat, lon, heading, self.bump_display['distance']), heading)):
+        self.bump_display = None
+    if self.bump_passage.event is not None:
+      corrected = self.bump_memory.observe_passage(
+        self.bump_passage.event, position_accurate=gps.horizontalAccuracy <= 3.) if learning_enabled else False
+      cloudlog.event('bump_sensor_passed', **self.bump_passage.event, position_corrected=corrected)
     learned_bump_speed = 250
     if self.bump_display is not None and self.autoNaviSpeedCtrlMode >= 2:
       # Keep the cap until the car is beyond the recorded location; do not release at d=0.
@@ -1004,7 +1028,7 @@ class CarrotServ:
     sdi_speed = 250
     hda_active = False
     ### 과속카메라, 사고방지턱
-    if (self.xSpdDist > 0 or self.xSpdType in [100, 101]) and self.active_carrot > 0:
+    if (self.xSpdDist > 0 or self.xSpdType in [100, 101]) and self.active_carrot > 0 and not nav_bump_passed:
       if self.xSpdType == 22 and self.bump_display is not None and abs(self.xSpdDist-self.bump_display['distance']) < 15:
         self.xSpdLimit = self.bump_display['target']
       safe_sec = self.autoNaviSpeedBumpTime if self.xSpdType == 22 else self.autoNaviSpeedCtrlEnd
@@ -1156,7 +1180,7 @@ class CarrotServ:
       if self.xSpdType == 22 and self.autoNaviCountDownMode == 1: # speed bump
         pass
       else:
-        if self.xSpdDist > 0:
+        if self.xSpdDist > 0 and not nav_bump_passed:
           left_spd_sec = min(self.left_spd_sec, int(max(self.xSpdDist - v_ego, 1) / max(1, v_ego) + 0.5))
 
       if self.xDistToTurn > 0:
@@ -1191,10 +1215,10 @@ class CarrotServ:
     msg.carrotMan.activeCarrot = self.active_carrot
     msg.carrotMan.nRoadLimitSpeed = int(self.nRoadLimitSpeed)
     msg.carrotMan.remote = remote_ip
-    msg.carrotMan.xSpdType = int(self.xSpdType)
-    msg.carrotMan.xSpdLimit = int(self.xSpdLimit)
-    msg.carrotMan.xSpdLimitOrg = int(self.xSpdLimit_org)
-    msg.carrotMan.xSpdDist = int(self.xSpdDist)
+    msg.carrotMan.xSpdType = -1 if nav_bump_passed else int(self.xSpdType)
+    msg.carrotMan.xSpdLimit = 0 if nav_bump_passed else int(self.xSpdLimit)
+    msg.carrotMan.xSpdLimitOrg = 0 if nav_bump_passed else int(self.xSpdLimit_org)
+    msg.carrotMan.xSpdDist = 0 if nav_bump_passed else int(self.xSpdDist)
     msg.carrotMan.xSpdCountDown = int(left_spd_sec)
     msg.carrotMan.xTurnInfo = int(self.xTurnInfo)
     msg.carrotMan.xDistToTurn = int(self.xDistToTurn)

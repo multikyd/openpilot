@@ -56,6 +56,7 @@ class BumpMemory:
     self.position = None
     self.pending = None
     self.cooldowns = {}
+    self.passage_observed = {}
     self.notice = ''
     self.notice_until = 0
     self.sound_seq = 0
@@ -101,6 +102,9 @@ class BumpMemory:
       if direction_matches(heading, r['heading']):
         along, cross = relative(lat, lon, heading, r)
         dist = math.hypot(along, cross)
+        if all(isinstance(r.get(k), (int, float)) and math.isfinite(r[k]) for k in ('map_lat', 'map_lon')):
+          anchor = dict(lat=r['map_lat'], lon=r['map_lon'])
+          dist = min(dist, math.hypot(*relative(lat, lon, heading, anchor)))
         if dist < best:
           best, closest = dist, r
     return closest
@@ -118,6 +122,48 @@ class BumpMemory:
       r['confirmed'] = True
       self.dirty = True
     return r
+
+  def observe_passage(self, event, position_accurate=True):
+    record = self._find(event['lat'], event['lon'], event['heading'])
+    if record is None or not record['confirmed']:
+      return False
+    if event['time']-self.passage_observed.get(id(record), -100.) < 60.:
+      return False
+    self.passage_observed[id(record)] = event['time']
+    self.cooldowns[id(record)] = event['time']
+    if self.pending is not None and self.pending['record'] is record:
+      self.pending['crossing'], self.pending['speed'] = event['impact_time'], event['speed']
+    if not position_accurate:
+      return False
+    record.setdefault('map_lat', record['lat']);record.setdefault('map_lon', record['lon'])
+    observation = [event['observed_lat'], event['observed_lon']]
+    history = record.get('location_observations', [])
+    history = history if isinstance(history, list) else []
+    history = [p for p in history if isinstance(p, list) and len(p)==2 and
+               all(isinstance(v, (float, int)) and math.isfinite(v) for v in p)][-4:]
+    history.append(observation);record['location_observations'] = history
+    self.dirty = True
+    if len(history) < 3:
+      return False
+    # Repeated independent passes must agree before moving a learned location.
+    lat = sorted(p[0] for p in history)[len(history)//2]
+    lon = sorted(p[1] for p in history)[len(history)//2]
+    point = dict(lat=lat, lon=lon)
+    if max(math.hypot(*relative(p[0], p[1], 0., point)) for p in history) > 4.:
+      return False
+    along, cross = relative(record['map_lat'], record['map_lon'], record['heading'], point)
+    if abs(cross) > 3.:
+      return False
+    # Correct travel distance, not the road's lateral position from GPS scatter.
+    lat, lon = offset(record['map_lat'], record['map_lon'], record['heading'], along)
+    point = dict(lat=lat, lon=lon)
+    bias = math.hypot(*relative(record['map_lat'], record['map_lon'], 0., point))
+    if bias > 12.:
+      return False
+    movement = math.hypot(*relative(record['lat'], record['lon'], 0., point))
+    weight = min(1., 2./max(movement, .001))
+    record['lat'] += weight*(lat-record['lat']);record['lon'] += weight*(lon-record['lon'])
+    return True
 
   def _notify(self, now, text):
     self.notice, self.notice_until = text, now + 5
@@ -226,3 +272,107 @@ class BumpMemory:
       return dict(target=target, distance=nearest_d)
     self._announced = None
     return None
+
+
+class BumpPassage:
+  """Conservative local passage evidence, independent of speed/impact learning."""
+  def __init__(self):
+    self.last_time = None
+    self.odometer = 0.0
+    self.motion = deque(maxlen=120)
+    self.candidate = None
+    self.passed = None
+    self.event = None
+
+  def _distance_at(self, stamp):
+    for a, b in zip(self.motion, list(self.motion)[1:]):
+      if a[0] <= stamp <= b[0]:
+        return a[1]+(b[1]-a[1])*(stamp-a[0])/max(.001, b[0]-a[0])
+    return None
+
+  def matches(self, now, point):
+    if self.passed is None or point is None or not 0 <= now-self.passed['time'] <= 8.:
+      return False
+    if self.odometer-self.passed['odometer'] > 30.:
+      return False
+    p = self.passed
+    north, east = relative(point[0], point[1], point[2], dict(lat=p['lat'], lon=p['lon']))
+    return direction_matches(point[2], p['heading']) and math.hypot(north, east) < 6.
+
+  def update(self, now, speed, distance, position, samples, sensor_last, enabled=True):
+    self.event = None
+    valid = (enabled and math.isfinite(now) and math.isfinite(speed) and 8. <= speed <= 40. and
+             position is not None and 0 <= now-position[0] <= 1. and
+             sensor_last is not None and 0 <= now-sensor_last < .2)
+    dt = now-self.last_time if self.last_time is not None else .1
+    self.last_time = now
+    if not valid or not 0 < dt <= .25:
+      self.candidate = self.passed = None
+      self.motion.clear()
+      return False
+    self.odometer += speed/3.6*dt
+    self.motion.append((now, self.odometer))
+    _, lat, lon, heading = position
+    lat, lon = offset(lat, lon, heading, speed/3.6*(now-position[0]))
+    if distance is None or not math.isfinite(distance) or not -3. < distance < 100.:
+      self.candidate = None
+      return False
+    point = (*offset(lat, lon, heading, distance), heading)
+    c = self.candidate
+    if c is not None:
+      along, cross = relative(point[0], point[1], heading, dict(lat=c['lat'], lon=c['lon']))
+      # A jump forward can be the next closely spaced bump, not old map jitter.
+      jump = distance-c['distance']+speed/3.6*dt > 4.
+      if jump or math.hypot(along, cross) > 6. or not direction_matches(heading, c['heading']):
+        self.candidate = self.passed = None
+        c = None
+      else:
+        c['distance'] = distance
+    if self.matches(now, point):
+      return True
+    if self.passed is not None:
+      self.passed = None
+    if not 0 < distance <= 12.:
+      self.candidate = None
+      return False
+    if c is None or now-c['start'] > 6.:
+      c = dict(lat=point[0], lon=point[1], heading=heading, distance=distance,
+               start=now, cursor=sensor_last, bursts=[], high=None, last_activity=now)
+      self.candidate = c
+    fresh = [(t, a) for t, a in samples if c['cursor'] < t <= now]
+    if fresh and (fresh[0][0]-c['cursor'] > .1 or any(b[0]-a[0] > .1 for a, b in zip(fresh, fresh[1:]))):
+      self.candidate = None
+      return False
+    for stamp, amplitude in fresh:
+      c['cursor'] = stamp
+      if amplitude >= .7:
+        c['last_activity'] = stamp
+      if amplitude >= 1.5:
+        burst = c['high']
+        if burst is None or stamp-burst['last'] > .12:
+          burst = dict(first=stamp, last=stamp, count=0, peak=0., peak_time=stamp)
+          c['bursts'].append(burst);c['bursts'] = c['bursts'][-12:];c['high'] = burst
+        burst['last'] = stamp;burst['count'] += 1
+        if amplitude > burst['peak']:
+          burst['peak'], burst['peak_time'] = amplitude, stamp
+    bursts = [b for b in c['bursts'] if b['count'] >= 3 and b['last']-b['first'] >= .02]
+    timed = [(burst, self._distance_at(burst['peak_time'])) for burst in bursts]
+    pair = None
+    for front, a in timed:
+      for rear, b in timed:
+        if a is not None and b is not None and .15 < rear['peak_time']-front['peak_time'] < 2. and 2.4 <= b-a <= 3.8:
+          pair = front, rear, a, b
+    if pair is None:
+      return False
+    front, rear, front_d, rear_d = pair
+    quiet = max(.45, 3.0/(speed/3.6)+.15)
+    if now-c['last_activity'] < quiet or self.odometer-front_d < 3.8:
+      return False
+    impact_time = (front['peak_time']+rear['peak_time'])/2.
+    observed_d = (front_d+rear_d)/2.
+    observed_lat, observed_lon = offset(lat, lon, heading, observed_d-self.odometer)
+    self.passed = dict(lat=c['lat'], lon=c['lon'], heading=heading, time=now, odometer=self.odometer)
+    self.event = dict(**self.passed, observed_lat=observed_lat, observed_lon=observed_lon,
+                      impact_time=impact_time, speed=speed, remaining=distance,
+                      axle_distance=rear_d-front_d, quiet_seconds=now-c['last_activity'])
+    return True
