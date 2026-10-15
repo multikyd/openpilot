@@ -598,9 +598,11 @@ class CarrotPlanner:
     #self.check_model_stopping(v, v_ego, self.xStop, y)
     self.check_model_stopping(v_cruise, v, v_ego, a_ego, x[-1], y, radarstate.leadOne.dRel if lead_detected else 1000)
 
-    if self.myDrivingMode == DrivingMode.High or self.trafficLightDetectMode == 0:
+    signal_stopping_enabled = self.myDrivingMode != DrivingMode.High and self.trafficLightDetectMode != 0
+    if not signal_stopping_enabled:
       self.trafficState = TrafficState.off
-    if abs(carstate.steeringAngleDeg) > 20:
+    elif abs(carstate.steeringAngleDeg) > 20 and self.xState not in [XState.e2eStop, XState.e2eStopped]:
+      # Steering filters new stop detections, but must not cancel a stop in progress.
       self.trafficState = TrafficState.off
 
     #self.update_user_control()
@@ -670,7 +672,9 @@ class CarrotPlanner:
       else:
         self.xState = XState.e2eCruise
 
-    if self.trafficState in [TrafficState.off, TrafficState.green] or self.xState not in [XState.e2eStop, XState.e2eStopped]:
+    # An unknown signal is not a release: the state machine owns stop completion.
+    # Explicitly disabling signal stopping still removes its stop target.
+    if not signal_stopping_enabled or self.xState not in [XState.e2eStop, XState.e2eStopped]:
       stop_model_x = 1000.0
 
     if self.user_stop_distance >= 0:
