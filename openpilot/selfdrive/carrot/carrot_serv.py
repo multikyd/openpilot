@@ -86,6 +86,7 @@ class CarrotServ:
     self.signal_display = blank_signal()
     self.signal_update_time = self.signal_save_time = 0.
     self.signal_vision = {}
+    self.signal_lane_points = []
     self.bump_memory = BumpMemory(self.params.get("BumpLearningData"))
     self.bump_display = None
     self.bump_save_time = 0.0
@@ -868,7 +869,7 @@ class CarrotServ:
                     bearing=gps.bearingDeg, accuracy=gps.horizontalAccuracy)
     navigation = dict(age=now-self.last_update_gps_time_navi, lat=self.vpPosPointLatNavi,
                       lon=self.vpPosPointLonNavi, speed=self.nPosSpeed, bearing=self.nPosAngle, turn=self.nTBTTurnType,
-                      turn_distance=self.nTBTDist)
+                      turn_distance=self.nTBTDist, lane_points=self.signal_lane_points)
     self.signal_memory.learn = bool(self.params.get('SignalLearningEnabled', return_default=True)) and not PC and 'REPLAY' not in os.environ
     lead = sm['radarState'].leadOne
     lead_start = bool(sm.valid['radarState'] and sm.alive['radarState'] and lead.present and lead.vLead > 1)
@@ -1367,6 +1368,9 @@ class CarrotServ:
       if self.szPosRoadName == "null":
         self.szPosRoadName = ""
 
+      from openpilot.selfdrive.carrot.signal_follow import lane_guidance
+      # Replace on every navigation packet so omitted points cannot stay stale.
+      self.signal_lane_points = lane_guidance(json)
       self.vpPosPointLatNavi = float(json.get("vpPosPointLat", 0.0))
       self.vpPosPointLonNavi = float(json.get("vpPosPointLon", 0.0))
       if self.vpPosPointLatNavi != 0.0:

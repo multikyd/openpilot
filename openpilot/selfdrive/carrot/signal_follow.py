@@ -56,6 +56,67 @@ def _offset(lat, lon, target_lat, target_lon):
   return north, east
 
 
+def lane_guidance(data):
+  """Keep bounded, explicit route movements with their own point and distance."""
+  items = data.get('aheadLaneInfoData', [])
+  items = list(items[:32]) if isinstance(items, list) else []
+  items.append(data)
+  result = []
+  directions = {4: 'straight', 11: 'straight', 202: 'straight',
+                12: 'left', 16: 'left', 1000: 'left',
+                13: 'right', 19: 'right', 1001: 'right', 14: 'uturn'}
+  for item in items:
+    if not isinstance(item, dict):
+      continue
+    try:
+      lat, lon = normalized_position(item.get('vpLanePointLat'), item.get('vpLanePointLon'))
+      distance = float(item.get('nLaneDist', item.get('nlaneDist')))
+      turn = int(item.get('nLaneTurnCode', item.get('nlaneTurnCode')))
+      if lat is None or abs(lat) < 1 or abs(lon) < 1 or not math.isfinite(distance) or not 0 <= distance <= 5000:
+        continue
+      direction = directions.get(turn)
+      if direction is None:
+        continue
+      point = dict(lat=lat, lon=lon, distance=distance, movement=direction)
+      if point not in result:
+        result.append(point)
+    except (ValueError, TypeError, OverflowError):
+      continue
+  return sorted(result, key=lambda p: p['distance'])[:32]
+
+
+def matched_lane_movement(nav, distance, lat, lon):
+  """Match this signal, not merely the next maneuver on the whole route."""
+  points = nav.get('lane_points', [])
+  if not isinstance(points, list):
+    return None
+  matches = []
+  valid = []
+  for point in points[:32]:
+    try:
+      plat, plon = float(point['lat']), float(point['lon'])
+      pdist = float(point['distance'])
+      direction = point['movement']
+      if not _position(plat, plon) or not math.isfinite(pdist) or not 0 <= pdist <= 5000 or direction not in ('straight', 'left', 'right', 'uturn'):
+        continue
+      valid.append((pdist, direction))
+      separation = math.hypot(*_offset(lat, lon, plat, plon))
+      if separation <= 30 and abs(pdist-distance) <= max(30., distance*.25):
+        matches.append((separation, direction))
+    except (KeyError, ValueError, TypeError, OverflowError):
+      continue
+  if not matches:
+    return None
+  matches.sort()
+  direction = matches[0][1]
+  # A nearby competing point or a turn before this signal makes attribution unsafe.
+  if any(d != direction and sep <= matches[0][0]+10 for sep, d in matches):
+    return 'other'
+  if any(d in ('left', 'right', 'uturn') and pdist < distance-40 for pdist, d in valid):
+    return 'other'
+  return direction
+
+
 def red_approach(signal, now, v_ego):
   """Only fresh straight-through route signals corroborated by vehicle GPS."""
   try:
@@ -95,16 +156,20 @@ def red_approach(signal, now, v_ego):
     if not math.isfinite(reported) or reported <= 0 or abs(reported_now - distance) > max(25.0, distance * .25):
       return False, 'distance_mismatch'
     turn, turn_distance = int(nav['turn']), float(nav['turn_distance'])
-    movement = 'straight'
-    near_turn = 0 < turn_distance <= distance + 40
-    if near_turn and turn in (12, 16, 1000):
-      movement = 'left'
-    elif near_turn and turn in (13, 19, 1001):
-      movement = 'right'
-    elif near_turn and turn == 14:
-      movement = 'uturn'
-    elif turn not in (-1, 0, 11, 202, 12, 16, 1000, 13, 19, 1001, 14):
+    movement = matched_lane_movement(nav, distance, slat, slon)
+    if movement == 'other':
       return False, 'route_direction'
+    if movement is None:
+      movement = 'straight'
+      near_turn = 0 < turn_distance <= distance + 40
+      if near_turn and turn in (12, 16, 1000):
+        movement = 'left'
+      elif near_turn and turn in (13, 19, 1001):
+        movement = 'right'
+      elif near_turn and turn == 14:
+        movement = 'uturn'
+      elif turn not in (-1, 0, 11, 202, 12, 16, 1000, 13, 19, 1001, 14):
+        return False, 'route_direction'
     light = signal['movements'][movement]
     remaining = float(light['remain']) - age
     if light['state'] != 'RED_LIGHT_ON' or not 2.0 < remaining <= 300:

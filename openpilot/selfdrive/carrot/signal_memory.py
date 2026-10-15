@@ -4,7 +4,7 @@ import json
 import math
 import statistics
 
-from openpilot.selfdrive.carrot.signal_follow import normalized_position, _offset
+from openpilot.selfdrive.carrot.signal_follow import normalized_position, _offset, matched_lane_movement
 
 UNKNOWN, RED, GREEN, YELLOW = 0, 1, 2, 3
 DIRECTIONS = ('straight', 'left', 'right', 'observed')
@@ -31,7 +31,11 @@ def blank():
               rightState=0, rightRemain=0., locationKind='')
 
 
-def movement(nav, distance):
+def movement(nav, distance, lat=None, lon=None):
+  if lat is not None and lon is not None:
+    matched = matched_lane_movement(nav, distance, lat, lon)
+    if matched is not None:
+      return 'other' if matched == 'uturn' else matched
   turn = int(number(nav.get('turn'), -1))
   turn_distance=number(nav.get('turn_distance'), -1)
   if 0 <= turn_distance and abs(turn_distance-distance)<=40:
@@ -313,8 +317,9 @@ class SignalMemory:
       node=self.unlocated_node;distance=0.
     if node is None:
       self.stopped=None;return out
-    route_known=nav_ok and int(number(nav.get('turn'),-1)) not in (-1,0)
-    direction=movement(nav,distance) if route_known else intent if intent else 'observed'
+    lane_direction=matched_lane_movement(nav,distance,node['lat'],node['lon']) if nav_ok else None
+    route_known=nav_ok and (int(number(nav.get('turn'),-1)) not in (-1,0) or lane_direction is not None)
+    direction=movement(nav,distance,node['lat'],node['lon']) if route_known else intent if intent else 'observed'
     out['distance']=max(0.,distance);out['movement']=direction
     out['locationKind']=node.get('location_kind','candidate')
     if model_hint in (1,2):

@@ -925,6 +925,7 @@ class CarrotMan:
       "lat": serv.vpPosPointLatNavi, "lon": serv.vpPosPointLonNavi,
       "bearing": serv.nPosAngle, "speed": serv.nPosSpeed,
       "turn": serv.nTBTTurnType, "turn_distance": serv.nTBTDist,
+      "lane_points": serv.signal_lane_points,
     }
     gps = self.sm[self.gps_location_service]
     physical_gps = {
@@ -1327,7 +1328,7 @@ class CarrotMan:
     traffic_light: Optional[Dict[str, Any]] = None
 
     if isinstance(obj, dict) and event_type == "rgdata" and isinstance(obj.get("rgdata"), dict):
-      rgdata = self._normalize_rgdata(obj["rgdata"])
+      rgdata = self._normalize_rgdata(obj["rgdata"], obj.get("raw_rgdata"))
       sdi_type = rgdata.get("nSdiType")
       sdi_plus_type = rgdata.get("nSdiPlusType")
       if sdi_type in (0, 1, 2, 3, 4, 7, 8, 75, 76):
@@ -1435,11 +1436,16 @@ class CarrotMan:
       self._last_navi_event = event
       self._last_navi_event_by_type[event_type] = event
 
-  def _normalize_rgdata(self, rgdata: Any):
+  def _normalize_rgdata(self, rgdata: Any, raw_rgdata=None):
     if not isinstance(rgdata, dict):
       return rgdata
 
     merged = dict(rgdata)
+    # Preserve route-local lane guidance omitted by the phone's flattened payload.
+    if isinstance(raw_rgdata, dict):
+      for key in ('aheadLaneInfoData', 'nLaneDist', 'nLaneTurnCode', 'vpLanePointLat', 'vpLanePointLon'):
+        if key in raw_rgdata:
+          merged.setdefault(key, raw_rgdata[key])
     for group_key in ("guidance", "sdi", "lane"):
       group = rgdata.get(group_key)
       if isinstance(group, dict):
@@ -1496,7 +1502,7 @@ class CarrotMan:
       if stale:
         print(f"[STALE DROP] rgdata ts={event_time_ms} <= last={last_ts}")
       else:
-        self._safe_dispatch_handler("rgdata", self.handle_carrot_state, self._normalize_rgdata(obj["rgdata"]))
+        self._safe_dispatch_handler("rgdata", self.handle_carrot_state, self._normalize_rgdata(obj["rgdata"], obj.get("raw_rgdata")))
       handled = True
 
     if "vrtx" in obj:
