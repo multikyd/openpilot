@@ -1,8 +1,10 @@
 import math
+import time
 import pyray as rl
 from dataclasses import dataclass
 from openpilot.common.constants import CV
 from openpilot.selfdrive.ui.mici.onroad.torque_bar import TorqueBar
+from openpilot.selfdrive.ui.mici.onroad.signal_renderer import draw_signal_panel
 from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus, ChestnutState
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.multilang import tr
@@ -201,7 +203,10 @@ class HudRenderer(Widget):
 
     self._draw_steering_wheel(rect)
     self._draw_current_speed(rect)
-    self._draw_standstill_timer(rect)
+    if (self._can_draw_top_icons and ui_state.started and ui_state.bumpTarget <= 0 and not ui_state.bumpLearningText and
+        ui_state.sm.valid['carrotMan'] and ui_state.sm.alive['carrotMan'] and
+        0 <= time.monotonic()-ui_state.sm.recv_time['carrotMan'] < 1):
+      draw_signal_panel(rect, self._font_bold, ui_state.sm['carrotMan'].signalDisplay)
     if self._can_draw_top_icons and not self.setspeed_changed:
       self._draw_car_stat(rect)
       self._draw_speed_limit_sign(rect)
@@ -484,20 +489,6 @@ class HudRenderer(Widget):
     text_y = rects["dist"].y + (rects["dist"].height - text_size.y*visual_offset) / 2
     rl.draw_text_ex(self._font_bold, dist_text, rl.Vector2(text_x, text_y), font_size, 0, rl.WHITE)
 
-  def _draw_standstill_timer(self, rect: rl.Rectangle) -> None:
-    """Draw KisaPilot-style standstill timer."""
-    if ui_state.standstillElapsedTimer:
-      minute = int(ui_state.standstillElapsedTimer // 60)
-      second = int(ui_state.standstillElapsedTimer % 60)
-      time_text = f"{minute:02d}:{second:02d}"
-
-      time_x = rect.x + rect.width - 150
-      time_y = rect.y + 100
-
-      time_color = rl.Color(204, 119, 34, 220)
-
-      rl.draw_text_ex(self._font_bold, time_text, rl.Vector2(time_x, time_y),
-                      50, 0, time_color)
 
   def _draw_car_stat(self, rect: rl.Rectangle) -> None:
     """Draw KisaPilot-style CAR Status."""

@@ -48,6 +48,23 @@ struct CarrotMan @0x81c2f05a394cf4af {
   bumpSoundEnabled @34 :Bool;
   bumpImpact @35 :Float32;
   bumpPassSpeed @36 :Float32;
+  signalDisplay @37 :SignalDisplay;
+}
+
+struct SignalDisplay {
+  source @0 :Text;
+  distance @1 :Float32;
+  movement @2 :Text;
+  straightState @3 :UInt8;
+  leftState @4 :UInt8;
+  straightRemain @5 :Float32;
+  leftRemain @6 :Float32;
+  estimateLow @7 :Float32;
+  estimateHigh @8 :Float32;
+  confidence @9 :Float32;
+  samples @10 :UInt16;
+  operatingMode @11 :Text;
+  predictionState @12 :UInt8;
 }
 
 struct CustomReserved1 @0xaedffd8f31e7b55d {

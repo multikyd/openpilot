@@ -14,6 +14,7 @@ from ftplib import FTP
 from openpilot.cereal import log
 import openpilot.cereal.messaging as messaging
 from openpilot.selfdrive.carrot.bump_learning import BumpMemory
+from openpilot.selfdrive.carrot.signal_memory import SignalMemory, blank as blank_signal
 from openpilot.common.realtime import Ratekeeper
 from openpilot.common.params import Params
 from openpilot.common.hardware import PC
@@ -80,6 +81,11 @@ import collections
 class CarrotServ:
   def __init__(self):
     self.params = Params()
+    self.signal_params = Params('/dev/shm/params')
+    self.signal_memory = SignalMemory(self.params.get('SignalLearningData'), learn=not PC and 'REPLAY' not in os.environ)
+    self.signal_display = blank_signal()
+    self.signal_update_time = self.signal_save_time = 0.
+    self.signal_vision = {}
     self.bump_memory = BumpMemory(self.params.get("BumpLearningData"))
     self.bump_display = None
     self.bump_save_time = 0.0
@@ -272,6 +278,8 @@ class CarrotServ:
         pass
 
   def traffic_light(self, x, y, color, cnf):
+    self.signal_vision = dict(ts=time.monotonic(), color=color,
+                             confidence=float(cnf) / (100 if float(cnf) > 1 else 1))
     traffic_red = 0
     traffic_green = 0
     traffic_left = 0
@@ -842,6 +850,35 @@ class CarrotServ:
         self.xSpdDist = distance
         self.xSpdType =xSpdType
 
+  def _update_signal_display(self, sm, gps_service, CS, now):
+    if now-self.signal_update_time < .2:
+      return
+    self.signal_update_time = now
+    if CS is None or not sm.valid['carState'] or not sm.alive['carState']:
+      self.signal_display = blank_signal()
+      return
+    try:
+      raw = self.signal_params.get('TrafficLight')
+      signal = json.loads(raw).get('directional', {}) if raw else {}
+    except (ValueError, TypeError, AttributeError):
+      signal = {}
+    gps = sm[gps_service]
+    position = dict(valid=bool(sm.valid[gps_service] and sm.alive[gps_service] and gps.hasFix),
+                    age=now-sm.recv_time[gps_service], lat=gps.latitude, lon=gps.longitude,
+                    bearing=gps.bearingDeg, accuracy=gps.horizontalAccuracy)
+    navigation = dict(age=now-self.last_update_gps_time_navi, lat=self.vpPosPointLatNavi,
+                      lon=self.vpPosPointLonNavi, speed=self.nPosSpeed, bearing=self.nPosAngle, turn=self.nTBTTurnType,
+                      turn_distance=self.nTBTDist)
+    self.signal_memory.learn = bool(self.params.get('SignalLearningEnabled', return_default=True)) and not PC and 'REPLAY' not in os.environ
+    lead = sm['radarState'].leadOne
+    lead_start = bool(sm.valid['radarState'] and sm.alive['radarState'] and lead.present and lead.vLead > 1)
+    self.signal_display = self.signal_memory.update(signal, now, time.time(), position, navigation,
+                                                    self.signal_vision, CS.vEgo, lead_start)
+    if self.signal_memory.dirty and now-self.signal_save_time > 60:
+      self.params.put('SignalLearningData', self.signal_memory.export())
+      self.signal_memory.dirty = False
+      self.signal_save_time = now
+
   def update_navi(self, remote_ip, sm, pm, vturn_speed, coords, distances, route_speed, gps_service):
 
     limit_speed = 200
@@ -909,6 +946,7 @@ class CarrotServ:
       self.xTurnInfoNext = -1
 
     bump_now = time.monotonic()
+    self._update_signal_display(sm, gps_service, CS, bump_now)
     learning_enabled = self.params.get("BumpLearningEnabled", return_default=True)
     if learning_enabled and CS is not None and sm.valid['carState']:
       gps = sm[gps_service]
@@ -1172,6 +1210,7 @@ class CarrotServ:
     msg.carrotMan.bumpSoundEnabled = bool(self.params.get("BumpLearningSound", return_default=True))
     msg.carrotMan.bumpImpact = float(self.bump_memory.last_peak)
     msg.carrotMan.bumpPassSpeed = float(self.bump_memory.last_pass_speed)
+    msg.carrotMan.signalDisplay = self.signal_display
     msg.carrotMan.leftSec = int(self.carrot_left_sec)
     pm.send('carrotMan', msg)
 

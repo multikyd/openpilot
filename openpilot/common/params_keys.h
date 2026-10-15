@@ -177,6 +177,8 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"BumpLearningSound", {PERSISTENT, BOOL, "1"}},
     {"BumpLearningRaise", {PERSISTENT, INT, "10"}},
     {"BumpLearningData", {PERSISTENT | DONT_LOG, JSON}},
+    {"SignalLearningEnabled", {PERSISTENT, BOOL, "1"}},
+    {"SignalLearningData", {PERSISTENT | DONT_LOG, JSON}},
     {"AutoNaviSpeedDecelRate", {PERSISTENT, FLOAT, "1.2"}},
     {"AutoNaviSpeedSafetyFactor", {PERSISTENT, INT, "102"}},
     {"AutoNaviCountDownMode", {PERSISTENT, INT, "0"}},
