@@ -75,6 +75,11 @@ class LanePlanner:
     self.lane_center_offset_filtered = FirstOrderFilter(0.0, 0.8, DT_MDL)
     self.lane_center_offset = self.params.get("LaneCenterOffset", return_default=True)
     self.lane_center_curvature = 0.0
+    self.lane_position_geometry = None
+    self.lane_position_class = 'unknown'
+    self.lane_position_candidate = 'unknown'
+    self.lane_position_confirm = 0.0
+    self.lane_position_offset = 0.0
 
     self.lanefull_mode = False
     self.d_prob_count = 0
@@ -172,6 +177,12 @@ class LanePlanner:
 
     lane_lines = md.laneLines
     edges = md.roadEdges
+    self.lane_position_geometry = None
+    if (len(lane_lines) >= 4 and len(edges) >= 2 and len(md.laneLineProbs) >= 4 and
+        len(md.roadEdgeStds) >= 2 and all(len(line.y) for line in (lane_lines[1], lane_lines[2], edges[0], edges[1]))):
+      self.lane_position_geometry = (md.laneLineProbs[0], md.laneLineProbs[3],
+                                     md.roadEdgeStds[0], md.roadEdgeStds[1],
+                                     edges[0].y[0], edges[1].y[0], lane_lines[1].y[0], lane_lines[2].y[0])
 
     if len(lane_lines) >= 4 and len(lane_lines[0].t) == TRAJECTORY_SIZE:
       self.ll_t = (np.array(lane_lines[1].t) + np.array(lane_lines[2].t))/2
@@ -213,6 +224,66 @@ class LanePlanner:
     confidence = np.interp(self.d_prob, [0.3, 0.8], [0.0, 1.0])
     width_factor = np.interp(self.lane_width, [2.8, 3.2], [0.0, 1.0])
     return float(filtered * confidence * width_factor)
+
+  def _get_lane_position_offset(self, CS, laneline_active):
+    # A preference is added only to a well-observed lane path, never to model mode.
+    enabled = (laneline_active and self.lane_change_multiplier > .5 and
+               not CS.leftBlinker and not CS.rightBlinker and not getattr(CS, 'steeringPressed', False))
+    if not enabled:
+      self.lane_position_class = self.lane_position_candidate = 'unknown'
+      self.lane_position_confirm = self.lane_position_offset = 0.0
+      return 0.0
+
+    candidate = 'unknown'
+    geometry = self.lane_position_geometry
+    values = (self.lane_width_left, self.lane_width_right, self.l_prob, self.r_prob, self.lane_center_curvature)
+    valid = geometry is not None and np.all(np.isfinite((*geometry, *values)))
+    width = center = 0.0
+    if valid:
+      outer_left, outer_right, edge_std_left, edge_std_right, edge_left, edge_right, lane_left, lane_right = geometry
+      width, center = lane_right-lane_left, (lane_left+lane_right)/2.
+      left, right = self.lane_width_left, self.lane_width_right
+      if 2.6 < width < 4.2 and min(self.l_prob, self.r_prob) >= .75:
+        if (left > 2.2 and .1 < right < 1.8 and outer_left > .3 and outer_right < .15 and
+            0. <= edge_std_right < .6 and -.1 <= edge_right-lane_right <= 1.8):
+          candidate = 'right'
+        elif (right > 2.2 and .1 < left < 1.8 and outer_right > .3 and outer_left < .15 and
+              0. <= edge_std_left < .6 and -.1 <= lane_left-edge_left <= 1.8):
+          candidate = 'left'
+        elif left > 2.2 and right > 2.2 and min(outer_left, outer_right) > .3:
+          candidate = 'middle'
+
+    if candidate != self.lane_position_candidate:
+      self.lane_position_candidate = candidate
+      self.lane_position_confirm = 0.0
+    self.lane_position_confirm = min(2., self.lane_position_confirm+DT_MDL)
+    self.lane_position_class = candidate if self.lane_position_confirm >= 1.0 else 'unknown'
+
+    target = 0.0
+    if valid and self.lane_position_class != 'unknown' and abs(center) < .35:
+      # Let the normal controller finish recentering after a lane change first.
+      preference = {'right': .05, 'left': -.05, 'middle': -.02}[self.lane_position_class]
+      curve_factor = float(np.interp(abs(self.lane_center_curvature), [.002, .005], [1., 0.]))
+      width_factor = float(np.interp(width, [2.6, 2.8], [0., 1.]))
+      target = preference*curve_factor*width_factor
+      # Keep at least 1.25 m from the target center to a lane boundary or a trusted edge.
+      budget = max(0., min(.05, width/2.-1.25))
+      target = float(np.clip(target, -budget, budget))
+      if target > 0 and 0 <= edge_std_right < .6:
+        target = min(target, max(0., edge_right-center-1.25))
+      elif target < 0 and 0 <= edge_std_left < .6:
+        target = max(target, -max(0., center-edge_left-1.25))
+    # Limit lateral target drift to 1.5 cm/s; never jump between edge preferences.
+    self.lane_position_offset += float(np.clip(target-self.lane_position_offset, -.015*DT_MDL, .015*DT_MDL))
+    if valid:
+      # A shrinking safety margin overrides the gradual comfort transition.
+      left_budget = right_budget = max(0., min(.05, width/2.-1.25))
+      if 0 <= edge_std_left < .6:
+        left_budget = min(left_budget, max(0., center-edge_left-1.25))
+      if 0 <= edge_std_right < .6:
+        right_budget = min(right_budget, max(0., edge_right-center-1.25))
+      self.lane_position_offset = float(np.clip(self.lane_position_offset, -left_budget, right_budget))
+    return self.lane_position_offset
 
   def get_d_path(self, CS, v_ego, path_t, path_xyz, curve_speed):
     #if v_ego > 0.1:
@@ -338,6 +409,9 @@ class LanePlanner:
 
 
     lane_center_offset = self._get_lane_center_offset(CS, laneline_active)
+    position_offset = self._get_lane_position_offset(CS, laneline_active)
+    # Bound the combined preference; the manual global trim does not stack unboundedly.
+    lane_center_offset = float(np.clip(lane_center_offset+position_offset, -.05, .05))
     # Preserve the existing total calibration adjustment, previously added here
     # and again in LateralPlanner. Apply the new lane-only preference once.
     calibration_offset = 2.0 * (self.path_offset + self.path_offset2)

@@ -273,6 +273,7 @@ class LateralPlanner:
       f"{self.LP.lane_width:.1f}m | " +
       f"{self.LP.lane_width_right:.1f}m | " +
       f"{f'offset={self.LP.offset_total * 100.0:.1f}cm turn={np.clip(self.curve_speed, -200, 200):.0f}km/h' if self.lanelines_active else ''}"
+      f" | pos={self.LP.lane_position_class} pref={self.LP.lane_position_offset * 100.:+.1f}cm"
     )
 
     lateralPlan.latDebugText = debugText
