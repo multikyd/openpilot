@@ -278,7 +278,7 @@ class CarrotServ:
         pass
 
   def traffic_light(self, x, y, color, cnf):
-    self.signal_vision = dict(ts=time.monotonic(), color=color,
+    self.signal_vision = dict(ts=time.monotonic(), color=color, x=float(x), y=float(y),
                              confidence=float(cnf) / (100 if float(cnf) > 1 else 1))
     traffic_red = 0
     traffic_green = 0
@@ -872,8 +872,14 @@ class CarrotServ:
     self.signal_memory.learn = bool(self.params.get('SignalLearningEnabled', return_default=True)) and not PC and 'REPLAY' not in os.environ
     lead = sm['radarState'].leadOne
     lead_start = bool(sm.valid['radarState'] and sm.alive['radarState'] and lead.present and lead.vLead > 1)
+    lead_present = bool(sm.valid['radarState'] and sm.alive['radarState'] and lead.present and lead.dRel < 80)
+    model_hint = (sm['longitudinalPlan'].trafficState if sm.valid['longitudinalPlan'] and
+                  sm.alive['longitudinalPlan'] and 0<=now-sm.recv_time['longitudinalPlan']<.5 else 0)
     self.signal_display = self.signal_memory.update(signal, now, time.time(), position, navigation,
-                                                    self.signal_vision, CS.vEgo, lead_start)
+                                                    self.signal_vision, CS.vEgo, lead_start,
+                                                    left_blinker=CS.leftBlinker, right_blinker=CS.rightBlinker,
+                                                    steering_angle=CS.steeringAngleDeg,
+                                                    model_hint=model_hint, lead_present=lead_present)
     if self.signal_memory.dirty and now-self.signal_save_time > 60:
       self.params.put('SignalLearningData', self.signal_memory.export())
       self.signal_memory.dirty = False

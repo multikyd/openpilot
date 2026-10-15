@@ -26,8 +26,10 @@ def draw_signal_panel(rect, font, display):
 
   source=display.source
   live=source in ('TMAP','VISION')
-  lamps=(live and (display.straightState==1 or display.leftState==1),
-         live and display.leftState==2, live and display.straightState==2)
+  right_state=getattr(display,'rightState',0)
+  arrow_right=display.movement=='right'
+  lamps=(live and (display.straightState==1 or display.leftState==1 or (arrow_right and right_state==1)),
+         live and (right_state==2 if arrow_right else display.leftState==2), live and display.straightState==2)
   for i,active in enumerate(lamps):
     cx,cy=x+21+i*36,y+height/2
     background=(red if i==0 else green) if active and i!=1 else rl.Color(28,33,41,255)
@@ -36,22 +38,27 @@ def draw_signal_panel(rect, font, display):
       # A green arrow on a dark circle, matching the road signal examples.
       ink=green if active else rl.Color(65,74,85,255)
       for a,b in (((9,0),(-9,0)),((-9,0),(-1,-8)),((-9,0),(-1,8))):
-        rl.draw_line_ex(rl.Vector2(cx+a[0],cy+a[1]),rl.Vector2(cx+b[0],cy+b[1]),4,ink)
+        flip=-1 if arrow_right else 1
+        rl.draw_line_ex(rl.Vector2(cx+flip*a[0],cy+a[1]),rl.Vector2(cx+flip*b[0],cy+b[1]),4,ink)
 
-  direction={'straight':'STRAIGHT','left':'LEFT','other':'DIR ?'}.get(display.movement,'DIR ?')
+  direction={'straight':'STRAIGHT','left':'LEFT','right':'RIGHT','observed':'OBS','other':'DIR ?'}.get(display.movement,'DIR ?')
   mode=display.operatingMode
-  state=display.leftState if display.movement=='left' else display.straightState if display.movement=='straight' else 0
+  state=display.leftState if display.movement=='left' else right_state if arrow_right else display.straightState if display.movement in ('straight','observed') else 0
   color=(red if state==1 else green if state==2 else amber if state==3 else rl.WHITE) if live else amber
-  remain=display.leftRemain if display.movement=='left' else display.straightRemain if display.movement=='straight' else 0
+  remain=display.leftRemain if display.movement=='left' else getattr(display,'rightRemain',0) if arrow_right else display.straightRemain if display.movement in ('straight','observed') else 0
   value=str(math.ceil(remain)) if remain>0 else '--'
-  detail=f'{source} / {direction} / {display.distance:.0f}m'
+  location=getattr(display,'locationKind','')
+  distance='NO RANGE' if location=='unknown' else f'{"QUEUE" if location=="queue" else "PT"} ~{display.distance:.0f}m' if location in ('stop','queue') else f'~{display.distance:.0f}m' if location=='candidate' else f'{display.distance:.0f}m'
+  detail=f'{source} / {direction} / {distance}'
   if mode in ('OFF','FLASH'):
     value=mode;color=amber
   elif source=='EST':
     value=f'~{round((display.estimateLow+display.estimateHigh)/2)}'
-    detail=f'EST {"WAIT" if mode=="WAIT" else "RED" if display.predictionState==1 else "GREEN"} / {direction} / {display.distance:.0f}m'
+    detail=f'EST {"WAIT" if mode=="WAIT" else "RED" if display.predictionState==1 else "GREEN"} / {direction} / {distance}'
     text(f'{math.floor(display.estimateLow)}-{math.ceil(display.estimateHigh)}s',x,y+height+23,width,22,amber)
   elif source=='LEARN':
     detail+=f' / {display.samples} OBS'
+  elif source=='MODEL':
+    detail=f'MODEL {"WAIT" if mode=="MODEL_STOP" else "MOVE"} / {direction} / {distance}'
   text(value,x+113,y+5,width-121,64,color,max_height=height-10)
   text(detail,x,y+height+4,width,13,amber if source=='EST' else rl.WHITE)

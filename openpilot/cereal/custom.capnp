@@ -65,6 +65,9 @@ struct SignalDisplay {
   samples @10 :UInt16;
   operatingMode @11 :Text;
   predictionState @12 :UInt8;
+  rightState @13 :UInt8;
+  rightRemain @14 :Float32;
+  locationKind @15 :Text;
 }
 
 struct CustomReserved1 @0xaedffd8f31e7b55d {
