@@ -303,6 +303,10 @@ class LongitudinalMpc:
     self.x0 = np.zeros(X_DIM)
     self.lead_loss_armed = False
     self.lead_loss_remaining = 0.0
+    self.early_lead_id = None
+    self.early_lead_distance = None
+    self.early_lead_confirm = 0.0
+    self.early_lead_decel = 0.0
     self.set_weights()
 
   def set_cost_weights(self, cost_weights, constraint_cost_weights):
@@ -419,6 +423,35 @@ class LongitudinalMpc:
     self.lead_loss_remaining = max(0.0, self.lead_loss_remaining - self.dt)
     return cruise_accel
 
+  def cruise_accel_for_approaching_lead(self, lead, v_ego, desired_distance, normal_max, enabled):
+    # Shape only the soft cruise target. Lead obstacles and brake limits stay intact.
+    values = (v_ego, desired_distance, lead.dRel, lead.vRel, lead.vLead, lead.aLeadK, lead.modelProb)
+    if (not enabled or not lead.present or not lead.radar or lead.modelProb < .8 or
+        not np.all(np.isfinite(values)) or not 8.0 <= v_ego <= 25.0 or lead.vLead < 3.0 or
+        abs((lead.vLead-v_ego)-lead.vRel) > 1.5):
+      self.early_lead_id = self.early_lead_distance = None
+      self.early_lead_confirm = self.early_lead_decel = 0.0
+      return normal_max
+
+    stable = (self.early_lead_id == lead.radarTrackId and self.early_lead_distance is not None and
+              abs(lead.dRel-self.early_lead_distance) <= max(3.0, v_ego*.3))
+    self.early_lead_id, self.early_lead_distance = lead.radarTrackId, lead.dRel
+    if not stable:
+      self.early_lead_confirm = self.early_lead_decel = 0.0
+      return normal_max
+
+    closing = -lead.vRel
+    room = lead.dRel-desired_distance
+    approaching = (1.0 < closing < 6.0 and lead.aLeadK < .3 and
+                   max(1.8*v_ego, desired_distance+5.0) < lead.dRel < 4.0*v_ego)
+    self.early_lead_confirm = min(1., self.early_lead_confirm+self.dt) if approaching else 0.
+    # Remove a persistent speed difference while there is room, before hard braking.
+    target = float(np.clip(.6*closing**2/(2.*max(room, 5.)), .12, .35)) if self.early_lead_confirm >= .5 else 0.
+    self.early_lead_decel += float(np.clip(target-self.early_lead_decel, -.2*self.dt, .15*self.dt))
+    if self.early_lead_decel < 1e-6:
+      self.early_lead_decel = 0.0
+    return min(normal_max, -self.early_lead_decel) if self.early_lead_decel else normal_max
+
   def update(self, carrot, reset_state, radarstate, v_cruise, x, v, a, j, personality=log.LongitudinalPersonality.standard, prev_accel_constraint=True):
     v_ego = self.x0[1]
     a_ego = self.x0[2]
@@ -466,6 +499,11 @@ class LongitudinalMpc:
       if carrot.signal_follow.strength > 0:
         # Also bound the solver's acceleration: a nearby lead must not undo the signal cap.
         self.params[:,1] = np.minimum(self.params[:,1], max(0.0, cruise_max_a))
+
+    cruise_max_a = self.cruise_accel_for_approaching_lead(
+      radarstate.leadOne, v_ego, self.desired_distance, cruise_max_a,
+      mode == 'acc' and not reset_state and carrot.desireState <= .1 and
+      carrot.xState not in [XState.e2eStop, XState.e2eStopped])
 
     # Update in ACC mode or ACC/e2e blend
     if mode == 'acc':
