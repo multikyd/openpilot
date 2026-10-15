@@ -87,6 +87,7 @@ class CarrotServ:
     self.signal_update_time = self.signal_save_time = 0.
     self.signal_vision = {}
     self.signal_lane_points = []
+    self.sharp_turn_speed_active = False
     self.bump_memory = BumpMemory(self.params.get("BumpLearningData"))
     self.bump_display = None
     self.bump_save_time = 0.0
@@ -886,6 +887,18 @@ class CarrotServ:
       self.signal_memory.dirty = False
       self.signal_save_time = now
 
+  def _curve_speed_lower_limit(self, CS, vturn_speed):
+    # A general curve floor must not turn a slow tight corner into a 40 km/h target.
+    valid = (CS is not None and math.isfinite(CS.vEgo) and math.isfinite(CS.steeringAngleDeg) and
+             math.isfinite(vturn_speed) and 1.0 <= CS.vEgo <= 12.0)
+    if not valid:
+      self.sharp_turn_speed_active = False
+    elif self.sharp_turn_speed_active:
+      self.sharp_turn_speed_active = abs(CS.steeringAngleDeg) >= 30. and 8. <= abs(vturn_speed) <= 40.
+    else:
+      self.sharp_turn_speed_active = abs(CS.steeringAngleDeg) >= 60. and 8. <= abs(vturn_speed) <= 35.
+    return min(self.autoCurveSpeedLowerLimit, 15.) if self.sharp_turn_speed_active else self.autoCurveSpeedLowerLimit
+
   def update_navi(self, remote_ip, sm, pm, vturn_speed, coords, distances, route_speed, gps_service):
 
     limit_speed = 200
@@ -1047,8 +1060,9 @@ class CarrotServ:
       (sdi_speed, sdi_source),
       (limit_speed, "road"),
     ]
+    curve_lower_limit = self._curve_speed_lower_limit(CS, vturn_speed)
     if self.turnSpeedControlMode in [1,2]:
-      speed_n_sources.append((max(abs(vturn_speed), self.autoCurveSpeedLowerLimit), "vturn"))
+      speed_n_sources.append((max(abs(vturn_speed), curve_lower_limit), "vturn"))
 
     route_speed = max(route_speed * self.mapTurnSpeedFactor, self.autoCurveSpeedLowerLimit)
     if self.turnSpeedControlMode == 2:

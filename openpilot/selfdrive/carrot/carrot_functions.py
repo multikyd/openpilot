@@ -176,6 +176,7 @@ class CarrotPlanner:
     self.atcType = ""
     self.atc_active = False
 
+    self.steering_angle = 0.0
     self._stop_x_rl = None
     self.last_event_time = 0.0
     self.signal_follow = SignalFollowAssist(os.getenv("TMAP_SIGNAL_FOLLOW", "1") != "0")
@@ -534,6 +535,7 @@ class CarrotPlanner:
 
     self.events = Events()
     carstate = sm['carState']
+    self.steering_angle = carstate.steeringAngleDeg
     vCluRatio = carstate.vCluRatio
     #controlsState = sm['controlsState']
     radarstate = sm['radarState']

@@ -307,6 +307,14 @@ class LongitudinalMpc:
     self.early_lead_distance = None
     self.early_lead_confirm = 0.0
     self.early_lead_decel = 0.0
+    self.turn_lead_id = None
+    self.turn_lead_age = 0.0
+    self.turn_lead_confirm = 0.0
+    self.turn_loss_remaining = 0.0
+    self.turn_loss_clear_time = 0.0
+    self.turn_loss_reacquire = 0.0
+    self.turn_reacquire_id = None
+    self.turn_loss_limit = None
     self.set_weights()
 
   def set_cost_weights(self, cost_weights, constraint_cost_weights):
@@ -423,6 +431,76 @@ class LongitudinalMpc:
     self.lead_loss_remaining = max(0.0, self.lead_loss_remaining - self.dt)
     return cruise_accel
 
+  def cruise_accel_in_turn_after_lead_loss(self, lead_one, lead_two, v_ego, a_ego, steering_angle, normal_max, enabled):
+    # Losing a selected vehicle in a tight turn does not establish a clear road.
+    if not enabled or not np.all(np.isfinite((v_ego, a_ego, steering_angle, normal_max))) or not 1.0 <= v_ego <= 12.0:
+      self.turn_lead_id = None
+      self.turn_lead_confirm = self.turn_lead_age = 0.0
+      self.turn_loss_remaining = self.turn_loss_clear_time = self.turn_loss_reacquire = 0.0
+      self.turn_reacquire_id = None
+      self.turn_loss_limit = None
+      return normal_max
+
+    turning = abs(steering_angle) >= 45.0
+    reliable = [lead for lead in (lead_one, lead_two) if
+                lead.present and lead.radar and lead.radarTrackId >= 0 and lead.modelProb >= .6 and
+                np.all(np.isfinite((lead.dRel, lead.vLead, lead.dPath))) and
+                3.0 < lead.dRel < max(20.0, 4.0*v_ego) and lead.vLead > 1.0 and abs(lead.dPath) < 3.5]
+    matching = next((lead for lead in reliable if lead.radarTrackId == self.turn_lead_id), None)
+    if self.turn_loss_limit is None:
+      if turning and reliable:
+        selected = matching if matching is not None else reliable[0]
+        self.turn_lead_confirm = min(1., self.turn_lead_confirm+self.dt) if matching is not None else self.dt
+        self.turn_lead_id = selected.radarTrackId
+        self.turn_lead_age = 0.0
+      elif turning and self.turn_lead_id is not None and self.turn_lead_confirm >= .3 and self.turn_lead_age < 1.0:
+        self.turn_loss_remaining = 4.0
+        self.turn_loss_clear_time = self.turn_loss_reacquire = 0.0
+        # Start from measured acceleration, rather than abruptly demanding braking.
+        self.turn_loss_limit = min(max(0., normal_max), max(0., a_ego))
+      else:
+        self.turn_lead_age += self.dt
+        if not turning or self.turn_lead_age >= 1.0:
+          self.turn_lead_id = None
+          self.turn_lead_confirm = 0.0
+
+    if self.turn_loss_limit is None:
+      return normal_max
+    recovered = next((lead for lead in reliable if lead.modelProb >= .75 and abs(lead.dPath) < 2.0), None)
+    if recovered is not None:
+      self.turn_loss_reacquire = self.turn_loss_reacquire+self.dt if recovered.radarTrackId == self.turn_reacquire_id else self.dt
+      self.turn_reacquire_id = recovered.radarTrackId
+    else:
+      self.turn_loss_reacquire = 0.0
+      self.turn_reacquire_id = None
+    if self.turn_loss_reacquire >= .6:
+      # A new front-radar ID can replace the corner track after stable confirmation.
+      self.turn_lead_id = recovered.radarTrackId
+      self.turn_lead_confirm = 1.0
+      self.turn_lead_age = 0.0
+      self.turn_loss_remaining = 0.0
+    elif matching is not None:
+      self.turn_lead_age = 0.0
+    else:
+      self.turn_lead_age += self.dt
+      if turning and self.turn_loss_remaining == 0.0 and self.turn_lead_age < 1.0 and self.turn_lead_confirm >= .3:
+        # Re-arm if a recently recovered lead disappears again during release.
+        self.turn_loss_remaining = 4.0
+        self.turn_loss_clear_time = 0.0
+    if self.turn_loss_remaining > 0.0:
+      self.turn_loss_remaining = max(0., self.turn_loss_remaining-self.dt)
+      self.turn_loss_clear_time = self.turn_loss_clear_time+self.dt if abs(steering_angle) < 30. else 0.
+      if self.turn_loss_clear_time >= .6:
+        self.turn_loss_remaining = 0.0
+    target = 0.0 if self.turn_loss_remaining > 0.0 else max(0., normal_max)
+    self.turn_loss_limit += float(np.clip(target-self.turn_loss_limit, -.8*self.dt, .5*self.dt))
+    cap = min(normal_max, self.turn_loss_limit)
+    if self.turn_loss_remaining == 0.0 and self.turn_loss_limit >= max(0., normal_max)-1e-6:
+      self.turn_loss_limit = None
+      self.turn_lead_id = None
+      self.turn_lead_confirm = 0.0
+    return cap
+
   def cruise_accel_for_approaching_lead(self, lead, v_ego, desired_distance, normal_max, enabled):
     # Shape only the soft cruise target. Lead obstacles and brake limits stay intact.
     values = (v_ego, desired_distance, lead.dRel, lead.vRel, lead.vLead, lead.aLeadK, lead.modelProb)
@@ -504,6 +582,13 @@ class LongitudinalMpc:
       radarstate.leadOne, v_ego, self.desired_distance, cruise_max_a,
       mode == 'acc' and not reset_state and carrot.desireState <= .1 and
       carrot.xState not in [XState.e2eStop, XState.e2eStopped])
+
+    cruise_max_a = self.cruise_accel_in_turn_after_lead_loss(
+      radarstate.leadOne, radarstate.leadTwo, v_ego, a_ego, carrot.steering_angle, cruise_max_a,
+      mode == 'acc' and not reset_state and carrot.desireState <= .1)
+    if self.turn_loss_limit is not None:
+      # Also constrain acceleration if another lead/cruise objective becomes dominant.
+      self.params[:,1] = np.minimum(self.params[:,1], max(0., cruise_max_a))
 
     # Update in ACC mode or ACC/e2e blend
     if mode == 'acc':
