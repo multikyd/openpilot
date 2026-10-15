@@ -132,6 +132,11 @@ class SelfdriveD:
     self.dm_lockout_set = False
     self.dm_uncertain_alerted = False
     self.state_machine = StateMachine()
+    self.bump_sound_sequence = None
+    self.signal_voice_armed = True
+    self.signal_voice_last = -100.0
+    self.signal_voice_active_since = None
+    self.signal_voice_inactive_since = None
     self.rk = Ratekeeper(100, print_delay_threshold=None)
 
     self.pandaState_safetyModel = ""
@@ -563,6 +568,38 @@ class SelfdriveD:
     #    self.params.put('LongitudinalPersonality', self.personality)
     #    self.events.add(EventName.personalityChanged)
 
+  def update_audio_events(self):
+    if not self.initialized:
+      return
+    now = time.monotonic()
+    cm = self.sm['carrotMan']
+    sequence = cm.bumpSoundSequence
+    changed = self.bump_sound_sequence is not None and sequence > self.bump_sound_sequence
+    self.bump_sound_sequence = sequence
+    if (changed and cm.bumpSoundEnabled and not 0 <= cm.leftSec <= 11 and
+        self.sm.valid['carrotMan'] and self.sm.alive['carrotMan'] and
+        0 <= now - self.sm.recv_time['carrotMan'] < 1):
+      self.events.add(EventName.bumpApproaching)
+
+    active = (self.sm.valid['longitudinalPlan'] and self.sm.alive['longitudinalPlan'] and
+              0 <= now - self.sm.recv_time['longitudinalPlan'] < 0.3 and
+              self.enabled and self.sm['longitudinalPlan'].signalCoastActive)
+    if not active:
+      self.signal_voice_active_since = None
+      if self.signal_voice_inactive_since is None:
+        self.signal_voice_inactive_since = now
+      if now - self.signal_voice_inactive_since >= 10.0:
+        self.signal_voice_armed = True
+      return
+    self.signal_voice_inactive_since = None
+    if self.signal_voice_active_since is None:
+      self.signal_voice_active_since = now
+    if (self.signal_voice_armed and now - self.signal_voice_last >= 30.0 and
+        now - self.signal_voice_active_since >= 0.25):
+      self.signal_voice_armed = False
+      self.signal_voice_last = now
+      self.events.add(EventName.signalCoast)
+
   def data_sample(self):
     _car_state = messaging.recv_one(self.car_state_sock)
     CS = _car_state.carState if _car_state else self.CS_prev
@@ -665,6 +702,7 @@ class SelfdriveD:
     self.update_events(CS)
     if not self.CP.passive and self.initialized:
       self.enabled, self.active = self.state_machine.update(self.events)
+    self.update_audio_events()
     self.update_alerts(CS)
 
     self.publish_selfdriveState(CS)

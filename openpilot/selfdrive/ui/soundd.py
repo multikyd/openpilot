@@ -35,8 +35,6 @@ if HARDWARE.get_device_type() == "tizi":
 
 AudibleAlert = log.SelfdriveState.AudibleAlert
 CRITICAL_MAX = -1 # internal sound key, not an AudibleAlert
-BUMP_CHIME = -2 # dedicated one-shot bump tone, local to soundd
-SIGNAL_COAST_VOICE = -3 # one-shot Korean signal-assisted coasting announcement
 
 
 sound_list: dict[int, tuple[str, int | None, float]] = {
@@ -65,8 +63,8 @@ sound_list: dict[int, tuple[str, int | None, float]] = {
   AudibleAlert.speedDown:  ("audio_speed_down.wav", None, MAX_VOLUME),
   AudibleAlert.reverseGear: ("reverse_gear.wav", 1, MAX_VOLUME),
   AudibleAlert.dingdong: ("dingdong.wav", 1, MAX_VOLUME),
-  BUMP_CHIME: ("bump_ding.wav", 1, 0.7),
-  SIGNAL_COAST_VOICE: ("audio_signal_coast.wav", 1, MAX_VOLUME),
+  AudibleAlert.bumpChime: ("bump_ding.wav", 1, 0.7),
+  AudibleAlert.signalCoast: ("audio_signal_coast.wav", 1, MAX_VOLUME),
 }
 
 def check_selfdrive_timeout_alert(sm):
@@ -82,11 +80,6 @@ def check_selfdrive_timeout_alert(sm):
 class Soundd:
   def __init__(self):
     self.soundVolumeAdjust = float(Params().get("SoundVolumeAdjust"))/100.
-    self.bump_sound_sequence = None
-    self.signal_voice_armed = True
-    self.signal_voice_last = -100.0
-    self.signal_voice_active_since = None
-    self.signal_voice_inactive_since = None
     self.load_sounds()
 
     self.current_alert = AudibleAlert.none
@@ -168,45 +161,9 @@ class Soundd:
       self.current_sound = new_alert
       self.current_sound_frame = 0
 
-  def update_carrot_alert(self, sm, new_alert):
-    cm = sm['carrotMan']
-    sequence = cm.bumpSoundSequence
-    changed = self.bump_sound_sequence is not None and sequence > self.bump_sound_sequence
-    self.bump_sound_sequence = sequence
-    if (changed and cm.bumpSoundEnabled and not 0 <= cm.leftSec <= 11 and
-        sm.valid['carrotMan'] and sm.alive['carrotMan'] and
-        time.monotonic() - sm.recv_time['carrotMan'] < 1 and new_alert == AudibleAlert.none):
-      return BUMP_CHIME
-    return new_alert
-
-  def update_signal_voice(self, sm, new_alert):
-    now = time.monotonic()
-    active = (sm.valid['longitudinalPlan'] and sm.alive['longitudinalPlan'] and
-              0 <= now - sm.recv_time['longitudinalPlan'] < 0.3 and
-              sm.valid['selfdriveState'] and sm.alive['selfdriveState'] and
-              sm['selfdriveState'].enabled and sm['longitudinalPlan'].signalCoastActive)
-    if not active:
-      self.signal_voice_active_since = None
-      if self.signal_voice_inactive_since is None:
-        self.signal_voice_inactive_since = now
-      if now - self.signal_voice_inactive_since >= 10.0:
-        self.signal_voice_armed = True
-      return new_alert
-    self.signal_voice_inactive_since = None
-    if self.signal_voice_active_since is None:
-      self.signal_voice_active_since = now
-    if (new_alert == AudibleAlert.none and self.signal_voice_armed and
-        now - self.signal_voice_last >= 30.0 and now - self.signal_voice_active_since >= 0.25):
-      self.signal_voice_armed = False
-      self.signal_voice_last = now
-      return SIGNAL_COAST_VOICE
-    return new_alert
-
   def get_audible_alert(self, sm):
     if sm.updated['selfdriveState']:
-      new_alert = self.update_carrot_alert(sm, sm['selfdriveState'].alertSound.raw)
-      new_alert = self.update_signal_voice(sm, new_alert)
-      self.update_alert(new_alert)
+      self.update_alert(sm['selfdriveState'].alertSound.raw)
     elif check_selfdrive_timeout_alert(sm):
       self.update_alert(AudibleAlert.warningImmediate)
       self.selfdrive_timeout_alert = True
@@ -230,7 +187,7 @@ class Soundd:
     import sounddevice as sd
     micd.patch_sounddevice(sd)
 
-    sm = messaging.SubMaster(['selfdriveState', 'soundPressure', 'carrotMan', 'longitudinalPlan'])
+    sm = messaging.SubMaster(['selfdriveState', 'soundPressure'])
 
     with self.get_stream(sd) as stream:
       rk = Ratekeeper(20)

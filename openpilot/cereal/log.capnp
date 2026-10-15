@@ -154,6 +154,8 @@ struct OnroadEvent @0xc4fa6047f024e718 {
     laneChangeMerging @115;
     laneChangeFinish @116;
     softHold @117;
+    bumpApproaching @118;
+    signalCoast @119;
   }
 }
 
@@ -884,6 +886,8 @@ struct SelfdriveState {
     stopStop @18;
     reverseGear @19;
     dingdong @20;
+    bumpChime @21;
+    signalCoast @22;
   }
 
   enum OpenpilotState @0xdbe58b96d2d1ac61 {
