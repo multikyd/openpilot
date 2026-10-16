@@ -1,4 +1,5 @@
 import os
+import sys
 import hashlib
 import base64
 import opendbc
@@ -122,7 +123,7 @@ def build_project(project_name, project, main, extra_flags):
   ], LINKFLAGS=[f"-Wl,--section-start,.isr_vector={project['APP_START_ADDRESS']}"] + flags)
   main_bin = env.Objcopy(f"{project_dir}/main.bin", main_elf)
   sign_py = File(f"./board/crypto/sign.py").srcnode().relpath
-  env.Command(f"./board/obj/{project_name}.bin.signed", main_bin, f"SETLEN=1 {sign_py} $SOURCE $TARGET {cert_fn}")
+  env.Command(f"./board/obj/{project_name}.bin.signed", main_bin, f'SETLEN=1 "{sys.executable}" "{sign_py}" "$SOURCE" "$TARGET" "{cert_fn}"')
 
 
 
