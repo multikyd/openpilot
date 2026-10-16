@@ -12,7 +12,6 @@ from openpilot.selfdrive.controls.radard import _LEAD_ACCEL_TAU
 # from openpilot.selfdrive.carrot.carrot_functions import CarrotPlanner
 from openpilot.selfdrive.carrot.carrot_functions import XState
 
-from openpilot.common.params import Params
 
 if __name__ == '__main__':  # generating code
   from acados.acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver
@@ -45,7 +44,8 @@ A_CHANGE_COST = 200.
 A_CHANGE_COST_STARTING = 10. #30.
 DANGER_ZONE_COST = 100.
 CRASH_DISTANCE = .25
-LEAD_DANGER_FACTOR = Params().get("LeadDangerFactor", return_default=True) if Params().get("LeadDangerFactor", return_default=True) is not None else 0.75 #0.75
+# Code generation must not read device parameters; CarrotPlanner supplies the runtime value.
+LEAD_DANGER_FACTOR = 0.75
 LIMIT_COST = 1e6
 ACADOS_SOLVER_TYPE = 'SQP_RTI'
 
