@@ -80,6 +80,11 @@ class LanePlanner:
     self.lane_position_candidate = 'unknown'
     self.lane_position_confirm = 0.0
     self.lane_position_offset = 0.0
+    # Session-only correction of a sustained lane tracking error, separate from preference.
+    self.lane_tracking_trim = 0.0
+    self.lane_tracking_applied = 0.0
+    self.lane_tracking_stable = 0.0
+    self.lane_tracking_ready = False
 
     self.lanefull_mode = False
     self.d_prob_count = 0
@@ -99,7 +104,7 @@ class LanePlanner:
 
     self.adjustLaneOffset = self.params.get("AdjustLaneOffset")
     self.adjustCurveOffset = self.adjustLaneOffset #self.params.get("AdjustCurveOffset")
-    self.adjustLaneTime = self.params.get("LatMpcInputOffset") * 0.01 # 0.06 
+    # Actuator preview belongs in the curvature command, not the lane geometry.
 
   def parse_model(self, md):
 
@@ -110,7 +115,6 @@ class LanePlanner:
       self.path_offset = self.camera_offset - 0.04
       self.adjustLaneOffset = self.params.get("AdjustLaneOffset")
       self.adjustCurveOffset = self.adjustLaneOffset #self.params.get("AdjustCurveOffset")
-      self.adjustLaneTime = self.params.get("LatMpcInputOffset") * 0.01 # 0.06 
       self.lane_center_offset = self.params.get("LaneCenterOffset", return_default=True)
 
     if self.left_edge_offset != 0.0 or self.right_edge_offset != 0.0: # kisapilot
@@ -250,8 +254,14 @@ class LanePlanner:
         elif (right > 2.2 and .1 < left < 1.8 and outer_right > .3 and outer_left < .15 and
               0. <= edge_std_left < .6 and -.1 <= lane_left-edge_left <= 1.8):
           candidate = 'left'
-        elif left > 2.2 and right > 2.2 and min(outer_left, outer_right) > .3:
+        elif (left > 2.2 and right > 2.2 and min(outer_left, outer_right) > .3):
           candidate = 'middle'
+        elif (left > 2.5 and right > 2.5 and
+              not (0. <= edge_std_left < .6 and lane_left-edge_left < 1.8) and
+              not (0. <= edge_std_right < .6 and edge_right-lane_right < 1.8)):
+          # Neighbor-width predictions can survive faint outer paint. A nearby
+          # trustworthy road edge contradicts a neighboring lane and vetoes this.
+          candidate = 'middle' 
 
     if candidate != self.lane_position_candidate:
       self.lane_position_candidate = candidate
@@ -262,7 +272,7 @@ class LanePlanner:
     target = 0.0
     if valid and self.lane_position_class != 'unknown' and abs(center) < .35:
       # Let the normal controller finish recentering after a lane change first.
-      preference = {'right': .05, 'left': -.05, 'middle': -.02}[self.lane_position_class]
+      preference = {'right': .05, 'left': -.05, 'middle': -.03}[self.lane_position_class]
       curve_factor = float(np.interp(abs(self.lane_center_curvature), [.002, .005], [1., 0.]))
       width_factor = float(np.interp(width, [2.6, 2.8], [0., 1.]))
       target = preference*curve_factor*width_factor
@@ -284,6 +294,58 @@ class LanePlanner:
         right_budget = min(right_budget, max(0., edge_right-center-1.25))
       self.lane_position_offset = float(np.clip(self.lane_position_offset, -left_budget, right_budget))
     return self.lane_position_offset
+
+  def _get_lane_tracking_offset(self, CS, laneline_active, desired_offset):
+    # Learn only on settled, straight, confidently observed middle-lane driving.
+    # Never learn a driver's correction, a lane change or a cornering transient.
+    geometry = self.lane_position_geometry
+    values = (self.l_prob, self.r_prob, self.lane_center_curvature, desired_offset,
+              self.camera_offset, getattr(CS, 'vEgo', math.nan), getattr(CS, 'steeringRateDeg', math.nan))
+    valid = geometry is not None and np.all(np.isfinite((*geometry, *values)))
+    active = (laneline_active and self.lane_change_multiplier > .5 and
+              not CS.leftBlinker and not CS.rightBlinker and not getattr(CS, 'steeringPressed', False))
+    if not valid or not active:
+      self.lane_tracking_stable = self.lane_tracking_applied = 0.0
+      return 0.0
+    _, _, edge_std_left, edge_std_right, edge_left, edge_right, lane_left, lane_right = geometry
+    width = lane_right-lane_left
+    center = (lane_left+lane_right)/2. + self.camera_offset
+    good = (self.lane_tracking_ready and self.lane_position_class == 'middle' and
+            self.lane_position_confirm >= 1. and min(self.l_prob, self.r_prob) >= .9 and
+            3.0 <= width <= 4.0 and 10. <= CS.vEgo <= 40. and
+            abs(self.lane_center_curvature) < .0005 and
+            abs(CS.steeringRateDeg) < 3. and abs(center) < .30)
+    self.lane_tracking_stable = min(3., self.lane_tracking_stable+DT_MDL) if good else 0.0
+    if self.lane_tracking_stable >= 2.:
+      # Positive error means right of the desired location. Do not include this
+      # integral's own output in the reference or it would cancel its correction.
+      error = -center-desired_offset
+      if abs(error) > .01:
+        step = float(np.clip(-.04*error*DT_MDL, -.003*DT_MDL, .003*DT_MDL))
+        self.lane_tracking_trim = float(np.clip(self.lane_tracking_trim+step, -.12, .12))
+    # Hold the session estimate through turns, but fade its application before
+    # tight curvature. Returning to a lane ramps in at <=5 mm/s.
+    curve_factor = float(np.interp(abs(self.lane_center_curvature), [.001, .003], [1., 0.]))
+    confidence = float(np.interp(min(self.l_prob, self.r_prob), [.75, .9], [0., 1.]))
+    width_factor = float(np.interp(width, [2.8, 3.0], [0., 1.]))
+    target = self.lane_tracking_trim*curve_factor*confidence*width_factor
+    self.lane_tracking_applied += float(np.clip(target-self.lane_tracking_applied, -.005*DT_MDL, .005*DT_MDL))
+    # Geometry safety limits take priority over the comfort slew. Maintain
+    # 1.25 m between the complete desired center and either boundary/valid edge.
+    left_margin = right_margin = max(0., width/2.-1.25)
+    raw_center = (lane_left+lane_right)/2.
+    if 0. <= edge_std_left < .6:
+      left_margin = min(left_margin, max(0., raw_center-edge_left-1.25))
+    if 0. <= edge_std_right < .6:
+      right_margin = min(right_margin, max(0., edge_right-raw_center-1.25))
+    # The learned correction itself must not worsen a margin already consumed
+    # by existing explicit calibration/preferences.
+    low = min(0., -left_margin-desired_offset)
+    high = max(0., right_margin-desired_offset)
+    applied_low, applied_high = sorted((0., target))
+    self.lane_tracking_applied = float(np.clip(self.lane_tracking_applied,
+                                             max(low, applied_low), min(high, applied_high)))
+    return self.lane_tracking_applied
 
   def get_d_path(self, CS, v_ego, path_t, path_xyz, curve_speed):
     #if v_ego > 0.1:
@@ -397,15 +459,10 @@ class LanePlanner:
     self.d_prob_count = self.d_prob_count + 1 if self.d_prob > 0.3 else 0
     if self.lanefull_mode and self.d_prob_count > int(1 / DT_MDL):
       laneline_active = True
-      use_dist_mode = False  ## 아무리생각해봐도.. 같은 방법인듯...
-      if use_dist_mode:
-        lane_path_y_interp = np.interp(path_xyz[:,0] + v_ego * self.adjustLaneTime, self.ll_x, lane_path_y)
+      safe_idxs = np.isfinite(self.ll_t)
+      if safe_idxs[0]:
+        lane_path_y_interp = np.interp(path_t, self.ll_t[safe_idxs], lane_path_y[safe_idxs])
         path_xyz[:,1] = self.d_prob * lane_path_y_interp + (1.0 - self.d_prob) * path_xyz[:,1]
-      else:
-        safe_idxs = np.isfinite(self.ll_t)
-        if safe_idxs[0]:
-          lane_path_y_interp = np.interp(path_t * (1.0 + self.adjustLaneTime), self.ll_t[safe_idxs], lane_path_y[safe_idxs])
-          path_xyz[:,1] = self.d_prob * lane_path_y_interp + (1.0 - self.d_prob) * path_xyz[:,1]
 
 
     lane_center_offset = self._get_lane_center_offset(CS, laneline_active)
@@ -415,9 +472,11 @@ class LanePlanner:
     # Preserve the existing total calibration adjustment, previously added here
     # and again in LateralPlanner. Apply the new lane-only preference once.
     calibration_offset = 2.0 * (self.path_offset + self.path_offset2)
-    path_xyz[:, 1] += self.lane_offset_filtered.x + calibration_offset + lane_center_offset
+    tracking_offset = self._get_lane_tracking_offset(
+      CS, laneline_active, lane_center_offset + self.lane_offset_filtered.x + calibration_offset + self.road_edge_offset)
+    path_xyz[:, 1] += self.lane_offset_filtered.x + calibration_offset + lane_center_offset + tracking_offset
 
-    self.offset_total = self.lane_offset_filtered.x + lane_center_offset
+    self.offset_total = self.lane_offset_filtered.x + lane_center_offset + tracking_offset
 
     return path_xyz, laneline_active
 
