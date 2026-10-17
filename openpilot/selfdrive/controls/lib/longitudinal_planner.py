@@ -214,7 +214,13 @@ class LongitudinalPlanner:
     self.mpc.update(carrot, reset_state, sm['radarState'], v_cruise, x, v, a, j, personality=sm['selfdriveState'].personality,
                     prev_accel_constraint=prev_accel_constraint, future_curvature=curvature_future,
                     # Use measured speed for headroom: filtered MPC speed lags after slowing.
-                    allow_turn_resume=(v_cruise > v_ego+.05 and sm.all_checks(['modelV2', 'carState'])))
+                    allow_turn_resume=(v_cruise > v_ego+.05 and sm.all_checks(['modelV2', 'carState'])),
+                    allow_congestion=(sm['selfdriveState'].enabled and
+                                      sm['controlsState'].longControlState != LongCtrlState.off and
+                                      not sm['carState'].gasPressed and not sm['carState'].brakePressed and
+                                      not sm['carState'].leftBlinker and not sm['carState'].rightBlinker and
+                                      not sm['carState'].steeringPressed and abs(sm['carState'].steeringAngleDeg) < 30. and
+                                      sm.all_checks(['carState', 'radarState', 'modelV2'])))
 
     self.v_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.v_solution)
     self.a_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.a_solution)

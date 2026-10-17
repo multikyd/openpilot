@@ -4,6 +4,7 @@ import time
 import numpy as np
 from openpilot.cereal import log
 from opendbc.car.interfaces import ACCEL_MIN
+from openpilot.selfdrive.controls.lib.congestion_follow import CongestionFollow
 from openpilot.common.realtime import DT_MDL
 from openpilot.common.swaglog import cloudlog
 # WARNING: imports outside of constants will not trigger a rebuild
@@ -273,6 +274,7 @@ class LongitudinalMpc:
     self.enableSpeedTF = 0
 
   def reset(self):
+    self.congestion_follow = CongestionFollow()
     self.solver.reset()
 
     self.x_sol = np.zeros((N+1, X_DIM))
@@ -583,7 +585,7 @@ class LongitudinalMpc:
     return min(normal_max, -self.early_lead_decel) if self.early_lead_decel else normal_max
 
   def update(self, carrot, reset_state, radarstate, v_cruise, x, v, a, j, personality=log.LongitudinalPersonality.standard,
-             prev_accel_constraint=True, future_curvature=None, allow_turn_resume=False):
+             prev_accel_constraint=True, future_curvature=None, allow_turn_resume=False, allow_congestion=False):
     v_ego = self.x0[1]
     a_ego = self.x0[2]
     t_follow = carrot.get_T_FOLLOW(personality, v_ego, a_ego)
@@ -610,6 +612,13 @@ class LongitudinalMpc:
       v_cruise, stop_x, mode = carrot.v_cruise, carrot.stop_dist, carrot.mode
       desired_distance = desired_follow_distance(v_ego, lead_v_0, comfort_brake, stop_distance, t_follow)
       t_follow = carrot.dynamic_t_follow(t_follow, radarstate.leadOne, desired_distance, self.a_prev)
+
+    jam_follow, jam_accel = self.congestion_follow.update(
+      radarstate.leadOne, v_ego, self.max_a, t_follow,
+      allow_congestion and mode == 'acc' and carrot.desireState <= .1 and
+      carrot.xState not in [XState.e2eStop, XState.e2eStopped], self.dt)
+    if not reset_state:
+      t_follow = jam_follow
 
     # To estimate a safe distance from a moving lead, we calculate how much stopping
     # distance that lead needs as a minimum. We can add that to the current distance
@@ -645,6 +654,10 @@ class LongitudinalMpc:
     if self.turn_loss_limit is not None:
       # Also constrain acceleration if another lead/cruise objective becomes dominant.
       self.params[:,1] = np.minimum(self.params[:,1], max(0., cruise_max_a))
+
+    if not reset_state and jam_accel < self.max_a:
+      cruise_max_a = min(cruise_max_a, jam_accel)
+      self.params[:,1] = np.minimum(self.params[:,1], max(0., jam_accel))
 
     # Update in ACC mode or ACC/e2e blend
     if mode == 'acc':
