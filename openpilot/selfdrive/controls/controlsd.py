@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import math
+import time
 from numbers import Number
 
 from openpilot.cereal import log
@@ -15,6 +16,7 @@ from opendbc.car.car_helpers import interfaces
 from opendbc.car.vehicle_model import VehicleModel
 from openpilot.selfdrive.controls.lib.drive_helpers import clip_curvature, get_lag_adjusted_curvature
 from openpilot.selfdrive.controls.lib.latcontrol import LatControl
+from openpilot.selfdrive.controls.lib.model_lane_guard import ModelLaneGuard
 from openpilot.selfdrive.controls.lib.latcontrol_pid import LatControlPID
 from openpilot.selfdrive.controls.lib.latcontrol_angle import LatControlAngle, STEER_ANGLE_SATURATION_THRESHOLD
 from openpilot.selfdrive.controls.lib.latcontrol_curvature import LatControlCurvature
@@ -68,6 +70,8 @@ class Controls:
     self.steer_limited_by_safety = False
     self.curvature = 0.0
     self.desired_curvature = 0.0
+    self.model_lane_guard = ModelLaneGuard()
+    self.camera_offset = self.params.get("CameraOffsetAdj", return_default=True)
 
     self.pose_calibrator = PoseCalibrator()
     self.calibrated_pose: Pose | None = None
@@ -115,6 +119,7 @@ class Controls:
       if self.lat_smooth_seconds < 0:
         self.lat_smooth_seconds = LAT_SMOOTH_SECONDS
       self.steer_actuator_delay = self.params.get("SteerActuatorDelay")
+      self.camera_offset = self.params.get("CameraOffsetAdj", return_default=True)
 
     CS = self.sm['carState']
 
@@ -215,6 +220,7 @@ class Controls:
       return alpha * val + (1 - alpha) * prev_val
 
     effective_lat_smoothing = self.lat_smooth_seconds
+    model_lane_guard_used = False
     if not CC.latActive:
       new_desired_curvature = self.curvature
     elif self.sm.valid['lateralManeuverPlan']:
@@ -227,7 +233,20 @@ class Controls:
           self.CP, CS.vEgo, lat_plan.psis, lat_plan.curvatures, lat_plan.distances,
           steer_actuator_delay, self.lat_smooth_seconds, self.desired_curvature, CS.steeringPressed)
     else:
-      new_desired_curvature = smooth_value(model_v2.action.desiredCurvature, self.desired_curvature, 0.1)
+      # Constrain the model action before smoothing; adding a correction after
+      # this filter would feed it back as a new baseline every control tick.
+      model_lane_guard_used = True
+      guard_now = time.monotonic()
+      guarded_curvature = self.model_lane_guard.update(
+        model_v2, CS, model_v2.action.desiredCurvature,
+        self.sm.logMonoTime['modelV2'] * 1e-9, guard_now,
+        enabled=(self.sm.all_checks(['modelV2', 'carState']) and
+                 0. <= guard_now-self.sm.logMonoTime['carState'] * 1e-9 <= .1),
+        camera_offset=self.camera_offset, actuator_delay=steer_actuator_delay)
+      new_desired_curvature = smooth_value(guarded_curvature, self.desired_curvature, 0.1)
+
+    if not model_lane_guard_used:
+      self.model_lane_guard.reset()
 
     self.desired_curvature, curvature_limited = clip_curvature(CS.vEgo, self.desired_curvature, new_desired_curvature, lp.roll)
     lat_delay = self.sm["lateralDelay"].lateralDelay + effective_lat_smoothing
@@ -359,6 +378,8 @@ class Controls:
     CC.driverMonitoringEscalation = cs.forceDecel
 
     cs.debugMsg1 = str(CO.actuatorsOutput.kisaLog1)
+    if abs(self.model_lane_guard.accel) > 1e-4:
+      cs.debugMsg1 += f" MLG={self.model_lane_guard.side:+d}:{self.model_lane_guard.accel:+.2f}"
     #cs.debugMsg2 = str(CO.actuatorsOutput.kisaLog2)
     #cs.debugMsg3 = str(CO.actuatorsOutput.kisaLog3)
     CC.e2eStandstill = bool(CO.actuatorsOutput.e2eStandstill)
