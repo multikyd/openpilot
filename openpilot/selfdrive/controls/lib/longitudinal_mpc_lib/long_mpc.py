@@ -585,7 +585,7 @@ class LongitudinalMpc:
     return min(normal_max, -self.early_lead_decel) if self.early_lead_decel else normal_max
 
   def update(self, carrot, reset_state, radarstate, v_cruise, x, v, a, j, personality=log.LongitudinalPersonality.standard,
-             prev_accel_constraint=True, future_curvature=None, allow_turn_resume=False, allow_congestion=False):
+             prev_accel_constraint=True, future_curvature=None, allow_turn_resume=False, allow_congestion=False, cutin_accel_limit=None):
     v_ego = self.x0[1]
     a_ego = self.x0[2]
     t_follow = carrot.get_T_FOLLOW(personality, v_ego, a_ego)
@@ -658,6 +658,10 @@ class LongitudinalMpc:
     if not reset_state and jam_accel < self.max_a:
       cruise_max_a = min(cruise_max_a, jam_accel)
       self.params[:,1] = np.minimum(self.params[:,1], max(0., jam_accel))
+
+    if mode == 'acc' and not reset_state and cutin_accel_limit is not None and np.isfinite(cutin_accel_limit):
+      cruise_max_a = min(cruise_max_a, cutin_accel_limit)
+      self.params[:,1] = np.minimum(self.params[:,1], max(0., cutin_accel_limit))
 
     # Update in ACC mode or ACC/e2e blend
     if mode == 'acc':

@@ -1,0 +1,145 @@
+import unittest
+from types import SimpleNamespace as NS
+
+from openpilot.selfdrive.controls.lib.cutin_anticipation import CutInAnticipation
+
+
+def fixture():
+  lane = lambda y: NS(x=[0., 20., 40., 80.], y=[y]*4)
+  model = NS(laneLines=[lane(-5.4), lane(-1.8), lane(1.8), lane(5.4)],
+             laneLineProbs=[.5, .99, .99, .5], laneLineStds=[.2]*4)
+  return model
+
+
+class TestCutInAnticipation(unittest.TestCase):
+  def simulate(self, speed=20., start=-2.8, lateral=.6, relative=-3., distance=20., duration=1.5,
+               curvature=0., enabled=True, confidence=.99, offset_error=0., changing_id=False, stale=False):
+    helper, model, trace = CutInAnticipation(), fixture(), []
+    model.laneLineProbs[1] = confidence
+    for i in range(round(duration/.05)):
+      t = i*.05
+      y = start+lateral*t
+      lead = NS(present=True, radar=True, radarTrackId=200+i if changing_id else 201,
+                dRel=distance+relative*t, yRel=y, dPath=y+offset_error, vRel=relative,
+                vLead=speed+relative, vLat=lateral)
+      radar = NS(leadsLeft=[lead] if start > 0 else [], leadsRight=[lead] if start < 0 else [])
+      cap = helper.update(radar, model, speed, 1.6, curvature, t, t+.3 if stale else t, enabled)
+      trace.append(cap)
+    return helper, trace
+
+  def test_medium_speed_cut_in_yields_then_coasts(self):
+    helper, trace = self.simulate()
+    self.assertEqual(helper.stage, 'coast')
+    self.assertLess(trace[-1], 1.)
+
+  def test_high_speed_cut_in(self):
+    helper, trace = self.simulate(speed=32., distance=28., relative=-5.)
+    self.assertEqual(helper.stage, 'coast')
+    self.assertIsNotNone(trace[-1])
+
+  def test_fast_closing_uses_gap_at_entry_instead_of_end_of_horizon(self):
+    _, trace = self.simulate(speed=25., start=-2.5, lateral=.8, distance=12., relative=-8., duration=.9)
+    self.assertTrue(any(x is not None for x in trace))
+
+  def test_low_speed_close_inward_motion(self):
+    helper, trace = self.simulate(speed=4., start=-3.2, lateral=.2, relative=-.1, distance=3., duration=1.)
+    self.assertEqual(helper.stage, 'yield')
+    self.assertLess(trace[-1], 1.6)
+
+  def test_left_right_symmetry(self):
+    _, left = self.simulate(start=2.8, lateral=-.6)
+    _, right = self.simulate()
+    self.assertEqual(left, right)
+
+  def test_parallel_adjacent_traffic_is_unchanged(self):
+    _, trace = self.simulate(lateral=0.)
+    self.assertTrue(all(x is None for x in trace))
+
+  def test_outward_motion_is_unchanged(self):
+    _, trace = self.simulate(start=-2., lateral=-.5)
+    self.assertTrue(all(x is None for x in trace))
+
+  def test_pulling_away_fast_is_unchanged(self):
+    _, trace = self.simulate(relative=4.)
+    self.assertTrue(all(x is None for x in trace))
+
+  def test_disabled_stale_low_confidence_and_curve_are_unchanged(self):
+    for config in [dict(enabled=False), dict(stale=True), dict(confidence=.3), dict(curvature=.02),
+                   dict(offset_error=1.), dict(speed=32., curvature=.002)]:
+      with self.subTest(config=config):
+        _, trace = self.simulate(**config)
+        self.assertTrue(all(x is None for x in trace))
+
+  def test_track_switches_cannot_accumulate_confirmation(self):
+    _, trace = self.simulate(changing_id=True)
+    self.assertTrue(all(x is None for x in trace))
+
+  def test_caps_change_gradually(self):
+    _, trace = self.simulate(duration=2.)
+    values = [1.6]+[x for x in trace if x is not None]
+    self.assertTrue(all(b-a >= -.7*.05-1e-8 for a, b in zip(values, values[1:])))
+    self.assertGreaterEqual(min(values), -.3)
+
+  def test_missing_track_releases_smoothly(self):
+    helper, trace = self.simulate(duration=2.)
+    model = fixture()
+    previous = trace[-1]
+    for i in range(150):
+      t = 2.+i*.05
+      value = helper.update(NS(leadsLeft=[], leadsRight=[]), model, 20., 1.6, 0., t, t, True)
+      if value is not None:
+        self.assertLessEqual(value-previous, .35*.05+1e-8)
+        previous = value
+    self.assertIsNone(value)
+
+  def test_duplicate_radar_message_does_not_confirm(self):
+    helper, model = CutInAnticipation(), fixture()
+    lead = NS(present=True, radar=True, radarTrackId=201, dRel=20., yRel=-2.8, dPath=-2.8,
+              vRel=-3., vLead=17., vLat=.6)
+    for i in range(4):
+      value = helper.update(NS(leadsLeft=[], leadsRight=[lead]), model, 20., 1.6, 0., 0., i*.05, True)
+      self.assertIsNone(value)
+
+  def test_nonfinite_input_and_geometry_rejected(self):
+    for config in [dict(lateral=float('nan')), dict(curvature=float('nan'))]:
+      _, trace = self.simulate(**config)
+      self.assertTrue(all(x is None for x in trace))
+
+  def test_lateral_velocity_without_path_approach_is_ignored(self):
+    helper, model = CutInAnticipation(), fixture()
+    lead = NS(present=True, radar=True, radarTrackId=201, dRel=20., yRel=-2.8, dPath=-2.8,
+              vRel=-3., vLead=17., vLat=.6)
+    for i in range(30):
+      t = i*.05
+      self.assertIsNone(helper.update(NS(leadsLeft=[], leadsRight=[lead]), model, 20., 1.6, .001, t, t, True))
+
+  def test_existing_lower_limit_wins_and_mild_braking_is_bounded(self):
+    helper, model = CutInAnticipation(), fixture()
+    values = []
+    for i in range(35):
+      t = i*.05
+      y = -2.8+.6*t
+      lead = NS(present=True, radar=True, radarTrackId=201, dRel=20.-3.*t, yRel=y, dPath=y,
+                vRel=-3., vLead=17., vLat=.6)
+      value = helper.update(NS(leadsLeft=[], leadsRight=[lead]), model, 20., .2, 0., t, t, True, current_accel=.2)
+      if value is not None:
+        values.append(value)
+    self.assertLess(min(values), 0.)
+    self.assertGreaterEqual(min(values), -.3)
+    self.assertTrue(all(x <= .2 for x in values))
+
+  def test_bad_lane_geometry_clears_assistance(self):
+    helper, _ = self.simulate()
+    model = fixture()
+    model.laneLines[1].x[1] = -1.
+    self.assertIsNone(helper.update(NS(leadsLeft=[], leadsRight=[]), model, 20., 1.6, 0., 1.5, 1.5, True))
+
+  def test_manual_intervention_clears_assistance_immediately(self):
+    helper, _ = self.simulate()
+    self.assertIsNone(helper.update(NS(leadsLeft=[], leadsRight=[]), fixture(), 20., 1.6, 0., 1.5, 1.5, False))
+    self.assertFalse(helper.history)
+
+
+if __name__ == '__main__':
+  unittest.main()
+

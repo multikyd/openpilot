@@ -15,6 +15,8 @@ from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.params import Params
+from openpilot.selfdrive.controls.lib.cutin_anticipation import CutInAnticipation
+from openpilot.selfdrive.carrot.carrot_functions import XState
 
 import time
 
@@ -74,6 +76,7 @@ class LongitudinalPlanner:
   def __init__(self, CP, init_v=0.0, init_a=0.0, dt=DT_MDL):
     self.CP = CP
     self.mpc = LongitudinalMpc(dt=dt)
+    self.cutin_anticipation = CutInAnticipation()
     self.fcw = False
     self.dt = dt
     self.allow_throttle = True
@@ -98,11 +101,28 @@ class LongitudinalPlanner:
     self.v_cruise_kph = 0.0
 
     self.params = Params()
+    self.cutin_anticipation_enabled = ((self.params.get("RadarLatFactor") or 0.) > 0. and
+                                      (self.params.get("EnableCornerRadar") or 0) > 1)
     
     self.last_time = time.monotonic()
 
     self.longitudinalActuatorDelay = self.params.get("LongActuatorDelay")
     self.vEgoStopping = self.params.get("VEgoStopping")
+
+  def get_cutin_accel_limit(self, sm, carrot, reset_state, normal_accel, curvature):
+    cs = sm['carState']
+    now = max(sm.logMonoTime[k] for k in ('carState', 'modelV2', 'radarState'))*1e-9
+    fresh = all(0. <= now-sm.logMonoTime[k]*1e-9 <= age for k, age in
+                (('carState', .1), ('modelV2', .2), ('radarState', .2)))
+    enabled = (self.cutin_anticipation_enabled and not reset_state and self.mpc.mode == 'acc' and sm['selfdriveState'].enabled and
+               sm['controlsState'].longControlState != LongCtrlState.off and
+               not (cs.gasPressed or cs.brakePressed or cs.steeringPressed or cs.leftBlinker or cs.rightBlinker) and
+               carrot.desireState <= .1 and carrot.xState not in [XState.e2eStop, XState.e2eStopped] and fresh and
+               sm.all_checks(['carState', 'modelV2', 'radarState', 'controlsState', 'selfdriveState']))
+    return self.cutin_anticipation.update(sm['radarState'], sm['modelV2'], cs.vEgo, normal_accel,
+                                          curvature if curvature is not None else 0.,
+                                          sm.logMonoTime['radarState']*1e-9, now, enabled,
+                                          current_accel=max(cs.aEgo, self.a_desired))
 
   @staticmethod
   def parse_model(model_msg):
@@ -220,7 +240,9 @@ class LongitudinalPlanner:
                                       not sm['carState'].gasPressed and not sm['carState'].brakePressed and
                                       not sm['carState'].leftBlinker and not sm['carState'].rightBlinker and
                                       not sm['carState'].steeringPressed and abs(sm['carState'].steeringAngleDeg) < 30. and
-                                      sm.all_checks(['carState', 'radarState', 'modelV2'])))
+                                      sm.all_checks(['carState', 'radarState', 'modelV2'])),
+                    cutin_accel_limit=self.get_cutin_accel_limit(sm, carrot, reset_state,
+                                                               accel_limits_turns[1], curvature_future))
 
     self.v_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.v_solution)
     self.a_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.a_solution)
@@ -239,6 +261,8 @@ class LongitudinalPlanner:
 
     if time.monotonic() - self.last_time >= 5:
       self.last_time = time.monotonic()
+      self.cutin_anticipation_enabled = ((self.params.get("RadarLatFactor") or 0.) > 0. and
+                                        (self.params.get("EnableCornerRadar") or 0) > 1)
       self.longitudinalActuatorDelay = self.params.get("LongActuatorDelay")
       self.vEgoStopping = self.params.get("VEgoStopping")
     action_t =  self.longitudinalActuatorDelay + DT_MDL
