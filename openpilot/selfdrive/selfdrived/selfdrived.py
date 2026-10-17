@@ -125,6 +125,7 @@ class SelfdriveD:
     self.last_functional_fan_frame = 0
     self.events_prev = []
     self.logged_comm_issue = None
+    self.last_comm_issue_log_t = -float("inf")
     self.not_running_prev = None
     self.experimental_mode = False
     self.personality = self.params.get("LongitudinalPersonality", return_default=True)
@@ -167,31 +168,21 @@ class SelfdriveD:
     elif self.CP.passive:
       self.events.add(EventName.dashcamMode, static=True)
 
+  def log_comm_issue(self, logs):
+    # Keep diagnostics off the critical path: hardwared already samples CPU usage,
+    # and proclogd records per-process CPU times for offline analysis.
+    now = time.monotonic()
+    if logs == self.logged_comm_issue or now-self.last_comm_issue_log_t < 1.:
+      return
+
+    self.logged_comm_issue = logs.copy()
+    self.last_comm_issue_log_t = now
+    cloudlog.event("commIssue", error=True, **logs,
+                   cpu_per_core={f"cpu{i}": value for i, value in enumerate(self.sm['deviceState'].cpuUsagePercent)},
+                   cpu_sample_mono_time=self.sm.logMonoTime['deviceState'],
+                   cpu_sample_valid=self.sm.valid['deviceState'])
+
   def update_events(self, CS):
-    def get_cpu_percent_per_core():
-      def read_stat():
-        cpus = []
-        with open("/proc/stat") as f:
-          for line in f:
-            if line.startswith("cpu") and line[3].isdigit():
-              vals = list(map(int, line.split()[1:]))
-              cpus.append(vals)
-        return cpus
-
-      b = read_stat()
-      a = getattr(self, "_cpu_stat_prev", None)
-      self._cpu_stat_prev = b
-      if a is None:
-        return []
-
-      usage = []
-      for x, y in zip(a, b):
-        idle = y[3] - x[3]
-        total = sum(y) - sum(x)
-        usage.append(round((1 - idle / total) * 100, 1) if total else 0.0)
-
-      return usage
-
     """Compute onroadEvents from carState"""
 
     self.events.clear()
@@ -457,49 +448,7 @@ class SelfdriveD:
         'not_alive': [s for s, alive in self.sm.alive.items() if not alive],
         'not_freq_ok': [s for s, freq_ok in self.sm.freq_ok.items() if not freq_ok],
       }
-      if logs != self.logged_comm_issue:
-        # Keep the comparison state separate from the extra diagnostic fields.
-        self.logged_comm_issue = logs.copy()
-        try:
-          cpu_usage = get_cpu_percent_per_core()
-
-          logs['cpu_per_core'] = {
-            f"cpu{i}": v
-            for i, v in enumerate(cpu_usage)
-          }
-
-          top_procs = []
-
-          for pid in os.listdir("/proc"):
-            if not pid.isdigit():
-              continue
-
-            try:
-              with open(f"/proc/{pid}/comm") as f:
-                name = f.read().strip()
-
-              with open(f"/proc/{pid}/stat") as f:
-                stat = f.read().split()
-
-              cpu = int(stat[13]) + int(stat[14])
-              core = int(stat[38])
-
-              top_procs.append({
-                'name': name,
-                'pid': int(pid),
-                'cpu': cpu,
-                'core': core,
-              })
-            except Exception:
-              pass
-
-          top_procs.sort(key=lambda x: x['cpu'], reverse=True)
-          logs['top_cpu'] = top_procs[:10]
-
-        except Exception as e:
-          logs['cpu_log_error'] = str(e)
-
-        cloudlog.event("commIssue", error=True, **logs)
+      self.log_comm_issue(logs)
     else:
       self.logged_comm_issue = None
 
