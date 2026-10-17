@@ -348,7 +348,7 @@ def main(demo=False):
   long_delay = CP.longitudinalActuatorDelay + LONG_SMOOTH_SECONDS
   prev_action = log.ModelDataV2.Action()
 
-  DH = DesireHelper()
+  DH = DesireHelper(CP)
 
   last_time = time.monotonic()
   custom_lat_delay = 0.0

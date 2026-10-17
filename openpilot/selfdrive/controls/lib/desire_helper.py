@@ -89,7 +89,7 @@ class ExistCounter:
 
 
 class DesireHelper:
-  def __init__(self):
+  def __init__(self, CP=None):
     self.params = Params()
     self.frame = 0
 
@@ -173,6 +173,20 @@ class DesireHelper:
     self.cur_left_prob = 1.0   # laneLineProbs[1]
     self.cur_right_prob = 1.0  # laneLineProbs[2]
     self.current_lane_missing = False
+    self.driver_request_consumed = False
+    self.blinker_off_time = 0.
+    self.blocked_atc_request = None
+    self.opposite_torque_time = 0.
+    self.cancel_torque_threshold = None
+    if CP is not None and CP.brand == 'hyundai':
+      from opendbc.car.hyundai.values import CarControllerParams
+      self.cancel_torque_threshold = float(CarControllerParams(CP).STEER_THRESHOLD)
+    self.lane_motion_history = deque(maxlen=20)
+    self.last_lane_crossing = None
+    self.lane_change_started_at = None
+    self.lane_change_crossed = False
+    self.maneuver_end_reason = ""
+
   # ─────────────────────────────────────────────
   #  Config / Model 관련
   # ─────────────────────────────────────────────
@@ -276,9 +290,81 @@ class DesireHelper:
 
     return driver_blinker_state, driver_blinker_changed, driver_desire_enabled
 
+  def _update_lane_motion(self, modeldata):
+    now = self.frame * DT_MDL
+    if len(modeldata.laneLines) != 4 or len(modeldata.laneLineProbs) != 4:
+      self.lane_motion_history.clear()
+      self.last_lane_crossing = None
+      return
+    if not len(modeldata.laneLines[1].y) or not len(modeldata.laneLines[2].y):
+      self.lane_motion_history.clear()
+      self.last_lane_crossing = None
+      return
+    left = float(modeldata.laneLines[1].y[0])
+    right = float(modeldata.laneLines[2].y[0])
+    if (not np.isfinite([left, right, modeldata.laneLineProbs[1], modeldata.laneLineProbs[2]]).all() or
+        min(modeldata.laneLineProbs[1], modeldata.laneLineProbs[2]) < .65 or not 2.6 < right-left < 4.4):
+      self.lane_motion_history.clear()
+      self.last_lane_crossing = None
+      return
+    center = (left+right)/2.
+    history = self.lane_motion_history
+    if len(history) >= 3:
+      recent = list(history)[-3:]
+      if all(p[1] > .6 and abs(p[2]) < 1.1 for p in recent) and center-recent[-1][1] < -1.8:
+        self.last_lane_crossing = (now, BLINKER_LEFT)
+        history.clear()
+      elif all(p[1] < -.6 and abs(p[3]) < 1.1 for p in recent) and center-recent[-1][1] > 1.8:
+        self.last_lane_crossing = (now, BLINKER_RIGHT)
+        history.clear()
+    history.append((now, center, left, right))
+
+  def _lane_change_already_underway(self, direction):
+    now = self.frame * DT_MDL
+    if self.last_lane_crossing is not None:
+      timestamp, side = self.last_lane_crossing
+      if side == direction and now-timestamp < .8:
+        return True
+    history = self.lane_motion_history
+    if len(history) < 5:
+      return False
+    current = history[-1]
+    previous = next((p for p in history if .2 <= now-p[0] <= .5), None)
+    if previous is None:
+      return False
+    sign = 1. if direction == BLINKER_LEFT else -1.
+    near_line = abs(current[2] if direction == BLINKER_LEFT else current[3]) < 1.
+    displacement = sign*(current[1]-previous[1])
+    return near_line and displacement > .10 and displacement/(now-previous[0]) > .25
+
+  def _end_maneuver(self, carrotMan, completed=False):
+    self.lane_change_state = LaneChangeState.off
+    self.lane_change_direction = LaneChangeDirection.none
+    self.turn_direction = TurnDirection.none
+    self.maneuver_type = "none"
+    self.desire = log.Desire.none
+    self.lane_change_ll_prob = 1.
+    self.lane_change_timer = self.lane_change_delay = self.keep_pulse_timer = 0.
+    self.opposite_torque_time = 0.
+    self.auto_lane_change_enable = self.next_lane_change = False
+    self.carrot_lane_change_count = 0
+    self.carrot_blinker_state = BLINKER_NONE
+    self.driver_request_consumed = True
+    self.blinker_ignore = True
+    self.blocked_atc_request = (carrotMan.atcType, carrotMan.carrotCmdIndex)
+    self.lane_change_started_at = None
+    self.lane_change_crossed = False
+    self.maneuver_end_reason = "completed" if completed else "cancelled"
+
   def _update_atc_blinker(self, carrotMan, v_ego, driver_blinker_state):
     # ATC에서 온 turn/lanechange 명령 기반 깜빡이 상태 갱신.
     atc_type = carrotMan.atcType
+    signature = (atc_type, carrotMan.carrotCmdIndex)
+    if self.blocked_atc_request == signature:
+      self.atc_type = atc_type
+      self.carrot_lane_change_count = 0
+      return BLINKER_NONE, False
+    self.blocked_atc_request = None
     atc_blinker_state = BLINKER_NONE
 
     # ATC 기반 자동 차선변경 유지 시간
@@ -417,10 +503,26 @@ class DesireHelper:
 
     # Lane / desire 상태 갱신
     self._check_lane_state(modeldata)
+    self._update_lane_motion(modeldata)
+    previous_lane_change_state = self.lane_change_state
+    if self.lane_change_started_at is not None and self.last_lane_crossing is not None:
+      timestamp, side = self.last_lane_crossing
+      expected = BLINKER_LEFT if self.lane_change_direction == LaneChangeDirection.left else BLINKER_RIGHT
+      if timestamp >= self.lane_change_started_at and side == expected:
+        self.lane_change_crossed = True
+
     self._check_desire_state(modeldata, carstate, self.maneuver_type)
 
     # 운전자 깜빡이
     driver_blinker_state, driver_blinker_changed, driver_desire_enabled = self._update_driver_blinker(carstate)
+    if driver_blinker_state == BLINKER_NONE:
+      self.blinker_off_time += DT_MDL
+      if self.blinker_off_time >= .3:
+        self.driver_request_consumed = False
+        self.blinker_ignore = False
+    else:
+      self.blinker_off_time = 0.
+
 
     # BSD 설정
     ignore_bsd = (self.laneChangeBsd < 0)
@@ -428,6 +530,18 @@ class DesireHelper:
 
     # ATC 깜빡이
     atc_blinker_state, atc_desire_enabled = self._update_atc_blinker(carrotMan, v_ego, driver_blinker_state)
+
+    active_change = self.lane_change_state in (LaneChangeState.laneChangeStarting,
+                                               LaneChangeState.laneChangeMerging,
+                                               LaneChangeState.laneChangeFinishing)
+    if driver_desire_enabled and driver_blinker_changed and not active_change:
+      kind = self._classify_maneuver_type(driver_blinker_state, carstate, self.maneuver_type)
+      if kind == "lane_change" and self._lane_change_already_underway(driver_blinker_state):
+        self.driver_request_consumed = True
+        self.blocked_atc_request = (carrotMan.atcType, carrotMan.carrotCmdIndex)
+    if self.driver_request_consumed and not active_change:
+      driver_desire_enabled = False
+      atc_desire_enabled = False
 
     # 최종 깜빡이/Desire enabled 판단
     desire_enabled = driver_desire_enabled or atc_desire_enabled
@@ -591,7 +705,7 @@ class DesireHelper:
                 self.lane_change_state = LaneChangeState.laneChangeStarting
 
         # LaneChangeState.laneChangeStarting
-        elif self.lane_change_state == LaneChangeState.laneChangeStarting:
+        elif self.lane_change_state in (LaneChangeState.laneChangeStarting, LaneChangeState.laneChangeMerging):
           # 원래 차선라인을 0.5초 동안 서서히 fade-out
           self.lane_change_ll_prob = max(self.lane_change_ll_prob - 2 * DT_MDL, 0.0)
 
@@ -607,11 +721,13 @@ class DesireHelper:
           self.lane_change_ll_prob = min(self.lane_change_ll_prob + DT_MDL, 1.0)
           if self.lane_change_ll_prob > 0.99:
             self.lane_change_direction = LaneChangeDirection.none
-            if desire_enabled:
-              self.lane_change_state = LaneChangeState.preLaneChange
-              self.next_lane_change = True
-            else:
-              self.lane_change_state = LaneChangeState.off
+            self._end_maneuver(carrotMan, completed=True)
+
+    if (self.lane_change_state == LaneChangeState.laneChangeStarting and
+        previous_lane_change_state == LaneChangeState.preLaneChange):
+      self.lane_change_started_at = self.frame * DT_MDL
+      self.lane_change_crossed = False
+      self.maneuver_end_reason = ""
 
     # lane_change_timer 관리
     if self.lane_change_state in (LaneChangeState.off, LaneChangeState.preLaneChange):
@@ -624,14 +740,26 @@ class DesireHelper:
 
     self.prev_desire_enabled = desire_enabled
 
-    # 운전자가 반대 방향으로 강하게 조향하면 해당 차선변경/턴 취소
-    steering_pressed_cancel = carstate.steeringPressed and \
-                              ((carstate.steeringTorque < 0 and blinker_state == BLINKER_LEFT) or
-                               (carstate.steeringTorque > 0 and blinker_state == BLINKER_RIGHT))
-    if steering_pressed_cancel and self.lane_change_state != LaneChangeState.off:
-      self.lane_change_direction = LaneChangeDirection.none
-      self.lane_change_state = LaneChangeState.off
-      self.blinker_ignore = True
+    # Match the ongoing maneuver, even if the stalk has already been released.
+    direction = self.lane_change_direction
+    if self.turn_direction == TurnDirection.turnLeft:
+      direction = LaneChangeDirection.left
+    elif self.turn_direction == TurnDirection.turnRight:
+      direction = LaneChangeDirection.right
+    opposite = ((direction == LaneChangeDirection.left and carstate.steeringTorque < 0.) or
+                (direction == LaneChangeDirection.right and carstate.steeringTorque > 0.))
+    maneuver_active = self.lane_change_state != LaneChangeState.off or self.turn_direction != TurnDirection.none
+    torque = abs(carstate.steeringTorque)
+    weak_opposite = (opposite and self.cancel_torque_threshold is not None and
+                     torque >= .4*self.cancel_torque_threshold)
+    self.opposite_torque_time = self.opposite_torque_time+DT_MDL if maneuver_active and weak_opposite else 0.
+    strong_opposite = (opposite and (carstate.steeringPressed or
+                       (self.cancel_torque_threshold is not None and torque >= self.cancel_torque_threshold)))
+    if maneuver_active and (strong_opposite or self.opposite_torque_time >= .1):
+      # Countersteering after crossing ends the assist in the current lane; it
+      # never requests a return to the original lane.
+      completed = self.lane_change_crossed or self.lane_change_state == LaneChangeState.laneChangeFinishing
+      self._end_maneuver(carrotMan, completed=completed)
 
     # 최종 desire 결정
     if self.turn_direction != TurnDirection.none:
