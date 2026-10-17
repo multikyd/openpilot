@@ -315,6 +315,10 @@ class LongitudinalMpc:
     self.turn_loss_reacquire = 0.0
     self.turn_reacquire_id = None
     self.turn_loss_limit = None
+    self.turn_loss_elapsed = self.turn_exit_confirm = 0.0
+    self.turn_peak_angle = self.turn_peak_curvature = 0.0
+    self.turn_exit_curvature = None
+    self.turn_exit_side = 0
     self.set_weights()
 
   def set_cost_weights(self, cost_weights, constraint_cost_weights):
@@ -431,7 +435,8 @@ class LongitudinalMpc:
     self.lead_loss_remaining = max(0.0, self.lead_loss_remaining - self.dt)
     return cruise_accel
 
-  def cruise_accel_in_turn_after_lead_loss(self, lead_one, lead_two, v_ego, a_ego, steering_angle, normal_max, enabled):
+  def cruise_accel_in_turn_after_lead_loss(self, lead_one, lead_two, v_ego, a_ego, steering_angle, normal_max, enabled,
+                                          future_curvature=None, allow_resume=True):
     # Losing a selected vehicle in a tight turn does not establish a clear road.
     if not enabled or not np.all(np.isfinite((v_ego, a_ego, steering_angle, normal_max))) or not 1.0 <= v_ego <= 12.0:
       self.turn_lead_id = None
@@ -439,8 +444,20 @@ class LongitudinalMpc:
       self.turn_loss_remaining = self.turn_loss_clear_time = self.turn_loss_reacquire = 0.0
       self.turn_reacquire_id = None
       self.turn_loss_limit = None
+      self.turn_loss_elapsed = self.turn_exit_confirm = 0.0
+      self.turn_peak_angle = self.turn_peak_curvature = 0.0
+      self.turn_exit_curvature = None
+      self.turn_exit_side = 0
       return normal_max
 
+    preview_valid = future_curvature is not None and np.isfinite(future_curvature)
+    if preview_valid:
+      if self.turn_exit_curvature is None:
+        self.turn_exit_curvature = abs(future_curvature)
+      else:
+        self.turn_exit_curvature += self.dt/(.15+self.dt) * (abs(future_curvature)-self.turn_exit_curvature)
+    else:
+      self.turn_exit_curvature = None
     turning = abs(steering_angle) >= 45.0
     reliable = [lead for lead in (lead_one, lead_two) if
                 lead.present and lead.radar and lead.radarTrackId >= 0 and lead.modelProb >= .6 and
@@ -450,11 +467,16 @@ class LongitudinalMpc:
     if self.turn_loss_limit is None:
       if turning and reliable:
         selected = matching if matching is not None else reliable[0]
+        if matching is None:
+          self.turn_peak_angle = self.turn_peak_curvature = 0.0
+          self.turn_exit_curvature = abs(future_curvature) if preview_valid else None
+          self.turn_exit_side = int(np.sign(steering_angle))
         self.turn_lead_confirm = min(1., self.turn_lead_confirm+self.dt) if matching is not None else self.dt
         self.turn_lead_id = selected.radarTrackId
         self.turn_lead_age = 0.0
       elif turning and self.turn_lead_id is not None and self.turn_lead_confirm >= .3 and self.turn_lead_age < 1.0:
         self.turn_loss_remaining = 4.0
+        self.turn_loss_elapsed = self.turn_exit_confirm = 0.0
         self.turn_loss_clear_time = self.turn_loss_reacquire = 0.0
         # Start from measured acceleration, rather than abruptly demanding braking.
         self.turn_loss_limit = min(max(0., normal_max), max(0., a_ego))
@@ -464,6 +486,10 @@ class LongitudinalMpc:
           self.turn_lead_id = None
           self.turn_lead_confirm = 0.0
 
+    if self.turn_lead_id is not None:
+      self.turn_peak_angle = max(self.turn_peak_angle, abs(steering_angle))
+      if preview_valid:
+        self.turn_peak_curvature = max(self.turn_peak_curvature, self.turn_exit_curvature)
     if self.turn_loss_limit is None:
       return normal_max
     recovered = next((lead for lead in reliable if lead.modelProb >= .75 and abs(lead.dPath) < 2.0), None)
@@ -486,13 +512,39 @@ class LongitudinalMpc:
       if turning and self.turn_loss_remaining == 0.0 and self.turn_lead_age < 1.0 and self.turn_lead_confirm >= .3:
         # Re-arm if a recently recovered lead disappears again during release.
         self.turn_loss_remaining = 4.0
+        self.turn_loss_elapsed = self.turn_exit_confirm = 0.0
+        self.turn_peak_angle = abs(steering_angle)
+        self.turn_peak_curvature = self.turn_exit_curvature if preview_valid else 0.0
+        self.turn_exit_side = int(np.sign(steering_angle))
         self.turn_loss_clear_time = 0.0
     if self.turn_loss_remaining > 0.0:
       self.turn_loss_remaining = max(0., self.turn_loss_remaining-self.dt)
+      self.turn_loss_elapsed += self.dt
       self.turn_loss_clear_time = self.turn_loss_clear_time+self.dt if abs(steering_angle) < 30. else 0.
       if self.turn_loss_clear_time >= .6:
         self.turn_loss_remaining = 0.0
     target = 0.0 if self.turn_loss_remaining > 0.0 else max(0., normal_max)
+    if self.turn_loss_remaining > 0.0:
+      # A turn can start opening well before the steering wheel is nearly straight.
+      # Keep the initial blind hold, then permit only a small positive ceiling.
+      same_turn = (self.turn_exit_side == int(np.sign(steering_angle)) and
+                   preview_valid and steering_angle*future_curvature <= 0.)
+      opening = (allow_resume and same_turn and self.turn_loss_elapsed >= .9 and
+                 not lead_one.present and not lead_two.present and
+                 self.turn_peak_angle >= 60. and self.turn_peak_curvature >= .005 and
+                 abs(steering_angle) <= .8*self.turn_peak_angle and
+                 self.turn_peak_angle-abs(steering_angle) >= 15. and
+                 self.turn_exit_curvature <= .8*self.turn_peak_curvature and
+                 abs(future_curvature)*v_ego**2 <= 1.6 and
+                 abs(future_curvature) <= .85*self.turn_peak_curvature and
+                 abs(future_curvature) <= self.turn_exit_curvature+.0015)
+      self.turn_exit_confirm = self.turn_exit_confirm+self.dt if opening else 0.0
+      if self.turn_exit_confirm >= .35:
+        unwind = min(1.-abs(steering_angle)/self.turn_peak_angle,
+                     1.-self.turn_exit_curvature/self.turn_peak_curvature)
+        target = float(np.interp(unwind, [.2, .5], [.15, .3]))
+    else:
+      self.turn_exit_confirm = 0.0
     self.turn_loss_limit += float(np.clip(target-self.turn_loss_limit, -.8*self.dt, .5*self.dt))
     cap = min(normal_max, self.turn_loss_limit)
     if self.turn_loss_remaining == 0.0 and self.turn_loss_limit >= max(0., normal_max)-1e-6:
@@ -530,7 +582,8 @@ class LongitudinalMpc:
       self.early_lead_decel = 0.0
     return min(normal_max, -self.early_lead_decel) if self.early_lead_decel else normal_max
 
-  def update(self, carrot, reset_state, radarstate, v_cruise, x, v, a, j, personality=log.LongitudinalPersonality.standard, prev_accel_constraint=True):
+  def update(self, carrot, reset_state, radarstate, v_cruise, x, v, a, j, personality=log.LongitudinalPersonality.standard,
+             prev_accel_constraint=True, future_curvature=None, allow_turn_resume=False):
     v_ego = self.x0[1]
     a_ego = self.x0[2]
     t_follow = carrot.get_T_FOLLOW(personality, v_ego, a_ego)
@@ -585,7 +638,10 @@ class LongitudinalMpc:
 
     cruise_max_a = self.cruise_accel_in_turn_after_lead_loss(
       radarstate.leadOne, radarstate.leadTwo, v_ego, a_ego, carrot.steering_angle, cruise_max_a,
-      mode == 'acc' and not reset_state and carrot.desireState <= .1)
+      mode == 'acc' and not reset_state and carrot.desireState <= .1,
+      future_curvature=future_curvature,
+      allow_resume=(allow_turn_resume and carrot.xState not in [XState.e2eStop, XState.e2eStopped] and
+                    carrot.signal_follow.strength <= 0.))
     if self.turn_loss_limit is not None:
       # Also constrain acceleration if another lead/cruise objective becomes dominant.
       self.params[:,1] = np.minimum(self.params[:,1], max(0., cruise_max_a))

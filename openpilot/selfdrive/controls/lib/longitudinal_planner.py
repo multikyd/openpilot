@@ -157,6 +157,7 @@ class LongitudinalPlanner:
     # No change cost when user is controlling the speed, or when standstill
     prev_accel_constraint = not (reset_state or sm['carState'].standstill)
 
+    curvature_future = None
     if self.mpc.mode == 'acc':
       #accel_limits = [A_CRUISE_MIN, get_max_accel(v_ego)]
       accel_limits = [A_CRUISE_MIN, carrot.get_carrot_accel(v_ego)]
@@ -210,7 +211,10 @@ class LongitudinalPlanner:
 
     self.mpc.set_accel_limits(accel_limits_turns[0], accel_limits_turns[1])
     self.mpc.set_cur_state(self.v_desired_filter.x, self.a_desired)
-    self.mpc.update(carrot, reset_state, sm['radarState'], v_cruise, x, v, a, j, personality=sm['selfdriveState'].personality, prev_accel_constraint=prev_accel_constraint)
+    self.mpc.update(carrot, reset_state, sm['radarState'], v_cruise, x, v, a, j, personality=sm['selfdriveState'].personality,
+                    prev_accel_constraint=prev_accel_constraint, future_curvature=curvature_future,
+                    # Use measured speed for headroom: filtered MPC speed lags after slowing.
+                    allow_turn_resume=(v_cruise > v_ego+.05 and sm.all_checks(['modelV2', 'carState'])))
 
     self.v_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.v_solution)
     self.a_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.a_solution)
