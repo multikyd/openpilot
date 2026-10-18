@@ -157,13 +157,7 @@ class LateralPlanner:
     self.LP.curvature = measured_curvature
     self.LP.lane_center_curvature = get_lane_center_curvature(
       measured_curvature, self.t_idxs, self.plan_yaw_rate, self.v_plan)
-    # Confirm that a sustained lane offset is not an actuator tracking transient.
-    requested_angle = sm['carControl'].actuators.steeringAngleDeg
-    self.LP.lane_tracking_ready = bool(
-      sm.all_checks(service_list=['carState', 'carControl', 'controlsState']) and
-      sm['carControl'].latActive and sm['controlsState'].activeLaneLine and
-      np.isfinite(requested_angle) and
-      abs(requested_angle-sm['carState'].steeringAngleDeg) < 1.0)
+    self.LP.lane_position_ready = bool(sm.all_checks(service_list=['carState', 'modelV2']))
     self.path_xyz, self.lanelines_active = self.LP.get_d_path(sm['carState'], v_ego_car, self.t_idxs, self.path_xyz, self.curve_speed)
 
     if self.lanelines_active:
@@ -280,8 +274,7 @@ class LateralPlanner:
       f"{self.LP.lane_width:.1f}m | " +
       f"{self.LP.lane_width_right:.1f}m | " +
       f"{f'offset={self.LP.offset_total * 100.0:.1f}cm turn={np.clip(self.curve_speed, -200, 200):.0f}km/h' if self.lanelines_active else ''}"
-      f" | pos={self.LP.lane_position_class} pref={self.LP.lane_position_offset * 100.:+.1f}cm"
-      f" trim={self.LP.lane_tracking_applied * 100.:+.1f}cm"
+      f" | pos={self.LP.lane_position_class} camEq={self.LP.effective_camera_offset:.3f} shift={self.LP.lane_position_offset * 100.:+.1f}cm"
     )
 
     lateralPlan.latDebugText = debugText

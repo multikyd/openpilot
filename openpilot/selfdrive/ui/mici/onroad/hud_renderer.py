@@ -1,4 +1,5 @@
 import math
+import re
 import time
 import pyray as rl
 from dataclasses import dataclass
@@ -144,6 +145,8 @@ class HudRenderer(Widget):
 
     self.setspeed_changed = False
     self.source_text = ""
+    self._camera_offset_text = "--"
+    self._camera_offset_frame = -1
 
   def set_wheel_critical_icon(self, critical: bool):
     """Set the wheel icon to critical or normal state."""
@@ -160,6 +163,7 @@ class HudRenderer(Widget):
   def _update_state(self) -> None:
     """Update HUD state based on car state and controls state."""
     sm = ui_state.sm
+    self._update_camera_offset(sm)
     if sm.recv_frame["carState"] < ui_state.started_frame:
       self.is_cruise_set = False
       self.set_speed = SET_SPEED_NA
@@ -203,6 +207,7 @@ class HudRenderer(Widget):
 
     self._draw_steering_wheel(rect)
     self._draw_current_speed(rect)
+    self._draw_camera_offset(rect)
     if (self._can_draw_top_icons and ui_state.started and ui_state.bumpTarget <= 0 and not ui_state.bumpLearningText and
         ui_state.sm.valid['carrotMan'] and ui_state.sm.alive['carrotMan'] and
         0 <= time.monotonic()-ui_state.sm.recv_time['carrotMan'] < 1):
@@ -227,15 +232,46 @@ class HudRenderer(Widget):
         rl.draw_text_ex(self._font_bold, text, rl.Vector2(rect.x+252-width/2, rect.y+198), size, 0,
                         rl.Color(255, 220, 70, 255))
 
-  def _draw_bump_target(self, rect: rl.Rectangle, center_x: float, target: float, distance: float) -> None:
+  def _update_camera_offset(self, sm) -> None:
+    # Parse planner telemetry only on a new plan, never once per rendered frame.
+    frame = sm.recv_frame['lateralPlan']
+    fresh = (sm.valid['lateralPlan'] and sm.alive['lateralPlan'] and
+             frame >= ui_state.started_frame and 0 <= time.monotonic()-sm.recv_time['lateralPlan'] < 1)
+    if not fresh:
+      self._camera_offset_text = "--"
+      self._camera_offset_frame = -1
+    elif frame != self._camera_offset_frame:
+      self._camera_offset_frame = frame
+      match = re.search(r'(?:^|\s)camEq=([^\s|]+)', sm['lateralPlan'].latDebugText)
+      try:
+        value = float(match.group(1)) if match else math.nan
+        # Suppress negative zero while retaining signed manual calibration values.
+        self._camera_offset_text = f"{0.0 if abs(value) < .005 else value:.2f}" if math.isfinite(value) else "--"
+      except ValueError:
+        self._camera_offset_text = "--"
+
+  def _draw_camera_offset(self, rect: rl.Rectangle) -> None:
+    if not self._can_draw_top_icons or not ui_state.started or rect.width < 440:
+      return
+    text = self._camera_offset_text
+    size = 32
+    measured = measure_text_cached(self._font_bold, text, size)
+    size *= min(1., 72 / max(1., measured.x))
+    width = measure_text_cached(self._font_bold, text, size).x
+    center = rect.x + rect.width / 2
+    rl.draw_rectangle_rounded(rl.Rectangle(center-40, rect.y+4, 80, 40), .2, 8, rl.Color(0, 0, 0, 190))
+    rl.draw_text_ex(self._font_bold, text, rl.Vector2(center-width/2, rect.y+7), size, 0, rl.WHITE)
+
+  def _draw_bump_target(self, rect: rl.Rectangle, center_x: float, target: float, distance: float, compact: bool = False) -> None:
     # Preserve the existing DM/lead/gap/TPMS/wheel column on the 536x240 C4 screen.
     img = self.img_speed_bump
-    icon = rl.Rectangle(center_x-45, rect.y+15, 90, 90)
+    icon_size = 64 if compact else 90
+    icon = rl.Rectangle(center_x-icon_size/2, rect.y+(52 if compact else 15), icon_size, icon_size)
     rl.draw_texture_pro(img, rl.Rectangle(0, 0, img.width, img.height), icon, rl.Vector2(0, 0), 0, rl.WHITE)
     speed = round(target * (1 if ui_state.is_metric else KM_TO_MILE))
     for text, y, size, color in (
-        ("TARGET", 105, 24, rl.WHITE),
-        (str(speed), 129, 64, rl.Color(255, 220, 70, 255)),
+        ("TARGET", 116 if compact else 105, 20 if compact else 24, rl.WHITE),
+        (str(speed), 138 if compact else 129, 54 if compact else 64, rl.Color(255, 220, 70, 255)),
         (f"{max(0, distance):.0f}m", 198, 32, rl.WHITE)):
       width = measure_text_cached(self._font_bold, text, size).x
       rl.draw_text_ex(self._font_bold, text, rl.Vector2(center_x-width/2, rect.y+y), size, 0, color)
@@ -426,7 +462,7 @@ class HudRenderer(Widget):
 
   def _draw_speed_limit_sign(self, rect: rl.Rectangle) -> None:
     """Draw KisaPilot-style speed limit sign."""
-    s_center_x = rect.x + 170
+    s_center_x = rect.x + 145
     s_center_y = rect.y + 60
     d_center_y = s_center_y + 60
 
@@ -446,7 +482,7 @@ class HudRenderer(Widget):
       return
     if learned:
       # Retain a simultaneous camera sign in its original position.
-      self._draw_bump_target(rect, rect.x+315, ui_state.bumpTarget, ui_state.bumpDistance)
+      self._draw_bump_target(rect, rect.x+rect.width/2+18, ui_state.bumpTarget, ui_state.bumpDistance, compact=True)
     if limit_spd <= 20 and dist == 0:
       return
 
