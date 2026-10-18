@@ -278,6 +278,32 @@ def file_copy():
         print(f"Error copying {source_path}: {e}")
         return jsonify({"error": str(e)}), 500
 
+# Bookmark exports preserve original segment paths for replay analysis.
+@app.route('/bookmarks', methods=['GET'])
+def list_saved_bookmarks():
+    from openpilot.selfdrive.kisapilot.bookmark_export import list_bookmarks
+    try:
+        return jsonify(list_bookmarks('/data/media/0/realdata'))
+    except FileNotFoundError as e:
+        return jsonify({"error": str(e)}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/bookmarks/export', methods=['POST'])
+def prepare_bookmark_export():
+    from openpilot.selfdrive.kisapilot.bookmark_export import export_bookmarks
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "JSON 요청이 필요합니다."}), 400
+    try:
+        return jsonify(export_bookmarks('/data/media/0/realdata', data.get('ids'), data.get('adjacent', 1)))
+    except (ValueError, FileNotFoundError) as e:
+        return jsonify({"error": str(e)}), 409
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route('/realdata_files', methods=['GET'])
 def list_realdata_files_recursively():
     path = '/data/media/0/realdata'
