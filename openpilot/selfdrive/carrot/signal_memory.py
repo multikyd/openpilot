@@ -251,7 +251,12 @@ class SignalMemory:
       ahead,side=geometry(dict(lat=slat,lon=slon))
       distance=math.hypot(*_offset(lat,lon,slat,slon))
       reported=number(signal.get('distance'),-100)-max(0.,speed)*age
-      if -15<ahead<650 and side<35 and abs(reported-distance)<max(30.,distance*.3):
+      # Display uses routed TMAP distance, which can differ from GPS straight-line
+      # distance through curves or a signal's mapped reference point. Keep the
+      # freshness, physical approach and navigation checks; reject implausible ranges.
+      range_ok=(0<=reported<=650 and max(0.,distance-40.)<=reported<=max(100.,2.*distance+40.))
+      if -15<ahead<650 and side<35 and range_ok:
+        distance=reported
         node=self._node(slat,slon,heading,True,True)
         for direction in LAMP_DIRECTIONS:
           light=signal.get('movements',{}).get(direction,{})

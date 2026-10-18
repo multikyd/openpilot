@@ -16,6 +16,7 @@ from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.params import Params
 from openpilot.selfdrive.controls.lib.cutin_anticipation import CutInAnticipation
+from openpilot.selfdrive.controls.lib.lead_gap_reserve import LeadGapReserve, apply_lead_gap_cap
 from openpilot.selfdrive.carrot.carrot_functions import XState
 
 import time
@@ -77,6 +78,7 @@ class LongitudinalPlanner:
     self.CP = CP
     self.mpc = LongitudinalMpc(dt=dt)
     self.cutin_anticipation = CutInAnticipation()
+    self.lead_gap_reserve = LeadGapReserve()
     self.fcw = False
     self.dt = dt
     self.allow_throttle = True
@@ -286,9 +288,24 @@ class LongitudinalPlanner:
     #  accel_clip[idx] = np.clip(accel_clip[idx], self.prev_accel_clip[idx] - 0.05, self.prev_accel_clip[idx] + 0.05)
     #self.output_a_target = np.clip(output_a_target, accel_clip[0], accel_clip[1])
     #self.prev_accel_clip = accel_clip
+    now = max(sm.logMonoTime[k] for k in ('carState', 'radarState', 'modelV2'))*1e-9
+    fresh = all(0. <= now-sm.logMonoTime[k]*1e-9 <= age for k, age in
+                (('carState', .1), ('radarState', .2), ('modelV2', .2)))
+    cs = sm['carState']
+    gap_cap = self.lead_gap_reserve.update(
+      sm['radarState'].leadOne, cs.vEgo, self.mpc.t_follow, carrot.stop_distance,
+      sm.logMonoTime['radarState']*1e-9, now,
+      enabled=(self.CP.openpilotLongitudinalControl and not reset_state and self.mpc.mode == 'acc' and
+               sm['selfdriveState'].enabled and not self.output_should_stop and
+               not (cs.gasPressed or cs.brakePressed) and carrot.desireState <= .1 and
+               carrot.xState not in [XState.e2eStop, XState.e2eStopped] and fresh and
+               sm.all_checks(['carState', 'radarState', 'modelV2', 'controlsState', 'selfdriveState'])))
+    output_a_target, output_v_target_now, output_j_target = apply_lead_gap_cap(
+      output_a_target, output_v_target_now, self.j_desired_trajectory[0], gap_cap,
+      cs.vEgo, action_t, self.output_a_target, self.dt)
     self.output_a_target = output_a_target
     self.output_v_target_now = output_v_target_now
-    self.output_j_target_now = self.j_desired_trajectory[0]
+    self.output_j_target_now = output_j_target
 
   def publish(self, sm, pm, carrot):
     plan_send = messaging.new_message('longitudinalPlan')

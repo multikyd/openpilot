@@ -16,6 +16,7 @@ import openpilot.cereal.messaging as messaging
 from openpilot.selfdrive.carrot.bump_learning import BumpMemory, BumpPassage
 from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.carrot.signal_memory import SignalMemory, blank as blank_signal
+from openpilot.selfdrive.carrot.manual_stop_line import ManualStopLineMemory
 from openpilot.common.realtime import Ratekeeper
 from openpilot.common.params import Params
 from openpilot.common.hardware import PC
@@ -84,6 +85,9 @@ class CarrotServ:
     self.params = Params()
     self.signal_params = Params('/dev/shm/params')
     self.signal_memory = SignalMemory(self.params.get('SignalLearningData'), learn=not PC and 'REPLAY' not in os.environ)
+    self.manual_stop_lines = ManualStopLineMemory(self.params.get("ManualStopLineData"))
+    self.manual_bookmark_time = None
+    self.manual_target_active = False
     self.signal_display = blank_signal()
     self.signal_update_time = self.signal_save_time = 0.
     self.signal_vision = {}
@@ -855,6 +859,9 @@ class CarrotServ:
         self.xSpdType =xSpdType
 
   def _update_signal_display(self, sm, gps_service, CS, now):
+    # Latch sparse bookmark events even on ticks skipped by the 5 Hz learner.
+    if sm.updated['userBookmark'] and sm.valid['userBookmark']:
+      self.manual_bookmark_time=sm.logMonoTime['userBookmark']*1e-9
     if now-self.signal_update_time < .2:
       return
     self.signal_update_time = now
@@ -869,7 +876,7 @@ class CarrotServ:
     gps = sm[gps_service]
     position = dict(valid=bool(sm.valid[gps_service] and sm.alive[gps_service] and gps.hasFix),
                     age=now-sm.recv_time[gps_service], lat=gps.latitude, lon=gps.longitude,
-                    bearing=gps.bearingDeg, accuracy=gps.horizontalAccuracy)
+                    bearing=gps.bearingDeg, accuracy=gps.horizontalAccuracy, stamp=sm.logMonoTime[gps_service]*1e-9)
     navigation = dict(age=now-self.last_update_gps_time_navi, lat=self.vpPosPointLatNavi,
                       lon=self.vpPosPointLonNavi, speed=self.nPosSpeed, bearing=self.nPosAngle, turn=self.nTBTTurnType,
                       turn_distance=self.nTBTDist, lane_points=self.signal_lane_points)
@@ -884,6 +891,32 @@ class CarrotServ:
                                                     left_blinker=CS.leftBlinker, right_blinker=CS.rightBlinker,
                                                     steering_angle=CS.steeringAngleDeg,
                                                     model_hint=model_hint, lead_present=lead_present)
+    radar_fresh=(sm.valid['radarState'] and sm.alive['radarState'] and
+                 0<=now-sm.recv_time['radarState']<.3)
+    no_lead=radar_fresh and not (sm['radarState'].leadOne.present or sm['radarState'].leadTwo.present)
+    display=self.signal_display
+    movement='left' if CS.leftBlinker and not CS.rightBlinker else display.get('movement','straight')
+    if CS.rightBlinker:movement='right'
+    state=display.get('leftState' if movement=='left' else 'straightState',0)
+    red=(state==1 if display.get('source') in ('TMAP','VISION') and state else model_hint==1)
+    heading=self.signal_memory.heading
+    enabled=self.signal_memory.learn and sm.valid['carState'] and sm.alive['carState']
+    mark=self.manual_bookmark_time
+    saved=self.manual_stop_lines.observe(
+      now,time.time(),position,CS.vEgo,heading if heading is not None else gps.bearingDeg,movement,
+      red,no_lead,CS.brakePressed,CS.gasPressed,CS.steeringAngleDeg,str(CS.gearShifter)=='drive',
+      bookmark_stamp=mark,enabled=enabled)
+    if saved:
+      self.params.put('ManualStopLineData',self.manual_stop_lines.export())
+      self.manual_stop_lines.dirty=False
+      cloudlog.event('manual_stop_line_saved',points=len(self.manual_stop_lines.points),movement=movement)
+    target=self.manual_stop_lines.target(now,time.time(),position,CS.vEgo,
+      heading if heading is not None else gps.bearingDeg,movement,red,no_lead,
+      enabled=enabled and str(CS.gearShifter)=='drive')
+    self.signal_params.put('ManualStopLineTarget',json.dumps(target or {}))
+    if bool(target)!=self.manual_target_active:
+      cloudlog.event('manual_stop_line_target',active=bool(target),target=target or {})
+      self.manual_target_active=bool(target)
     if self.signal_memory.dirty and now-self.signal_save_time > 60:
       self.params.put('SignalLearningData', self.signal_memory.export())
       self.signal_memory.dirty = False

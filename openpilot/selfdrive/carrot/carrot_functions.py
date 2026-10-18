@@ -6,6 +6,7 @@ import os
 import time
 from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.carrot.signal_follow import SignalFollowAssist
+from openpilot.selfdrive.carrot.manual_stop_line import ManualStopLineCorrection
 
 from openpilot.cereal import log
 from openpilot.common.params import Params
@@ -181,6 +182,10 @@ class CarrotPlanner:
     self.last_event_time = 0.0
     self.signal_follow = SignalFollowAssist(os.getenv("TMAP_SIGNAL_FOLLOW", "1") != "0")
     self._signal_memory = Params("/dev/shm/params")
+    self._manual_stop_correction = ManualStopLineCorrection()
+    self._manual_stop_target = {}
+    self._manual_stop_read_time = -1.
+    self._manual_stop_reported = False
     self._signal_snapshot = {}
     self._signal_read_time = -1.0
     self._signal_log_time = -1.0
@@ -709,6 +714,25 @@ class CarrotPlanner:
     stop_dist = max(stop_dist, 0.0)
 
     stopping_active = (self.xState in [XState.e2eStop, XState.e2eStopped])
+    manual_now=time.monotonic()
+    if manual_now-self._manual_stop_read_time>=.2:
+      self._manual_stop_read_time=manual_now
+      try:
+        raw=self._signal_memory.get('ManualStopLineTarget')
+        self._manual_stop_target=json.loads(raw) if raw else {}
+      except (ValueError,TypeError):
+        self._manual_stop_target={}
+    manual_active=(signal_stopping_enabled and stopping_active and mode=='acc' and
+                   not lead_detected and not (carstate.gasPressed or carstate.brakePressed))
+    stop_dist=self._manual_stop_correction.update(
+      stop_dist,self._manual_stop_target,manual_now,v_ego,self.stop_distance,
+      self.trafficStopDistanceAdjust,manual_active,DT_MDL)
+    if not manual_active:
+      self._manual_stop_reported=False
+    elif self._manual_stop_correction.offset<-.001 and not self._manual_stop_reported:
+      cloudlog.event('manual_stop_line_correction',offset=self._manual_stop_correction.offset,
+                     stop_distance=stop_dist,target=self._manual_stop_target)
+      self._manual_stop_reported=True
     if stopping_active and stop_dist < 300.0:
       stop_dist_soft = max(stop_dist - 1.0, 0.0)
       v_soft = float(np.sqrt(max(0.0, 2.0 * self.comfort_brake * stop_dist_soft)))
