@@ -149,5 +149,67 @@ class TestModelLaneGuard(unittest.TestCase):
     self.assertEqual(g.accel,0)
 
 
+  def test_anticipates_before_old_margin_is_reached(self):
+    model,cs,k=fixture(offset=.35)  # 1.40m margin: outside the old 1.32m trigger.
+    g=ModelLaneGuard();values=self.settle(g,model,cs,k)
+    self.assertLess(values[-1],k)
+    self.assertGreater(g.penetration,0.)
+
+  def test_far_ramp_fold_does_not_disable_local_prediction(self):
+    model,cs,k=fixture()
+    model.position.x[-3:]=[90.,88.,85.]
+    g=ModelLaneGuard();self.settle(g,model,cs,k)
+    self.assertLess(g.accel,0.)
+
+  def test_short_local_coverage_does_not_start_correction(self):
+    model,cs,k=fixture();model.position.x=np.linspace(0.,5.,33)
+    self.assertTrue(all(v==k for v in self.settle(ModelLaneGuard(),model,cs,k)))
+
+  def test_prediction_noise_beyond_local_horizon_is_ignored(self):
+    model,cs,k=fixture();model.position.y[-1]=math.nan
+    self.assertLess(self.settle(ModelLaneGuard(),model,cs,k)[-1],k)
+
+  def test_weak_line_releases_gradually_without_adding_correction(self):
+    model,cs,k=fixture();g=ModelLaneGuard();self.settle(g,model,cs,k)
+    previous=g.accel
+    model.laneLineProbs[2]=.4
+    result=g.update(model,cs,k,101.5,101.52,camera_offset=0.)
+    self.assertGreater(result,k+previous/cs.vEgo**2)
+    self.assertLess(result,k)
+    self.assertLessEqual(abs(g.accel-previous),.30*.05+1e-12)
+    values=self.settle(g,model,cs,k,steps=160,start=101.55)
+    self.assertAlmostEqual(values[-1],k,places=7)
+
+  def test_observation_noise_has_bounded_slow_correction(self):
+    model,cs,k=fixture(offset=.4);g=ModelLaneGuard();values=[0.]
+    for i in range(120):
+      model.laneLineProbs[2]=.64 if i%2 else .95
+      stamp=100+i*.05
+      g.update(model,cs,k,stamp,stamp+.02,camera_offset=0.)
+      values.append(g.accel)
+    self.assertLess(values[-1],0.)
+    self.assertLessEqual(max(abs(np.diff(values))),.40*.05+1e-12)
+    self.assertTrue(all(a<=0 for a in values))
+
+  def test_smoothed_release_when_width_temporarily_uncertain(self):
+    model,cs,k=fixture();g=ModelLaneGuard();self.settle(g,model,cs,k)
+    previous=g.accel
+    model.laneLines[1].y-=1.2  # Width unreliable, inside line identity unchanged.
+    result=g.update(model,cs,k,101.5,101.52,camera_offset=0.)
+    self.assertLess(result,k)
+    self.assertLessEqual(abs(g.accel-previous),.30*.05+1e-12)
+
+  def test_centered_narrow_corridor_does_not_get_preference_bias(self):
+    model,cs,k=fixture(offset=0.)
+    center=model.position.y
+    model.laneLines[1].y=center-1.425;model.laneLines[2].y=center+1.425
+    self.assertTrue(all(v==k for v in self.settle(ModelLaneGuard(),model,cs,k)))
+
+  def test_gentle_curve_keeps_original_margin(self):
+    model,cs,k=fixture(offset=.30)
+    k=.0025
+    self.assertTrue(all(v==k for v in self.settle(ModelLaneGuard(),model,cs,k)))
+
+
 if __name__ == '__main__':
   unittest.main()
