@@ -640,6 +640,10 @@ class LongitudinalMpc:
         # Also bound the solver's acceleration: a nearby lead must not undo the signal cap.
         self.params[:,1] = np.minimum(self.params[:,1], max(0.0, cruise_max_a))
 
+    if mode == 'acc' and not reset_state and carrot.signal_stop_approach.accel_cap is not None:
+      cruise_max_a = min(cruise_max_a, max(0., carrot.signal_stop_approach.accel_cap))
+      self.params[:,1] = np.minimum(self.params[:,1], max(0., carrot.signal_stop_approach.accel_cap))
+
     cruise_max_a = self.cruise_accel_for_approaching_lead(
       radarstate.leadOne, v_ego, self.desired_distance, cruise_max_a,
       mode == 'acc' and not reset_state and carrot.desireState <= .1 and
@@ -677,7 +681,8 @@ class LongitudinalMpc:
       cruise_obstacle = np.cumsum(T_DIFFS * v_cruise_clipped) + get_safe_obstacle_distance(v_cruise_clipped, t_follow, comfort_brake, stop_distance)
 
       adjust_dist = carrot.trafficStopDistanceAdjust if v_ego > 0.1 else -2.0
-      if 50 < stop_x + adjust_dist < cruise_obstacle[0]:
+      # A real signal stop must not be moved outward to the cruise obstacle.
+      if carrot.xState not in [XState.e2eStop, XState.e2eStopped] and 50 < stop_x + adjust_dist < cruise_obstacle[0]:
         stop_x = cruise_obstacle[0] - adjust_dist
       x2 = stop_x * np.ones(N+1) + adjust_dist
 

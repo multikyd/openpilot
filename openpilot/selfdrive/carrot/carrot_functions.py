@@ -7,6 +7,7 @@ import time
 from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.carrot.signal_follow import SignalFollowAssist
 from openpilot.selfdrive.carrot.manual_stop_line import ManualStopLineCorrection
+from openpilot.selfdrive.controls.lib.signal_stop_approach import SignalStopApproach
 
 from openpilot.cereal import log
 from openpilot.common.params import Params
@@ -183,6 +184,7 @@ class CarrotPlanner:
     self.signal_follow = SignalFollowAssist(os.getenv("TMAP_SIGNAL_FOLLOW", "1") != "0")
     self._signal_memory = Params("/dev/shm/params")
     self._manual_stop_correction = ManualStopLineCorrection()
+    self.signal_stop_approach = SignalStopApproach()
     self._manual_stop_target = {}
     self._manual_stop_read_time = -1.
     self._manual_stop_reported = False
@@ -714,6 +716,13 @@ class CarrotPlanner:
     stop_dist = max(stop_dist, 0.0)
 
     stopping_active = (self.xState in [XState.e2eStop, XState.e2eStopped])
+    approach_enabled = (signal_stopping_enabled and stopping_active and mode == 'acc' and
+                        not lead_detected and sm['carControl'].longActive and sm['selfdriveState'].enabled and
+                        not (carstate.gasPressed or carstate.brakePressed) and
+                        sm.all_checks(service_list=['carState', 'modelV2', 'radarState', 'carControl', 'selfdriveState']))
+    stop_dist = self.signal_stop_approach.update(
+      stop_dist, v_ego, a_ego, self.comfort_brake,
+      max(0., self.stop_distance-self.trafficStopDistanceAdjust+1.), approach_enabled, DT_MDL)
     manual_now=time.monotonic()
     if manual_now-self._manual_stop_read_time>=.2:
       self._manual_stop_read_time=manual_now
