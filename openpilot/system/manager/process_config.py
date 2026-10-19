@@ -135,6 +135,7 @@ if EnableLogger:
   	NativeProcess("encoderd", "openpilot/system/loggerd", ["./encoderd"], only_onroad),
   	NativeProcess("stream_encoderd", "openpilot/system/loggerd", ["./encoderd", "--stream"], or_(livestream, notcar)),
   	PythonProcess("logmessaged", "openpilot.system.logmessaged", always_run),
+    PythonProcess("deleter", "openpilot.system.loggerd.deleter", always_run),
   ]
 
 managed_processes = {p.name: p for p in procs}
