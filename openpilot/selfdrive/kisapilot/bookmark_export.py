@@ -54,6 +54,26 @@ def list_bookmarks(root, preserved=is_preserved):
             "note": "북마크가 있는 1분 구간입니다. 정확한 이벤트 시각은 원본 로그의 userBookmark/bookmarkButton에 있습니다."}
 
 
+def auto_bookmarks(root, onroad=False, preserved=is_preserved):
+    """A closed bookmark waits for its next segment while the route is recording."""
+    segments = snapshot(root, preserved)
+    active_routes = {item['route'] for item in segments.values() if item['active']}
+    newest = max(segments.values(), key=lambda item: Path(root, item['id']).stat().st_mtime, default=None)
+    if onroad and newest:
+        active_routes.add(newest['route'])
+    bookmarks = []
+    for item in sorted(segments.values(), key=lambda s: (s['route'], s['segment'])):
+        if not item['bookmarked']:
+            continue
+        next_id = item['route'] + '--' + str(item['segment'] + 1)
+        nearby = [segments.get(item['route'] + '--' + str(n))
+                  for n in range(max(0, item['segment'] - 1), item['segment'] + 2)]
+        waiting = any(s and s['active'] for s in nearby)
+        waiting = waiting or (next_id not in segments and item['route'] in active_routes)
+        bookmarks.append({k: item[k] for k in ('id', 'route', 'segment', 'active')} | {'ready': not waiting})
+    return {'bookmarks': bookmarks, 'onroad': bool(onroad), 'format': 'kisa-bookmark-auto-v1'}
+
+
 def export_bookmarks(root, ids, adjacent=1, preserved=is_preserved):
     if not isinstance(ids, list) or not ids or len(ids) > 100 or any(not isinstance(i, str) or not split_segment(i) for i in ids):
         raise ValueError("북마크를 1~100개 선택해주세요.")

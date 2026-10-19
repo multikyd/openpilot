@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from openpilot.common.constants import CV
 from openpilot.selfdrive.ui.mici.onroad.torque_bar import TorqueBar
 from openpilot.selfdrive.ui.mici.onroad.signal_renderer import draw_signal_panel
+from openpilot.selfdrive.ui.mici.onroad.bookmark_transfer import BookmarkTransferBanner
 from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus, ChestnutState
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.multilang import tr
@@ -121,6 +122,7 @@ class HudRenderer(Widget):
     self._font_display: rl.Font = gui_app.font(FontWeight.DISPLAY)
 
     self._turn_intent = TurnIntent()
+    self._bookmark_transfer = BookmarkTransferBanner()
     self._torque_bar = TorqueBar()
 
     self._txt_wheel: rl.Texture = gui_app.texture('icons_mici/wheel.png', 50, 50)
@@ -208,6 +210,8 @@ class HudRenderer(Widget):
     self._draw_steering_wheel(rect)
     self._draw_current_speed(rect)
     self._draw_camera_offset(rect)
+    if ui_state.started:
+      self._bookmark_transfer.draw(rect, self._font_bold)
     if (self._can_draw_top_icons and ui_state.started and ui_state.bumpTarget <= 0 and not ui_state.bumpLearningText and
         ui_state.sm.valid['carrotMan'] and ui_state.sm.alive['carrotMan'] and
         0 <= time.monotonic()-ui_state.sm.recv_time['carrotMan'] < 1):

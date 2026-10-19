@@ -290,6 +290,33 @@ def list_saved_bookmarks():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route('/bookmarks/auto', methods=['GET'])
+def automatic_bookmark_status():
+    from openpilot.selfdrive.kisapilot.bookmark_export import auto_bookmarks
+    try:
+        onroad = bool(params.get("IsOnroad")) if params is not None else True
+        return jsonify(auto_bookmarks('/data/media/0/realdata', onroad))
+    except FileNotFoundError as e:
+        return jsonify({"error": str(e)}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/bookmarks/auto/status', methods=['POST'])
+def automatic_bookmark_transfer_status():
+    from openpilot.selfdrive.kisapilot.bookmark_status import sanitize_report
+    if request.content_length is None or request.content_length > 2048:
+        return jsonify({"error": "Invalid status size"}), 400
+    try:
+        report = sanitize_report(request.get_json(silent=True), time.monotonic())
+        Params('/dev/shm/params').put('KisaBookmarkTransferStatus', json.dumps(report))
+        return jsonify({"ok": True})
+    except (ValueError, TypeError) as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route('/bookmarks/export', methods=['POST'])
 def prepare_bookmark_export():
     from openpilot.selfdrive.kisapilot.bookmark_export import export_bookmarks
