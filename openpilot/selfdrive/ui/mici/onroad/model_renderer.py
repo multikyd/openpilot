@@ -9,7 +9,6 @@ from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.selfdrive.controls.radard import RADAR_TO_CAMERA
 from openpilot.selfdrive.locationd.calibrationd import HEIGHT_INIT
 from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus
-from openpilot.selfdrive.ui.mici.onroad import blend_colors
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.ui.lib.shader_polygon import draw_polygon, Gradient
 from openpilot.system.ui.widgets import Widget
@@ -45,11 +44,26 @@ LL_NO_THROTTLE_COLORS = [
   rl.Color(255, 220, 180, 0),
 ]
 
-LANE_LINE_COLORS = {
-  UIStatus.DISENGAGED: rl.Color(200, 200, 200, 255),
-  UIStatus.OVERRIDE: rl.Color(255, 255, 255, 255),
-  UIStatus.ENGAGED: rl.Color(0, 255, 64, 255),
-}
+# Hyundai camera CAN color classes: 1 white, 2 yellow, 3 blue.
+# modelV2 provides geometry/probability, not painted-line color classification.
+UNKNOWN_LANE_RGB = (160, 160, 160)
+ROAD_EDGE_RGB = (255, 55, 55)
+DETECTED_LANE_RGB = {1: (255, 255, 255), 2: (255, 255, 0), 3: (60, 155, 255)}
+
+
+def lane_line_rgb(index, left_lane, right_lane, valid=True):
+  # Only the two ego-lane boundaries have corresponding camera color signals.
+  if not valid or index not in (1, 2):
+    return UNKNOWN_LANE_RGB
+  try:
+    packed = int(left_lane if index == 1 else right_lane)
+  except (TypeError, ValueError, OverflowError):
+    return UNKNOWN_LANE_RGB
+  if packed < 0 or packed % 10 > 8:
+    return UNKNOWN_LANE_RGB
+  if packed % 10 in (3, 8):  # Camera identifies a road edge or barrier.
+    return ROAD_EDGE_RGB
+  return DETECTED_LANE_RGB.get(packed // 10, UNKNOWN_LANE_RGB)
 
 
 @dataclass
@@ -89,7 +103,6 @@ class ModelRenderer(Widget):
     self._acceleration_x_filter = FirstOrderFilter(0.0, 0.1, 1 / gui_app.target_fps)
     self._acceleration_x_filter2 = FirstOrderFilter(0.0, 1, 1 / gui_app.target_fps)
 
-    self._torque_filter = FirstOrderFilter(0, 0.1, 1 / gui_app.target_fps)
     self._ll_color_filter = FirstOrderFilter(0.0, 0.1, 1 / gui_app.target_fps)
 
     # 3x3 car space -> rect-origin space (draw methods add rect.x/y)
@@ -117,8 +130,6 @@ class ModelRenderer(Widget):
 
   def _render(self, rect: rl.Rectangle):
     sm = ui_state.sm
-
-    self._torque_filter.update(-ui_state.sm['carOutput'].actuatorsOutput.torque)
 
     # Check if data is up-to-date
     if (sm.recv_frame["extrinsicsCalibration"] < ui_state.started_frame or
@@ -307,46 +318,31 @@ class ModelRenderer(Widget):
     self._exp_gradient.colors = segment_colors
     self._exp_gradient.stops = gradient_stops
 
-  def _get_ll_color(self, prob: float, adjacent: bool, left: bool):
-    alpha = np.clip(prob, 0.0, 0.7)
-    if adjacent:
-      _base_color = LANE_LINE_COLORS.get(ui_state.status, LANE_LINE_COLORS[UIStatus.DISENGAGED])
-      color = rl.Color(_base_color.r, _base_color.g, _base_color.b, int(alpha * 255))
-
-      # turn adjacent lls orange if torque is high
-      torque = self._torque_filter.x
-      high_torque = abs(torque) > 0.6
-      if high_torque and (left == (torque > 0)):
-        color = blend_colors(
-          color,
-          rl.Color(255, 115, 0, int(alpha * 255)),  # orange
-          np.interp(abs(torque), [0.6, 0.8], [0.0, 1.0])
-        )
-    else:
-      color = rl.Color(255, 255, 255, int(alpha * 255))
-
-    if ui_state.status == UIStatus.DISENGAGED:
-      color = rl.Color(0, 0, 0, int(alpha * 255))
-
-    return color
+  def _get_ll_color(self, prob, rgb):
+    alpha = float(np.clip(prob, 0.0, 0.7)) if np.isfinite(prob) else 0.0
+    return rl.Color(*rgb, int(alpha * 255))
 
   def _draw_lane_lines(self):
-    """Draw lane lines and road edges. Two closest lines should be green (lane line or road edges)."""
+    """Paint ego-lane CAN colors and red model road edges independently of torque."""
     offset = np.array([self._rect.x, self._rect.y], dtype=np.float32)
-
+    sm = ui_state.sm
+    cs = sm['carState']
+    # Compare recorded message times so pausing a replay preserves its colors.
+    color_valid = (sm.valid['carState'] and sm.recv_frame['carState'] >= ui_state.started_frame and
+                   sm.logMonoTime['carState'] > 0 and
+                   abs(sm.logMonoTime['carState']-sm.logMonoTime['modelV2']) <= 500_000_000)
+    left_lane, right_lane = cs.leftLaneLine, cs.rightLaneLine
     for i, lane_line in enumerate(self._lane_lines):
       if lane_line.projected_points.size == 0:
         continue
-
-      color = self._get_ll_color(float(self._lane_line_probs[i]), i in (1, 2), i in (0, 1))
+      rgb = lane_line_rgb(i, left_lane, right_lane, color_valid)
+      color = self._get_ll_color(float(self._lane_line_probs[i]), rgb)
       draw_polygon(self._rect, lane_line.projected_points + offset, color)
 
     for i, road_edge in enumerate(self._road_edges):
       if road_edge.projected_points.size == 0:
         continue
-
-      # if closest lane lines are not confident, make road edges green
-      color = self._get_ll_color(float(1.0 - self._road_edge_stds[i]), float(self._lane_line_probs[i + 1]) < 0.25, i == 0)
+      color = self._get_ll_color(float(1.0-self._road_edge_stds[i]), ROAD_EDGE_RGB)
       draw_polygon(self._rect, road_edge.projected_points + offset, color)
 
   def _draw_path(self, sm):
