@@ -914,7 +914,7 @@ class CarrotMan:
       dest = dict(coords[-1])
       dest["place_name"] = "External Navi"
       try:
-        self.params.put("NavDestination", json.dumps(dest))
+        self.params.put("NavDestination", dest)
       except Exception as e:
         print("NavDestination put error:", e)
 
