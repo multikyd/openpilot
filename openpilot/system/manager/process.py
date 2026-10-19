@@ -66,6 +66,7 @@ class ManagerProcess(ABC):
   enabled = True
   name = ""
   shutting_down = False
+  _reported_exit_proc: Process | None = None
 
   @abstractmethod
   def start(self) -> None:
@@ -117,6 +118,29 @@ class ManagerProcess(ABC):
 
     cloudlog.info(f"sending signal {sig} to {self.name}")
     os.kill(self.proc.pid, sig)
+
+  def report_unexpected_exit(self) -> None:
+    proc = self.proc
+    if proc is None or self.shutting_down or proc is self._reported_exit_proc:
+      return
+
+    exit_code = proc.exitcode
+    if exit_code is None:
+      return
+
+    self._reported_exit_proc = proc
+    signal_name = None
+    if exit_code < 0:
+      try:
+        signal_name = signal.Signals(-exit_code).name
+      except ValueError:
+        signal_name = f"UNKNOWN({-exit_code})"
+
+    # ERROR is printed to tmux even with the default LOGPRINT=warning and is
+    # forwarded through cloudlog to the persistent logs when logging is running.
+    cloudlog.event("managed_process_exited", error=True, process=self.name,
+                   pid=proc.pid, exit_code=exit_code, signal=signal_name,
+                   detected_at=time.time(), expected=False)
 
   def get_process_state_msg(self):
     state = log.ManagerState.ProcessState.new_message()
@@ -227,6 +251,7 @@ def ensure_running(procs: ValuesView[ManagerProcess], started: bool, params: Par
 
   running = []
   for p in procs:
+    p.report_unexpected_exit()
     if p.enabled and p.name not in not_run and p.should_run(started, params, CP):
       running.append(p)
     else:
