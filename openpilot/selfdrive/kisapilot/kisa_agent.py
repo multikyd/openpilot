@@ -294,7 +294,7 @@ def list_saved_bookmarks():
 def automatic_bookmark_status():
     from openpilot.selfdrive.kisapilot.bookmark_export import auto_bookmarks
     try:
-        onroad = bool(params.get("IsOnroad")) if params is not None else True
+        onroad = not params.get_bool("IsOffroad") if params is not None else True
         return jsonify(auto_bookmarks('/data/media/0/realdata', onroad))
     except FileNotFoundError as e:
         return jsonify({"error": str(e)}), 404
