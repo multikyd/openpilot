@@ -31,9 +31,9 @@ class SignalStopApproach:
     gap = distance-predicted
     world_target = distance+self.travel
     eligible = (.5 <= speed <= 15. and distance > buffer+3. and
-                .25 < gap <= 15. and self.extension_used < 3.)
+                .25 < gap <= 20. and distance > buffer+10. and self.extension_used < 12.)
     if eligible:
-      if self.outward_candidate is None or abs(world_target-self.outward_candidate) > .6:
+      if self.outward_candidate is None or abs(world_target-self.outward_candidate) > 1.5:
         self.outward_candidate = world_target
         self.outward_confirm = 0.
       else:
@@ -41,11 +41,11 @@ class SignalStopApproach:
     else:
       self.outward_candidate = None
       self.outward_confirm = 0.
-    # Keep the existing 0.25 m/s allowance. A stable correction may add
-    # <=1 m/s, <=3 m per approach, always below the current input.
+    # Follow only a sustained correction of a still-distant model target.
+    # Bound extension to 2 m/s and 12 m total; never extend a near stop.
     extension = 0.
     if eligible and self.outward_confirm >= .75:
-      extension = min(gap, dt, 3.-self.extension_used)
+      extension = min(gap, min(2., .25*speed)*dt, 12.-self.extension_used)
       self.extension_used += extension
     self.distance = min(distance, predicted+(.25*dt if speed >= .5 else 0.)+extension)
     self.confirm = min(1., self.confirm+dt)
@@ -58,8 +58,9 @@ class SignalStopApproach:
     remaining = max(1., self.distance-buffer)
     required = speed*speed/(2.*remaining)
     target = -min(comfort_brake, max(.15, required))
-    # Build braking at 0.6 m/s^3, and release at 0.35 m/s^3.
-    rate = .6 if target < self.ceiling else .35
+    # Build braking at 0.6 m/s^3. Unwind an over-strong cap smoothly
+    # when a persistent outward correction was confirmed.
+    rate = .6 if target < self.ceiling else .7 if extension > 0. else .35
     self.ceiling += max(-rate*dt, min(rate*dt, target-self.ceiling))
     self.accel_cap = self.ceiling if speed >= .3 else None
     return self.distance

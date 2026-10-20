@@ -1035,9 +1035,20 @@ class CarrotServ:
       self.bump_display = None
     nav_distance = self.xSpdDist if self.xSpdType == 22 and self.active_carrot > 1 else None
     passage_distance = nav_distance if nav_distance is not None else self.bump_display['distance'] if self.bump_display else None
+    pitch = None
+    control = sm['carControl']
+    if (CS is not None and sm.valid['carControl'] and sm.alive['carControl'] and
+        0 <= bump_now-sm.recv_time['carControl'] < .2 and control.longActive and
+        not (CS.gasPressed or CS.brakePressed) and
+        len(control.orientationNED) == 3 and len(control.angularVelocity) == 3):
+      pitch = (sm.logMonoTime['carControl']*1e-9, float(control.orientationNED[1]),
+               float(control.angularVelocity[1]), float(CS.aEgo))
     self.bump_passage.update(bump_now, v_ego_kph, passage_distance, self.bump_memory.position,
                              self.bump_memory.samples, self.bump_memory.sensor_last,
-                             enabled=CS is not None and sm.valid['carState'] and abs(CS.steeringAngleDeg) < 30.)
+                             enabled=CS is not None and sm.valid['carState'] and abs(CS.steeringAngleDeg) < 30.,
+                             pitch=pitch)
+    if self.bump_passage.release_event is not None:
+      cloudlog.event('bump_front_release', **self.bump_passage.release_event)
     nav_bump_passed = False
     if self.bump_memory.position is not None:
       stamp, lat, lon, heading = self.bump_memory.position

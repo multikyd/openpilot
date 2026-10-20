@@ -284,6 +284,7 @@ class BumpPassage:
     self.passed = None
     self.released = None
     self.event = None
+    self.release_event = None
 
   def _distance_at(self, stamp):
     for a, b in zip(self.motion, list(self.motion)[1:]):
@@ -302,8 +303,9 @@ class BumpPassage:
     north, east = relative(point[0], point[1], point[2], dict(lat=p['lat'], lon=p['lon']))
     return direction_matches(point[2], p['heading']) and math.hypot(north, east) < 6.
 
-  def update(self, now, speed, distance, position, samples, sensor_last, enabled=True):
+  def update(self, now, speed, distance, position, samples, sensor_last, enabled=True, pitch=None):
     self.event = None
+    self.release_event = None
     valid = (enabled and math.isfinite(now) and math.isfinite(speed) and 8. <= speed <= 40. and
              position is not None and 0 <= now-position[0] <= 1. and
              sensor_last is not None and 0 <= now-sensor_last < .2)
@@ -363,8 +365,34 @@ class BumpPassage:
     bursts = [b for b in c['bursts'] if b['count'] >= 3 and b['last']-b['first'] >= .02]
     # Lift only this known bump's cap at the first sustained pulse. Do not
     # synthesize a learning event until axle spacing and quiet checks pass.
-    if bursts and self.released is None:
+    # Pitch is from calibrated carControl orientation/rate (radians, rad/s).
+    # Require a rising nose plus contemporaneous vertical movement, not pitch
+    # alone: throttle squat, brake release and steady hills are not passages.
+    history = c.setdefault('pitch', [])
+    pitch_valid = (pitch is not None and len(pitch) == 4 and
+                   all(math.isfinite(v) for v in pitch) and 0 <= now-pitch[0] < .2)
+    if not pitch_valid:
+      history.clear()
+    elif not history or pitch[0] > history[-1][0]:
+      if history and pitch[0]-history[-1][0] > .15:
+        history.clear()
+      history.append(tuple(pitch))
+      history[:] = [p for p in history[-8:] if 0 <= now-p[0] <= .35]
+    vertical = [(t, a) for t, a in samples if 0 <= now-t <= .12 and a >= .45]
+    front_lift = (pitch_valid and len(history) >= 3 and
+                  .15 <= history[-1][0]-history[0][0] <= .35 and
+                  history[-1][1]-history[0][1] >= .0035 and
+                  min(p[2] for p in history[-2:]) >= .025 and
+                  max(abs(p[3]) for p in history) <= 1.2 and
+                  max(p[3] for p in history) <= .6 and
+                  max(p[3] for p in history)-min(p[3] for p in history) <= .5 and
+                  len(vertical) >= 2 and vertical[-1][0]-vertical[0][0] >= .01)
+    if (bursts or front_lift) and self.released is None:
       self.released = dict(lat=c['lat'], lon=c['lon'], heading=heading, time=now, odometer=self.odometer)
+      self.release_event = dict(reason='vertical_impact' if bursts else 'front_lift',
+                                speed=speed, remaining=distance,
+                                pitch_rise=history[-1][1]-history[0][1] if front_lift else 0.,
+                                vertical_peak=max((a for _, a in vertical), default=0.))
     timed = [(burst, self._distance_at(burst['peak_time'])) for burst in bursts]
     pair = None
     for front, a in timed:

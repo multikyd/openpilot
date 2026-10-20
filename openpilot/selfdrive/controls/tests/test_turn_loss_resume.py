@@ -117,5 +117,33 @@ class TestTurnLossResume(unittest.TestCase):
     self.assertIsNone(p.turn_loss_limit)
 
 
+class TestDepartingLead(unittest.TestCase):
+  def test_departing_lead_in_same_path_releases_during_opening(self):
+    p=arm()
+    values=[tick(p,l=lead(dRel=24.,vLead=10.),angle=-75.,curve=.035) for _ in range(16)]
+    self.assertEqual(p.turn_loss_remaining,0.)
+    self.assertGreater(values[-1],.1)
+  def test_adjacent_or_low_confidence_lead_cannot_release(self):
+    for kwargs in ({'dPath':2.},{'modelProb':.7}):
+      p=arm()
+      for _ in range(16):tick(p,l=lead(dRel=24.,vLead=10.,**kwargs),angle=-75.,curve=.035)
+      self.assertGreater(p.turn_loss_remaining,0.)
+  def test_distant_flickering_vision_lead_allows_only_small_cap(self):
+    p=arm()
+    values=[tick(p,l=lead(radar=False,radarTrackId=-1,modelProb=.55,dRel=24.,vLead=9.,dPath=.5),angle=-75.,curve=.035) for _ in range(18)]
+    self.assertGreater(values[-1],0.)
+    self.assertLessEqual(values[-1],.3)
+    self.assertGreater(p.turn_loss_remaining,0.)
+  def test_close_or_closing_vision_lead_keeps_hold(self):
+    for distance,speed in ((12.,9.),(24.,3.)):
+      p=arm()
+      for _ in range(18):value=tick(p,l=lead(radar=False,radarTrackId=-1,dRel=distance,vLead=speed),angle=-75.,curve=.035)
+      self.assertEqual(value,0.)
+  def test_departing_lead_cannot_override_resume_gate(self):
+    p=arm()
+    for _ in range(16):tick(p,l=lead(dRel=24.,vLead=10.),angle=-75.,curve=.035,allow=False)
+    self.assertGreater(p.turn_loss_remaining,0.)
+
+
 if __name__ == '__main__':
   unittest.main()

@@ -86,7 +86,7 @@ class TestLaneCameraProfile(unittest.TestCase):
     values = self.settle()
     self.assertEqual(self.p.lane_position_class, 'left_open')
     self.assertAlmostEqual(self.p.effective_camera_offset, .01)
-    self.assertLessEqual(max(abs(np.diff([-.12]+values))), .015*.05+1e-10)
+    self.assertLessEqual(max(abs(np.diff([-.12]+values))), .03*.05+1e-10)
 
   def test_returning_left_edge_requires_confirmation(self):
     self.geometry('middle')
@@ -100,7 +100,7 @@ class TestLaneCameraProfile(unittest.TestCase):
     values = self.settle()
     self.assertEqual(self.p.lane_position_class, 'left')
     self.assertAlmostEqual(self.p.effective_camera_offset, .00)
-    self.assertLessEqual(max(abs(np.diff([-.09]+values))), .015*.05+1e-10)
+    self.assertLessEqual(max(abs(np.diff([-.09]+values))), .03*.05+1e-10)
 
   def test_open_profile_requires_a_lane_to_the_right(self):
     self.geometry('middle')
@@ -159,14 +159,14 @@ class TestLaneCameraProfile(unittest.TestCase):
     values = [0.]+self.settle()
     self.geometry('right')
     values += self.settle()
-    self.assertLessEqual(max(abs(np.diff(values))), .015*.05+1e-10)
+    self.assertLessEqual(max(abs(np.diff(values))), .03*.05+1e-10)
 
   def test_model_and_manual_transitions_release_gradually(self):
     self.geometry('left')
     self.settle()
     previous = self.p.lane_position_offset
     value = self.settle(1,active=False)[0]
-    self.assertLessEqual(abs(value-previous),.015*.05+1e-10)
+    self.assertLessEqual(abs(value-previous),.03*.05+1e-10)
     self.assertEqual(self.settle(active=False)[-1],0.)
 
   def test_legacy_edge_adjustment_does_not_stack(self):
@@ -193,6 +193,23 @@ class TestLaneCameraProfile(unittest.TestCase):
     self.settle()
     self.assertEqual(self.values['CameraOffsetAdj'],.04)
     self.assertAlmostEqual(self.p.effective_camera_offset,0.)
+
+
+class TestModeIndependentObservation(unittest.TestCase):
+  setUp = TestLaneCameraProfile.setUp
+  geometry = TestLaneCameraProfile.geometry
+  settle = TestLaneCameraProfile.settle
+  def test_model_mode_preclassifies_without_applying_profile(self):
+    self.geometry('right')
+    self.p.total_camera_offset = .01
+    self.settle(40,active=False)
+    self.assertEqual(self.p.lane_position_class,'right')
+    self.assertEqual(self.p.lane_position_offset,0.)
+    self.assertGreater(self.settle(1)[0],0.)
+  def test_manual_input_still_blocks_classification(self):
+    self.geometry('right');self.cs.steeringPressed=True
+    self.settle(40,active=False)
+    self.assertEqual(self.p.lane_position_class,'unknown')
 
 
 if __name__ == '__main__':

@@ -494,14 +494,28 @@ class LongitudinalMpc:
         self.turn_peak_curvature = max(self.turn_peak_curvature, self.turn_exit_curvature)
     if self.turn_loss_limit is None:
       return normal_max
+    # A departing lead can already be beyond the close-lead arming range.
+    # Reacquire it only in a narrow path corridor while this turn is opening.
+    departing = [lead for lead in (lead_one, lead_two) if
+                 allow_resume and lead.present and lead.radar and lead.radarTrackId >= 0 and lead.modelProb >= .85 and
+                 np.all(np.isfinite((lead.dRel, lead.vLead, lead.dPath))) and
+                 15. < lead.dRel < min(50., max(35., 8.*v_ego)) and
+                 lead.vLead-v_ego > 1. and abs(lead.dPath) < 1. and preview_valid and
+                 self.turn_exit_side == int(np.sign(steering_angle)) and steering_angle*future_curvature <= 0. and
+                 abs(future_curvature)*v_ego**2 <= 1.6 and
+                 self.turn_peak_angle >= 60. and abs(steering_angle) < .85*self.turn_peak_angle and
+                 self.turn_exit_curvature < .85*self.turn_peak_curvature]
     recovered = next((lead for lead in reliable if lead.modelProb >= .75 and abs(lead.dPath) < 2.0), None)
+    departing_recovery = recovered is None and bool(departing)
+    if departing_recovery:
+      recovered = departing[0]
     if recovered is not None:
       self.turn_loss_reacquire = self.turn_loss_reacquire+self.dt if recovered.radarTrackId == self.turn_reacquire_id else self.dt
       self.turn_reacquire_id = recovered.radarTrackId
     else:
       self.turn_loss_reacquire = 0.0
       self.turn_reacquire_id = None
-    if self.turn_loss_reacquire >= .6:
+    if self.turn_loss_reacquire >= (.35 if departing_recovery else .6):
       # A new front-radar ID can replace the corner track after stable confirmation.
       self.turn_lead_id = recovered.radarTrackId
       self.turn_lead_confirm = 1.0
@@ -531,10 +545,16 @@ class LongitudinalMpc:
       # Keep the initial blind hold, then permit only a small positive ceiling.
       same_turn = (self.turn_exit_side == int(np.sign(steering_angle)) and
                    preview_valid and steering_angle*future_curvature <= 0.)
+      # A distant, receding track may flicker between radar and vision. It
+      # can allow the small opening cap, but cannot clear the blind hold.
+      clear_for_creep = all(not lead.present or (
+        np.all(np.isfinite((lead.dRel, lead.vLead, lead.dPath))) and
+        lead.dRel > max(18., 3.*v_ego) and lead.vLead-v_ego > 1. and abs(lead.dPath) < 2.)
+        for lead in (lead_one, lead_two))
       opening = (allow_resume and same_turn and self.turn_loss_elapsed >= .9 and
-                 not lead_one.present and not lead_two.present and
+                 clear_for_creep and
                  self.turn_peak_angle >= 60. and self.turn_peak_curvature >= .005 and
-                 abs(steering_angle) <= .8*self.turn_peak_angle and
+                 abs(steering_angle) <= .85*self.turn_peak_angle and
                  self.turn_peak_angle-abs(steering_angle) >= 15. and
                  self.turn_exit_curvature <= .8*self.turn_peak_curvature and
                  abs(future_curvature)*v_ego**2 <= 1.6 and

@@ -945,13 +945,18 @@ class CarrotMan:
       {"ts": now, "navigation": navigation, "gps": gps}))
 
   def _put_directional_signal(self, data):
-    from openpilot.selfdrive.carrot.signal_follow import directional_signal
+    from openpilot.selfdrive.carrot.signal_follow import directional_signal, usable_signal
     now = time.monotonic()
     navigation, physical_gps = self._signal_context(now)
-    self._directional_signal = directional_signal(data, now, navigation, physical_gps)
+    candidate = directional_signal(data, now, navigation, physical_gps)
+    if not usable_signal(candidate):
+      cloudlog.event("tmap_signal_rejected", raw=data, reason="invalid_or_unavailable")
+      return False
+    self._directional_signal = candidate
     cloudlog.event("tmap_signal_rx", raw=data, normalized=self._directional_signal)
     self._refresh_signal_context()
     self.params_memory.put("TrafficLight", json.dumps({"directional": self._directional_signal}))
+    return True
 
   def _put_traffic_light(self, lamp: str, remain: Any, distance: Any = 0, lat: Any = None, lon: Any = None):
     try:
@@ -1016,7 +1021,9 @@ class CarrotMan:
     if lamp is None:
       return
 
-    from openpilot.selfdrive.carrot.signal_follow import normalized_position, signal_from_sinf
+    from openpilot.selfdrive.carrot.signal_follow import normalized_position, signal_from_sinf, directional_signal, usable_signal
+    if not usable_signal(directional_signal(signal_from_sinf(d), time.monotonic(), {}, {})):
+      return
     # Prefer a recent direction-specific ssinf, but support legacy sinf-only feeds.
     if time.monotonic() - getattr(self, "_ssinf_time", -100.0) > 1.5:
       self._put_directional_signal(signal_from_sinf(d))
@@ -1040,9 +1047,10 @@ class CarrotMan:
 
     from openpilot.selfdrive.carrot.signal_follow import normalized_position
     d = dict(d)
+    # A malformed ssinf must not suppress a valid sinf fallback.
+    if not self._put_directional_signal(d):
+      return
     self._ssinf_time = time.monotonic()
-    # Preserve all directions before legacy display logic chooses one color.
-    self._put_directional_signal(d)
     d['lat'], d['lon'] = normalized_position(d.get('lat'), d.get('lon'))
 
     green_checks = (

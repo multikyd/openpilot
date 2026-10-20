@@ -235,14 +235,15 @@ class LanePlanner:
     values = (self.lane_width_left, self.lane_width_right, self.l_prob, self.r_prob,
               self.total_camera_offset, self.d_prob)
     valid = geometry is not None and np.all(np.isfinite((*geometry, *values)))
-    enabled = (self.lane_position_ready and laneline_active and self.lane_change_multiplier > .5 and
+    observing = (self.lane_position_ready and self.lane_change_multiplier > .5 and
                not CS.leftBlinker and not CS.rightBlinker and not getattr(CS, 'steeringPressed', False))
+    enabled = observing and laneline_active
     candidate = 'unknown'
     if valid:
       outer_left, outer_right, std_left, std_right, edge_left, edge_right, lane_left, lane_right = geometry
       width = lane_right-lane_left
       valid = 2.6 < width < 4.2 and min(self.l_prob, self.r_prob) >= .75
-    if enabled and valid:
+    if observing and valid:
       left_close = 0. <= std_left < .6 and -.1 <= lane_left-edge_left <= 1.8
       right_close = 0. <= std_right < .6 and -.1 <= edge_right-lane_right <= 1.8
       left_neighbor = self.lane_width_left > 2.2 and outer_left > .3 and not left_close
@@ -288,9 +289,11 @@ class LanePlanner:
       # by d_prob), and twice through legacy calibration. Compensate exactly
       # once, including the old edge offset, rather than stacking preferences.
       target = (self.lane_position_camera_target-self.total_camera_offset)*(2.+self.d_prob)
-    # At <=1.5 cm/s of path shift, noisy class changes cannot jump the path.
+    # Observe through model mode; apply only in lane mode, with a bounded
+    # 3 cm/s profile shift (old-profile fade-out remains 1.5 cm/s).
     # The previous offset also fades out through lane/model/manual transitions.
-    self.lane_position_offset += float(np.clip(target-self.lane_position_offset, -.015*DT_MDL, .015*DT_MDL))
+    rate = .03 if enabled and valid and self.lane_position_class != 'unknown' else .015
+    self.lane_position_offset += float(np.clip(target-self.lane_position_offset, -rate*DT_MDL, rate*DT_MDL))
     self.effective_camera_offset = self.total_camera_offset+self.lane_position_offset/(2.+max(0., self.d_prob))
     return self.lane_position_offset
 

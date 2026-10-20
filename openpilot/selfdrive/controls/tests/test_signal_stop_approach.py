@@ -81,9 +81,9 @@ class TestStopCorrection(unittest.TestCase):
   for i in range(50):self.update(g,65-4*(i+1)*.05)
   self.assertEqual(g.extension_used,0.)
  def test_total_extension_is_bounded(self):
-  g=SignalStopApproach();self.update(g,40)
-  for i in range(150):self.update(g,44-4*(i+1)*.05)
-  self.assertGreater(g.extension_used,2.5);self.assertLessEqual(g.extension_used,3.)
+  g=SignalStopApproach();self.update(g,100)
+  for i in range(450):self.update(g,116-4*(i+1)*.05)
+  self.assertGreater(g.extension_used,10.);self.assertLessEqual(g.extension_used,12.)
  def test_nearer_target_remains_immediate(self):
   g=SignalStopApproach();self.update(g,40);self.assertEqual(self.update(g,12),12)
  def test_standstill_does_not_move_target(self):

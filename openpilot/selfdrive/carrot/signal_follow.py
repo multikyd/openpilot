@@ -46,6 +46,21 @@ def directional_signal(data, now, navigation, gps):
           'navigation': navigation, 'gps': gps}
 
 
+def usable_signal(signal):
+  """Reject corrupt/empty feeds without refreshing the last valid timestamp."""
+  if not isinstance(signal, dict):
+    return False
+  try:
+    distance = float(signal.get('distance'))
+    lat, lon = normalized_position(signal.get('lat'), signal.get('lon'))
+    return (math.isfinite(distance) and 0 <= distance <= 5000 and lat is not None and
+            _position(lat, lon) and any(
+              m.get('state') in ('RED_LIGHT_ON', 'GREEN_LIGHT_ON', 'YELLOW_LIGHT_ON')
+              for m in signal.get('movements', {}).values()))
+  except (ValueError, TypeError, OverflowError, AttributeError):
+    return False
+
+
 def _position(lat, lon):
   return math.isfinite(lat) and math.isfinite(lon) and -90 < lat < 90 and -180 < lon < 180 and abs(lat) > 1 and abs(lon) > 1
 
