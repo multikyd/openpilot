@@ -7,7 +7,7 @@ import time
 from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.carrot.signal_follow import SignalFollowAssist
 from openpilot.selfdrive.carrot.manual_stop_line import ManualStopLineCorrection
-from openpilot.selfdrive.controls.lib.signal_stop_approach import SignalStopApproach
+from openpilot.selfdrive.controls.lib.signal_stop_approach import SignalStopApproach, SignalStopOverride
 
 from openpilot.cereal import log
 from openpilot.common.params import Params
@@ -185,6 +185,9 @@ class CarrotPlanner:
     self._signal_memory = Params("/dev/shm/params")
     self._manual_stop_correction = ManualStopLineCorrection()
     self.signal_stop_approach = SignalStopApproach()
+    self.signal_stop_override = SignalStopOverride()
+    self._stop_trace_time = -1.
+    self._stop_recheck_pending = False
     self._manual_stop_target = {}
     self._manual_stop_read_time = -1.
     self._manual_stop_reported = False
@@ -614,6 +617,20 @@ class CarrotPlanner:
       # Steering filters new stop detections, but must not cancel a stop in progress.
       self.trafficState = TrafficState.off
 
+    recheck_stop = self.signal_stop_override.update(
+      carstate.gasPressed, self.xState in [XState.e2eStop, XState.e2eStopped],
+      v_ego, signal_stopping_enabled and mode == 'acc', lead_detected,
+      self.trafficState == TrafficState.green, DT_MDL)
+    if recheck_stop and np.isfinite(stop_model_x_rl) and 0. <= stop_model_x_rl < 100.:
+      # A brief pedal correction does not discard the preceding red-stop intent.
+      # Rebuild from the current model, rather than the pre-pedal frozen target.
+      self.xState = XState.e2eStop
+      self.actual_stop_distance = stop_model_x_rl
+      self.traffic_starting_count = 0
+      self._stop_recheck_pending = True
+      cloudlog.event('signal_stop_recheck', speed=float(v_ego), model_distance=float(x[31]),
+                     filtered_distance=float(stop_model_x_rl))
+
     #self.update_user_control()
     if carstate.gasPressed or carstate.brakePressed:
       self.user_stop_distance = -1
@@ -720,6 +737,14 @@ class CarrotPlanner:
                         not lead_detected and sm['carControl'].longActive and sm['selfdriveState'].enabled and
                         not (carstate.gasPressed or carstate.brakePressed) and
                         sm.all_checks(service_list=['carState', 'modelV2', 'radarState', 'carControl', 'selfdriveState']))
+    if not stopping_active:
+      self._stop_recheck_pending = False
+    if self._stop_recheck_pending and approach_enabled:
+      # Do not carry pedal-induced positive acceleration into automatic stopping.
+      self.signal_stop_approach.ceiling = min(0., self.signal_stop_approach.ceiling or 0.)
+      self.signal_stop_approach.confirm = max(.2, self.signal_stop_approach.confirm)
+      self._stop_recheck_pending = False
+    approach_input = stop_dist
     stop_dist = self.signal_stop_approach.update(
       stop_dist, v_ego, a_ego, self.comfort_brake,
       max(0., self.stop_distance-self.trafficStopDistanceAdjust+1.), approach_enabled, DT_MDL)
@@ -746,6 +771,16 @@ class CarrotPlanner:
       stop_dist_soft = max(stop_dist - 1.0, 0.0)
       v_soft = float(np.sqrt(max(0.0, 2.0 * self.comfort_brake * stop_dist_soft)))
       v_cruise = min(v_cruise, v_soft)
+
+    trace_now = time.monotonic()
+    if stopping_active and trace_now-self._stop_trace_time >= 1.:
+      self._stop_trace_time = trace_now
+      cloudlog.event('signal_stop_trace', speed=float(v_ego), state=self.xState.name,
+                     model_distance=float(x[31]), filtered_distance=float(stop_model_x_raw),
+                     bounded_distance=float(stop_model_x_rl), approach_input=float(approach_input),
+                     final_distance=float(stop_dist), extension=float(self.signal_stop_approach.extension_used),
+                     clearance=float(self.stop_distance), traffic_adjust=float(self.trafficStopDistanceAdjust),
+                     gas=bool(carstate.gasPressed), brake=bool(carstate.brakePressed))
 
     self.v_cruise = v_cruise
     self.stop_dist = stop_dist

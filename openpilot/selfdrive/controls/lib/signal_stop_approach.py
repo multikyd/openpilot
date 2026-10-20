@@ -11,6 +11,10 @@ class SignalStopApproach:
     self.confirm = 0.
     self.ceiling = None
     self.accel_cap = None
+    self.travel = 0.
+    self.outward_candidate = None
+    self.outward_confirm = 0.
+    self.extension_used = 0.
 
   def update(self, distance, speed, acceleration, comfort_brake, buffer, enabled, dt):
     values = (distance, speed, acceleration, comfort_brake, buffer, dt)
@@ -20,10 +24,30 @@ class SignalStopApproach:
       self.reset()
       return distance
 
-    # Keep a world-fixed target, allowing only 0.25 m/s of outward correction.
-    # A nearer target is still accepted; pedal/lead/green transitions reset us.
+    # Compare targets in a travelled-distance frame: a stationary road target
+    # should stay constant here even while the vehicle approaches it.
+    self.travel += speed*dt
     predicted = max(0., self.distance-speed*dt) if self.distance is not None else distance
-    self.distance = min(distance, predicted+.25*dt)
+    gap = distance-predicted
+    world_target = distance+self.travel
+    eligible = (.5 <= speed <= 15. and distance > buffer+3. and
+                .25 < gap <= 15. and self.extension_used < 3.)
+    if eligible:
+      if self.outward_candidate is None or abs(world_target-self.outward_candidate) > .6:
+        self.outward_candidate = world_target
+        self.outward_confirm = 0.
+      else:
+        self.outward_confirm += dt
+    else:
+      self.outward_candidate = None
+      self.outward_confirm = 0.
+    # Keep the existing 0.25 m/s allowance. A stable correction may add
+    # <=1 m/s, <=3 m per approach, always below the current input.
+    extension = 0.
+    if eligible and self.outward_confirm >= .75:
+      extension = min(gap, dt, 3.-self.extension_used)
+      self.extension_used += extension
+    self.distance = min(distance, predicted+(.25*dt if speed >= .5 else 0.)+extension)
     self.confirm = min(1., self.confirm+dt)
     if self.ceiling is None:
       self.ceiling = acceleration
@@ -39,3 +63,34 @@ class SignalStopApproach:
     self.ceiling += max(-rate*dt, min(rate*dt, target-self.ceiling))
     self.accel_cap = self.ceiling if speed >= .3 else None
     return self.distance
+
+
+class SignalStopOverride:
+  """Recheck a previous signal stop after a short, low-speed pedal correction."""
+
+  def __init__(self):
+    self.reset()
+
+  def reset(self):
+    self.active = False
+    self.duration = 0.
+    self.travel = 0.
+    self.eligible = False
+
+  def update(self, gas, stopping, speed, enabled, lead, green, dt):
+    if (not enabled or lead or green or not math.isfinite(speed) or
+        not 0. <= speed <= 40. or not .01 <= dt <= .1):
+      self.reset()
+      return False
+    if gas:
+      if not self.active and stopping:
+        self.active = True
+        self.eligible = speed <= 5.
+      if self.active:
+        self.duration += dt
+        self.travel += speed*dt
+        self.eligible = self.eligible and self.duration <= 2. and self.travel <= 8. and speed <= 5.
+      return False
+    recheck = self.active and self.eligible
+    self.reset()
+    return recheck
