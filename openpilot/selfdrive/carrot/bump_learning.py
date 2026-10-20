@@ -275,13 +275,14 @@ class BumpMemory:
 
 
 class BumpPassage:
-  """Conservative local passage evidence, independent of speed/impact learning."""
+  """Release on the first sustained impact; keep full passage evidence for learning."""
   def __init__(self):
     self.last_time = None
     self.odometer = 0.0
     self.motion = deque(maxlen=120)
     self.candidate = None
     self.passed = None
+    self.released = None
     self.event = None
 
   def _distance_at(self, stamp):
@@ -291,11 +292,13 @@ class BumpPassage:
     return None
 
   def matches(self, now, point):
-    if self.passed is None or point is None or not 0 <= now-self.passed['time'] <= 8.:
+    return self._matches(now, point, self.released) or self._matches(now, point, self.passed)
+
+  def _matches(self, now, point, p):
+    if p is None or point is None or not 0 <= now-p['time'] <= 8.:
       return False
-    if self.odometer-self.passed['odometer'] > 30.:
+    if self.odometer-p['odometer'] > 30.:
       return False
-    p = self.passed
     north, east = relative(point[0], point[1], point[2], dict(lat=p['lat'], lon=p['lon']))
     return direction_matches(point[2], p['heading']) and math.hypot(north, east) < 6.
 
@@ -307,7 +310,7 @@ class BumpPassage:
     dt = now-self.last_time if self.last_time is not None else .1
     self.last_time = now
     if not valid or not 0 < dt <= .25:
-      self.candidate = self.passed = None
+      self.candidate = self.passed = self.released = None
       self.motion.clear()
       return False
     self.odometer += speed/3.6*dt
@@ -324,14 +327,16 @@ class BumpPassage:
       # A jump forward can be the next closely spaced bump, not old map jitter.
       jump = distance-c['distance']+speed/3.6*dt > 4.
       if jump or math.hypot(along, cross) > 6. or not direction_matches(heading, c['heading']):
-        self.candidate = self.passed = None
+        self.candidate = self.passed = self.released = None
         c = None
       else:
         c['distance'] = distance
-    if self.matches(now, point):
+    if self._matches(now, point, self.passed):
       return True
     if self.passed is not None:
       self.passed = None
+    if self.released is not None and not self._matches(now, point, self.released):
+      self.released = None
     if not 0 < distance <= 12.:
       self.candidate = None
       return False
@@ -356,6 +361,10 @@ class BumpPassage:
         if amplitude > burst['peak']:
           burst['peak'], burst['peak_time'] = amplitude, stamp
     bursts = [b for b in c['bursts'] if b['count'] >= 3 and b['last']-b['first'] >= .02]
+    # Lift only this known bump's cap at the first sustained pulse. Do not
+    # synthesize a learning event until axle spacing and quiet checks pass.
+    if bursts and self.released is None:
+      self.released = dict(lat=c['lat'], lon=c['lon'], heading=heading, time=now, odometer=self.odometer)
     timed = [(burst, self._distance_at(burst['peak_time'])) for burst in bursts]
     pair = None
     for front, a in timed:
@@ -363,11 +372,11 @@ class BumpPassage:
         if a is not None and b is not None and .15 < rear['peak_time']-front['peak_time'] < 2. and 2.4 <= b-a <= 3.8:
           pair = front, rear, a, b
     if pair is None:
-      return False
+      return self.matches(now, point)
     front, rear, front_d, rear_d = pair
     quiet = max(.45, 3.0/(speed/3.6)+.15)
     if now-c['last_activity'] < quiet or self.odometer-front_d < 3.8:
-      return False
+      return self.matches(now, point)
     impact_time = (front['peak_time']+rear['peak_time'])/2.
     observed_d = (front_d+rear_d)/2.
     observed_lat, observed_lon = offset(lat, lon, heading, observed_d-self.odometer)
