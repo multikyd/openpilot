@@ -136,6 +136,13 @@ class ManagerProcess(ABC):
       except ValueError:
         signal_name = f"UNKNOWN({-exit_code})"
 
+    # The surviving manager records evidence even when the child cannot handle a signal.
+    try:
+      from openpilot.selfdrive.carrot.auto_crash_capture import capture_service
+      capture_service().record(self.name, proc.pid, exit_code, signal_name)
+    except Exception:
+      cloudlog.exception("automatic_crash_capture_enqueue_failed")
+
     # ERROR is printed to tmux even with the default LOGPRINT=warning and is
     # forwarded through cloudlog to the persistent logs when logging is running.
     cloudlog.event("managed_process_exited", error=True, process=self.name,

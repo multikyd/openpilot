@@ -183,6 +183,8 @@ def manager_thread() -> None:
     started_prev = started
     ignition_prev = ignition
 
+    from openpilot.selfdrive.carrot.auto_crash_capture import capture_service
+    capture_service().set_onroad(started or not sm.all_checks(['deviceState']))
     ensure_running(managed_processes.values(), started, params=params, CP=sm['carParams'], not_run=ignore)
 
     running = ' '.join("{}{}\u001b[0m".format("\u001b[32m" if p.proc.is_alive() else "\u001b[31m", p.name)
@@ -238,6 +240,8 @@ def main() -> None:
     traceback.print_exc()
     cloudlog.exception("crash")
   finally:
+    from openpilot.selfdrive.carrot.auto_crash_capture import capture_service
+    capture_service().close()
     manager_cleanup()
 
   params = Params()
