@@ -38,6 +38,10 @@ def movement(nav, distance, lat=None, lon=None):
       return 'other' if matched == 'uturn' else matched
   turn = int(number(nav.get('turn'), -1))
   turn_distance=number(nav.get('turn_distance'), -1)
+  # A later route instruction does not select the movement at this signal.
+  # Keep matched lane-point attribution above authoritative, including ambiguity.
+  if turn_distance > distance + 40:
+    return 'straight'
   if 0 <= turn_distance and abs(turn_distance-distance)<=40:
     if turn in (12, 16, 1000): return 'left'
     if turn in (13, 19, 1001): return 'right'

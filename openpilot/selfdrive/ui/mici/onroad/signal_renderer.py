@@ -2,6 +2,7 @@
 import math
 import pyray as rl
 from openpilot.system.ui.lib.text_measure import measure_text_cached
+from openpilot.selfdrive.ui.mici.onroad.signal_presentation import signal_lamps, countdown_rows
 
 
 def draw_signal_panel(rect, font, display):
@@ -26,27 +27,28 @@ def draw_signal_panel(rect, font, display):
 
   source=display.source
   live=source in ('TMAP','VISION')
-  right_state=getattr(display,'rightState',0)
   arrow_right=display.movement=='right'
-  lamps=(live and (display.straightState==1 or display.leftState==1 or (arrow_right and right_state==1)),
-         live and (right_state==2 if arrow_right else display.leftState==2), live and display.straightState==2)
-  for i,active in enumerate(lamps):
+  def state_color(state):
+    return red if state==1 else green if state==2 else amber if state==3 else rl.WHITE
+
+  lamps=signal_lamps(display)
+  for i,state in enumerate(lamps):
     cx,cy=x+21+i*36,y+height/2
-    background=(red if i==0 else green) if active and i!=1 else rl.Color(28,33,41,255)
+    background=state_color(state) if state and i!=1 else rl.Color(28,33,41,255)
     rl.draw_circle(int(cx),int(cy),16,background)
     if i==1:
-      # A green arrow on a dark circle, matching the road signal examples.
-      ink=green if active else rl.Color(65,74,85,255)
+      # A turn stop state leaves the arrow dark, matching the physical signal.
+      ink=state_color(state) if state else rl.Color(65,74,85,255)
       for a,b in (((9,0),(-9,0)),((-9,0),(-1,-8)),((-9,0),(-1,8))):
         flip=-1 if arrow_right else 1
         rl.draw_line_ex(rl.Vector2(cx+flip*a[0],cy+a[1]),rl.Vector2(cx+flip*b[0],cy+b[1]),4,ink)
 
   direction={'straight':'STRAIGHT','left':'LEFT','right':'RIGHT','observed':'OBS','other':'DIR ?'}.get(display.movement,'DIR ?')
   mode=display.operatingMode
-  state=display.leftState if display.movement=='left' else right_state if arrow_right else display.straightState if display.movement in ('straight','observed') else 0
-  color=(red if state==1 else green if state==2 else amber if state==3 else rl.WHITE) if live else amber
-  remain=display.leftRemain if display.movement=='left' else getattr(display,'rightRemain',0) if arrow_right else display.straightRemain if display.movement in ('straight','observed') else 0
-  value=str(math.ceil(remain)) if remain>0 else '--'
+  rows=countdown_rows(display)
+  state=rows[0][1]
+  color=state_color(state) if live else amber
+  value=rows[0][2]
   location=getattr(display,'locationKind','')
   distance='NO RANGE' if location=='unknown' else f'{"QUEUE" if location=="queue" else "PT"} ~{display.distance:.0f}m' if location in ('stop','queue') else f'~{display.distance:.0f}m' if location=='candidate' else f'{display.distance:.0f}m'
   detail=f'{source} / {direction} / {distance}'
@@ -60,5 +62,11 @@ def draw_signal_panel(rect, font, display):
     detail+=f' / {display.samples} OBS'
   elif source=='MODEL':
     detail=f'MODEL {"WAIT" if mode=="MODEL_STOP" else "MOVE"} / {direction} / {distance}'
-  text(value,x+113,y+5,width-121,64,color,max_height=height-10)
+  if live and mode not in ('OFF','FLASH') and rows[0][0]:
+    row_height=(height-10)/len(rows)
+    for i,(label,state,value) in enumerate(rows):
+      text(f'{label} {value}',x+113,y+5+i*row_height,width-121,
+           min(48,row_height),state_color(state),max_height=row_height)
+  else:
+    text(value,x+113,y+5,width-121,64,color,max_height=height-10)
   text(detail,x,y+height+4,width,13,amber if source=='EST' else rl.WHITE)
