@@ -279,11 +279,25 @@ def file_copy():
         return jsonify({"error": str(e)}), 500
 
 # Bookmark exports preserve original segment paths for replay analysis.
+def bookmark_recording_context():
+    from openpilot.selfdrive.kisapilot.bookmark_export import recording_routes
+    # An unavailable recording state must retain the normal lock protection.
+    if params is None:
+        return True, None
+    onroad = not params.get_bool("IsOffroad")
+    route = params.get("CurrentRoute") or b''
+    if isinstance(route, bytes):
+        route = route.decode('utf-8', errors='replace')
+    return onroad, recording_routes('/data/media/0/realdata', onroad, route)
+
+
+
 @app.route('/bookmarks', methods=['GET'])
 def list_saved_bookmarks():
     from openpilot.selfdrive.kisapilot.bookmark_export import list_bookmarks
     try:
-        return jsonify(list_bookmarks('/data/media/0/realdata'))
+        _, recording = bookmark_recording_context()
+        return jsonify(list_bookmarks('/data/media/0/realdata', recording=recording))
     except FileNotFoundError as e:
         return jsonify({"error": str(e)}), 404
     except Exception as e:
@@ -294,8 +308,8 @@ def list_saved_bookmarks():
 def automatic_bookmark_status():
     from openpilot.selfdrive.kisapilot.bookmark_export import auto_bookmarks
     try:
-        onroad = not params.get_bool("IsOffroad") if params is not None else True
-        return jsonify(auto_bookmarks('/data/media/0/realdata', onroad))
+        onroad, recording = bookmark_recording_context()
+        return jsonify(auto_bookmarks('/data/media/0/realdata', onroad, recording=recording))
     except FileNotFoundError as e:
         return jsonify({"error": str(e)}), 404
     except Exception as e:
@@ -324,7 +338,8 @@ def prepare_bookmark_export():
     if not isinstance(data, dict):
         return jsonify({"error": "JSON 요청이 필요합니다."}), 400
     try:
-        return jsonify(export_bookmarks('/data/media/0/realdata', data.get('ids'), data.get('adjacent', 1)))
+        _, recording = bookmark_recording_context()
+        return jsonify(export_bookmarks('/data/media/0/realdata', data.get('ids'), data.get('adjacent', 1), recording=recording))
     except (ValueError, FileNotFoundError) as e:
         return jsonify({"error": str(e)}), 409
     except Exception as e:
