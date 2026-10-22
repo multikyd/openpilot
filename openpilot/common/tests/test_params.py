@@ -144,3 +144,67 @@ class TestParams(OpenpilotTestCase):
     now = datetime.datetime.now(datetime.UTC)
     self.params.put("InstallDate", now, block=True)
     assert self.params.get("InstallDate") == now
+
+
+  def test_shared_nonblocking_writers_keep_every_final_value(self):
+    keys = ['DongleId', 'GitBranch', 'GitCommit', 'GitRemote', 'GitDiff', 'Version']
+    start = threading.Barrier(len(keys))
+    errors = []
+    def writer(key):
+      try:
+        start.wait(timeout=5)
+        for i in range(30):
+          self.params.put(key, f'{key}-{i}')
+      except Exception as error:
+        errors.append(error)
+    threads = [threading.Thread(target=writer, args=(key,)) for key in keys]
+    for thread in threads: thread.start()
+    for thread in threads:
+      thread.join(timeout=10)
+      assert not thread.is_alive()
+    assert not errors
+    deadline = time.monotonic()+10
+    while time.monotonic() < deadline:
+      if all(self.params.get(key) == f'{key}-29' for key in keys):
+        break
+      time.sleep(.01)
+    assert all(self.params.get(key) == f'{key}-29' for key in keys)
+
+  def test_idle_worker_restarts_without_losing_a_write(self):
+    for i in range(30):
+      expected = f'idle-{i}'
+      self.params.put('GitBranch', expected)
+      deadline = time.monotonic()+2
+      while self.params.get('GitBranch') != expected and time.monotonic() < deadline:
+        time.sleep(.001)
+      assert self.params.get('GitBranch') == expected
+      time.sleep(.001)
+
+
+  def test_native_async_writers_bypass_python_lock(self):
+    # Exercise the native worker lifecycle, not just the Python per-instance lock.
+    from openpilot.common.params import params_put
+    keys = ['DongleId', 'GitBranch', 'GitCommit', 'GitRemote']
+    start = threading.Barrier(len(keys))
+    errors = []
+    def writer(key):
+      try:
+        encoded = self.params.check_key(key)
+        start.wait(timeout=5)
+        for i in range(40):
+          value = f'native-{i}'.encode()
+          params_put(self.params.p, encoded, value, len(value), False)
+      except Exception as error:
+        errors.append(error)
+    threads = [threading.Thread(target=writer, args=(key,)) for key in keys]
+    for thread in threads: thread.start()
+    for thread in threads:
+      thread.join(timeout=10)
+      assert not thread.is_alive()
+    assert not errors
+    deadline = time.monotonic()+10
+    while time.monotonic() < deadline:
+      if all(self.params.get(key) == 'native-39' for key in keys):
+        break
+      time.sleep(.01)
+    assert all(self.params.get(key) == 'native-39' for key in keys)

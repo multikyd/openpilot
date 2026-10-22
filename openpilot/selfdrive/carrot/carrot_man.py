@@ -1594,6 +1594,10 @@ class CarrotMan:
         self.remote_addr = None
 
 def main():
+  from openpilot.selfdrive.carrot.crash_diagnostics import enable_crash_diagnostics
+  fault_file = enable_crash_diagnostics()
+  cloudlog.event('carrot_crash_diagnostics', fault_file=fault_file,
+                 note='Python all-thread fatal stacks; native core collection uses system configuration')
   try:
     set_core_affinity([0, 1, 2, 3])
   except Exception:

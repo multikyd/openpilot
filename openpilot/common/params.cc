@@ -225,18 +225,33 @@ void Params::clearAll(ParamKeyFlag key_flag) {
 }
 
 void Params::putNonBlocking(const std::string &key, const std::string &val) {
-   queue.push(std::make_pair(key, val));
-  // start thread on demand
-  if (!future.valid() || future.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
-    future = std::async(std::launch::async, &Params::asyncWriteThread, this);
+  // A Params instance can be shared by Python/ctypes and native threads.
+  // Protect both future ownership and the worker's idle transition.
+  std::lock_guard lock(async_mutex);
+  queue.push(std::make_pair(key, val));
+  if (!async_running) {
+    async_running = true;
+    try {
+      future = std::async(std::launch::async, &Params::asyncWriteThread, this);
+    } catch (...) {
+      async_running = false;
+      throw;
+    }
   }
 }
 
 void Params::asyncWriteThread() {
-  // TODO: write the latest one if a key has multiple values in the queue.
   std::pair<std::string, std::string> p;
-  while (queue.try_pop(p, 0)) {
-    // Params::put is Thread-Safe
+  while (true) {
+    {
+      std::lock_guard lock(async_mutex);
+      if (!queue.try_pop(p, 0)) {
+        // A producer must either see us running, or start our successor.
+        async_running = false;
+        return;
+      }
+    }
+    // Disk IO must not hold async_mutex or block enqueueing callers.
     put(p.first, p.second);
   }
 }
