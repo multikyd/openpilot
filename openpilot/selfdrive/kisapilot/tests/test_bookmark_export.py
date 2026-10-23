@@ -1,7 +1,11 @@
 import importlib.util
+import ast
+import json
+import os
 import tempfile
 import time
 import unittest
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -211,6 +215,124 @@ class BookmarkHistoryTest(BookmarkFixture, unittest.TestCase):
         with patch.object(b, '_log_bookmark_offset') as reader:
             self.assertIsNone(b.segment_bookmark_offset(self.root, item))
             reader.assert_not_called()
+
+
+class BookmarkArchiveTest(BookmarkFixture, unittest.TestCase):
+    def zipped(self, offset=40.):
+        with patch.object(b, 'segment_bookmark_offset', return_value=offset):
+            return b.export_bookmarks(self.root, ['old--1'], preserved=lambda p: p.name == 'old--1', archive=True)
+
+    def test_zip_contains_original_segment_files_and_manifest(self):
+        self.segment(number=0)
+        segment = self.segment(number=1)
+        self.segment(number=2, locked=True)
+        (segment / 'notes.txt').write_text('test\n' * 100, encoding='utf8')
+        result = self.zipped(10.)
+        self.assertEqual(len(result['files']), 1)
+        archive = Path(result['files'][0]['path'])
+        # Latest KisaAgent requires exactly two safe components below realdata.
+        self.assertEqual(len(archive.relative_to(self.root).parts), 2)
+        self.assertTrue(archive.name.endswith('.zip'))
+        self.assertEqual(result['bytes'], archive.stat().st_size)
+        with zipfile.ZipFile(archive) as bundle:
+            self.assertIsNone(bundle.testzip())
+            self.assertEqual(set(bundle.namelist()), {'old--0/rlog.zst', 'old--0/fcamera.hevc',
+                             'old--1/rlog.zst', 'old--1/fcamera.hevc', 'old--1/notes.txt', 'KisaAgent_bookmarks.json'})
+            self.assertEqual(bundle.read('old--1/rlog.zst'), (segment / 'rlog.zst').read_bytes())
+            self.assertEqual(bundle.read('old--1/fcamera.hevc'), (segment / 'fcamera.hevc').read_bytes())
+            self.assertEqual(bundle.getinfo('old--1/fcamera.hevc').compress_type, zipfile.ZIP_STORED)
+            self.assertEqual(bundle.getinfo('old--1/rlog.zst').compress_type, zipfile.ZIP_STORED)
+            self.assertEqual(bundle.getinfo('old--1/notes.txt').compress_type, zipfile.ZIP_DEFLATED)
+            self.assertEqual(json.loads(bundle.read('KisaAgent_bookmarks.json')), result['bookmark_metadata'])
+
+    def test_after_30_zip_only_has_current_segment(self):
+        for number in range(3):
+            self.segment(number=number)
+        result = self.zipped()
+        with zipfile.ZipFile(result['files'][0]['path']) as bundle:
+            self.assertEqual(set(bundle.namelist()), {'old--1/rlog.zst', 'old--1/fcamera.hevc', 'KisaAgent_bookmarks.json'})
+
+    def test_cache_reuses_archive_for_resume_and_expires_only_old_copies(self):
+        self.segment(number=1)
+        first = self.zipped()
+        path = Path(first['files'][0]['path'])
+        old = path.parent / 'KisaAgent_bookmarks_expired.zip'
+        old.write_bytes(b'expired')
+        os.utime(old, (time.time() - 90000,) * 2)
+        with patch.object(b.zipfile, 'ZipFile', side_effect=AssertionError('cache was not reused')):
+            self.assertEqual(self.zipped()['files'], first['files'])
+        self.assertFalse(old.exists())
+        self.assertEqual((self.root / 'old--1/rlog.zst').read_bytes(), b'partial log')
+
+    def test_rebuild_is_byte_identical_for_resume(self):
+        self.segment(number=1)
+        result = self.zipped()
+        path = Path(result['files'][0]['path'])
+        original = path.read_bytes()
+        path.unlink()
+        self.zipped()
+        self.assertEqual(path.read_bytes(), original)
+
+    def test_source_change_gets_new_archive_name(self):
+        segment = self.segment(number=1)
+        first = self.zipped()
+        (segment / 'rlog.zst').write_bytes(b'new log bytes')
+        self.assertNotEqual(self.zipped()['files'][0]['path'], first['files'][0]['path'])
+
+    def test_cache_keeps_at_most_three_archives_without_touching_sources(self):
+        segment = self.segment(number=1)
+        for number in range(5):
+            (segment / 'rlog.zst').write_bytes(str(number).encode('ascii'))
+            result = self.zipped()
+            self.assertTrue(Path(result['files'][0]['path']).exists())
+        self.assertEqual(len(list((self.root / 'bookmark_exports').glob('*.zip'))), 3)
+        self.assertEqual((segment / 'rlog.zst').read_bytes(), b'4')
+
+    def test_build_failure_does_not_publish_partial_archive(self):
+        self.segment(number=1)
+        with patch.object(b.zipfile.ZipFile, 'write', side_effect=OSError('disk full')):
+            with self.assertRaises(OSError):
+                self.zipped()
+        self.assertEqual(list((self.root / 'bookmark_exports').iterdir()), [])
+        self.assertEqual((self.root / 'old--1/rlog.zst').read_bytes(), b'partial log')
+
+    def test_invalid_archive_option_and_active_segment_are_rejected(self):
+        self.segment(number=1, locked=True)
+        with self.assertRaises(ValueError):
+            self.zipped()
+        with self.assertRaises(ValueError):
+            b.export_bookmarks(self.root, ['old--1'], archive='true')
+
+    def test_export_api_defaults_to_zip_and_can_request_original_files(self):
+        # Compile the real endpoint independently of device-only imports/startup.
+        import sys
+        from types import ModuleType
+        agent = SOURCE.parent / 'kisa_agent.py'
+        tree = ast.parse(agent.read_text(encoding='utf8'))
+        endpoint = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'prepare_bookmark_export')
+        module = ast.Module(body=[endpoint], type_ignores=[])
+        payload = {'ids': ['old--1']}
+        app = SimpleNamespace(route=lambda *args, **kwargs: lambda function: function)
+        request = SimpleNamespace(get_json=lambda **kwargs: payload)
+        namespace = {'app': app, 'request': request, 'jsonify': lambda value: value,
+                     'bookmark_recording_context': lambda: (False, set())}
+        exec(compile(module, str(agent), 'exec'), namespace)
+        fake = ModuleType('openpilot.selfdrive.kisapilot.bookmark_export')
+        self.segment(number=1)
+        fake.export_bookmarks = lambda root, ids, adjacent, **kwargs: b.export_bookmarks(
+            self.root, ids, adjacent, preserved=lambda p: p.name == 'old--1', **kwargs)
+        with patch.dict(sys.modules, {'openpilot.selfdrive.kisapilot.bookmark_export': fake}):
+            result = namespace['prepare_bookmark_export']()
+            self.assertEqual(len(result['files']), 1)
+            self.assertTrue(result['files'][0]['path'].endswith('.zip'))
+            payload['archive'] = False
+            result = namespace['prepare_bookmark_export']()
+            self.assertEqual(len(result['files']), 2)
+            self.assertNotIn('archive', result)
+            payload['archive'] = 'true'
+            result, status = namespace['prepare_bookmark_export']()
+            self.assertEqual(status, 409)
+            self.assertIn('error', result)
 
 
 if __name__ == '__main__':

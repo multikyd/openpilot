@@ -1,7 +1,12 @@
 """Read loggerd bookmark xattrs and export closed, original replay segments."""
 import os
+import hashlib
+import json
 import re
+import tempfile
+import threading
 import time
+import zipfile
 from functools import lru_cache
 from pathlib import Path
 
@@ -171,7 +176,9 @@ def auto_bookmarks(root, onroad=False, preserved=is_preserved, recording=None):
     return {'bookmarks': bookmarks, 'onroad': bool(onroad), 'format': 'kisa-bookmark-auto-v1'}
 
 
-def export_bookmarks(root, ids, adjacent=1, preserved=is_preserved, recording=None):
+def export_bookmarks(root, ids, adjacent=1, preserved=is_preserved, recording=None, archive=False):
+    if type(archive) is not bool:
+        raise ValueError("압축 여부는 true 또는 false여야 합니다.")
     if not isinstance(ids, list) or not ids or len(ids) > 100 or any(not isinstance(i, str) or not split_segment(i) for i in ids):
         raise ValueError("북마크를 1~100개 선택해주세요.")
     if type(adjacent) is not int or adjacent not in (0, 1, 2):
@@ -215,4 +222,75 @@ def export_bookmarks(root, ids, adjacent=1, preserved=is_preserved, recording=No
                 "included_segments": sorted(included), "warnings": warnings,
                 "interrupted_segments": sorted(n for n in included if segments[n]["interrupted"]),
                 "replay_note": "원본 세그먼트 폴더와 로그·영상을 유지합니다. 정확한 북마크 시각은 로그의 userBookmark/bookmarkButton을 확인하세요. 영상/로그를 자르거나 세그먼트 번호를 바꾸지 마세요."}
-    return {"files": files, "bytes": sum(f["size"] for f in files), "excluded": warnings, "bookmark_metadata": metadata}
+    result = {"files": files, "bytes": sum(f["size"] for f in files), "excluded": warnings, "bookmark_metadata": metadata}
+    return archive_bookmarks(root, result) if archive else result
+
+
+_archive_lock = threading.Lock()
+
+
+def archive_bookmarks(root, export):
+    """Package completed segments for the existing KisaAgent file downloader."""
+    root = Path(root).resolve()
+    sources = []
+    for item in export['files']:
+        path = Path(item['path'])
+        relative = path.resolve().relative_to(root)
+        if (path.is_symlink() or path.parent.is_symlink() or len(relative.parts) != 2
+                or relative.parts[0] not in export['bookmark_metadata']['included_segments']
+                or path.name.endswith('.lock')):
+            raise ValueError("압축할 원본 세그먼트 경로가 올바르지 않습니다.")
+        stat = path.stat()
+        if stat.st_size != item['size']:
+            raise ValueError("원본 파일 크기가 변경되었습니다. 다시 시도해주세요.")
+        sources.append((path, relative.as_posix(), stat.st_size, stat.st_mtime_ns))
+
+    manifest = json.dumps(export['bookmark_metadata'], ensure_ascii=False, sort_keys=True, indent=2).encode('utf8')
+    identity = json.dumps([(name, size, stamp) for _, name, size, stamp in sources], sort_keys=True).encode('utf8')
+    digest = hashlib.sha256(manifest + identity).hexdigest()[:24]
+    cache = root / 'bookmark_exports'
+    if cache.is_symlink():
+        raise ValueError("압축 저장 경로가 올바르지 않습니다.")
+    cache.mkdir(exist_ok=True)
+    archive = cache / ('KisaAgent_bookmarks_' + digest + '.zip')
+    with _archive_lock:
+        # Failed/abandoned transfers must not accumulate archive copies forever.
+        for old in list(cache.glob('KisaAgent_bookmarks_*.zip')) + list(cache.glob('bookmark-*.part')):
+            try:
+                if old != archive and time.time() - old.stat().st_mtime > 86400:
+                    old.unlink()
+            except FileNotFoundError:
+                pass
+        if archive.is_symlink():
+            raise ValueError("압축 파일 경로가 올바르지 않습니다.")
+        if not archive.is_file():
+            fd, temporary = tempfile.mkstemp(prefix='bookmark-', suffix='.part', dir=cache)
+            os.close(fd)
+            try:
+                with zipfile.ZipFile(temporary, 'w', allowZip64=True, strict_timestamps=False) as bundle:
+                    for path, name, size, stamp in sources:
+                        # Video and zstd/bzip logs are already compressed. Avoid recompressing them on C4.
+                        compressed = path.suffix.lower() in ('.hevc', '.zst', '.bz2', '.ts', '.mp4', '.jpg', '.png', '.zip')
+                        bundle.write(path, name, compress_type=zipfile.ZIP_STORED if compressed else zipfile.ZIP_DEFLATED,
+                                     compresslevel=None if compressed else 1)
+                        stat = path.stat()
+                        if (stat.st_size, stat.st_mtime_ns) != (size, stamp):
+                            raise ValueError("압축 중 원본 파일이 변경되었습니다. 다시 시도해주세요.")
+                    info = zipfile.ZipInfo('KisaAgent_bookmarks.json', date_time=(1980, 1, 1, 0, 0, 0))
+                    bundle.writestr(info, manifest, compress_type=zipfile.ZIP_DEFLATED, compresslevel=1)
+                os.replace(temporary, archive)
+            finally:
+                if os.path.exists(temporary):
+                    os.unlink(temporary)
+        # Bound the extra disk copies even when many bookmarks are saved in a day.
+        others = sorted((p for p in cache.glob('KisaAgent_bookmarks_*.zip') if p != archive),
+                        key=lambda p: p.stat().st_mtime, reverse=True)
+        for old in others[2:]:
+            try:
+                old.unlink()
+            except FileNotFoundError:
+                pass
+    size = archive.stat().st_size
+    return dict(export, files=[{'path': str(archive), 'size': size, 'is_dir': False}], bytes=size,
+                archive={'format': 'zip', 'name': archive.name, 'original_bytes': export['bytes'],
+                         'file_count': len(sources), 'preserves_segment_directories': True})

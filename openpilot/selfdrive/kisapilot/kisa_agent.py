@@ -339,7 +339,8 @@ def prepare_bookmark_export():
         return jsonify({"error": "JSON 요청이 필요합니다."}), 400
     try:
         _, recording = bookmark_recording_context()
-        return jsonify(export_bookmarks('/data/media/0/realdata', data.get('ids'), data.get('adjacent', 1), recording=recording))
+        return jsonify(export_bookmarks('/data/media/0/realdata', data.get('ids'), data.get('adjacent', 1),
+                                       recording=recording, archive=data.get('archive', True)))
     except (ValueError, FileNotFoundError) as e:
         return jsonify({"error": str(e)}), 409
     except Exception as e:
