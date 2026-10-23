@@ -88,6 +88,7 @@ class LanePlanner:
 
     self.lanefull_mode = False
     self.d_prob_count = 0
+    self.lane_path_weight = 0.0
     self.second = 0.0
 
     self.camera_offset = CAMERA_OFFSET
@@ -226,7 +227,9 @@ class LanePlanner:
     if not enabled:
       return 0.0
     confidence = np.interp(self.d_prob, [0.3, 0.8], [0.0, 1.0])
-    width_factor = np.interp(self.lane_width, [2.8, 3.2], [0.0, 1.0])
+    # A reliable 3 m lane has room for the bounded (at most 5 cm) preference.
+    # Keep fading it out below 3 m and disable it at 2.8 m or narrower.
+    width_factor = np.interp(self.lane_width, [2.8, 3.0], [0.0, 1.0])
     return float(filtered * confidence * width_factor)
 
   def _get_lane_position_offset(self, CS, laneline_active):
@@ -409,13 +412,18 @@ class LanePlanner:
     #  self.lane_width_left_filtered.x, self.lane_width, self.lane_width_right_filtered.x)
 
     laneline_active = False
+    next_lane_weight = 0.0
     self.d_prob_count = self.d_prob_count + 1 if self.d_prob > 0.3 else 0
     if self.lanefull_mode and self.d_prob_count > int(1 / DT_MDL):
       laneline_active = True
       safe_idxs = np.isfinite(self.ll_t)
       if safe_idxs[0]:
         lane_path_y_interp = np.interp(path_t, self.ll_t[safe_idxs], lane_path_y[safe_idxs])
-        path_xyz[:,1] = self.d_prob * lane_path_y_interp + (1.0 - self.d_prob) * path_xyz[:,1]
+        # After the existing confirmation, acquire the lane path over 0.5 s.
+        # Loss of confidence or leaving lane mode still releases it immediately.
+        next_lane_weight = min(self.d_prob, self.lane_path_weight + DT_MDL / 0.5)
+        path_xyz[:,1] = next_lane_weight * lane_path_y_interp + (1.0 - next_lane_weight) * path_xyz[:,1]
+    self.lane_path_weight = next_lane_weight
 
 
     lane_center_offset = self._get_lane_center_offset(CS, laneline_active)

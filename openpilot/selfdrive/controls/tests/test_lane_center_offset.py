@@ -61,8 +61,15 @@ class TestLaneCenterOffset(unittest.TestCase):
     self.lp.d_prob = 1.0
     self.lp.lane_width = 2.8
     self.assertEqual(self.lp._get_lane_center_offset(self.cs, True), 0.0)
-    self.lp.lane_width = 3.0
+    self.lp.lane_width = 2.9
     self.assertAlmostEqual(self.lp._get_lane_center_offset(self.cs, True), -0.015, places=7)
+    self.lp.lane_width = 3.0
+    self.assertAlmostEqual(self.lp._get_lane_center_offset(self.cs, True), -0.03, places=7)
+
+  def test_recorded_three_meter_lane_keeps_full_five_cm_preference(self):
+    self.lp.lane_center_offset = -0.05
+    self.lp.lane_width = 3.024
+    self.assertAlmostEqual(self.settle()[-1], -0.05, places=7)
 
   def test_parameter_disable_and_bound(self):
     self.lp.lane_center_offset = 0.0
@@ -129,6 +136,70 @@ class TestLaneCenterOffset(unittest.TestCase):
     path, active = self.lane_path()
     self.assertTrue(active)
     np.testing.assert_allclose(path[:, 1], 0.05 + 2 * (-0.01 + 0.02), atol=1e-12)
+
+  def prepare_transition(self):
+    self.lp.lanefull_mode = True
+    self.lp.lane_center_offset = 0.0
+    self.lane_path(frames=1)
+    self.lp.lll_y[:] = -1.50
+    self.lp.rll_y[:] = 2.00
+
+  def step_transition(self):
+    n = lane_module.TRAJECTORY_SIZE
+    xyz = np.column_stack([self.lp.ll_x, np.zeros(n), np.zeros(n)])
+    return self.lp.get_d_path(self.cs, 20., self.lp.ll_t, xyz, 200.)
+
+  def test_reentry_waits_for_confirmation_then_ramps_lane_path(self):
+    self.prepare_transition()
+    self.lp.d_prob_count = 0
+    for _ in range(20):
+      path, active = self.step_transition()
+      self.assertFalse(active)
+      np.testing.assert_allclose(path[:, 1], 0.)
+    weights = []
+    for _ in range(10):
+      path, active = self.step_transition()
+      self.assertTrue(active)
+      weights.append(self.lp.lane_path_weight)
+      np.testing.assert_allclose(path[:, 1], .25 * self.lp.lane_path_weight)
+    np.testing.assert_allclose(weights, np.arange(1, 11) / 10., atol=1e-12)
+
+  def test_exit_and_confidence_loss_do_not_hold_old_lane_path(self):
+    self.prepare_transition()
+    for _ in range(35):
+      self.step_transition()
+    self.assertAlmostEqual(self.lp.lane_path_weight, 1.)
+    self.lp.lll_prob, self.lp.rll_prob = .6, 0.
+    self.step_transition()
+    self.assertLessEqual(self.lp.lane_path_weight, .6)
+    self.lp.lll_prob = self.lp.rll_prob = 0.
+    path, active = self.step_transition()
+    self.assertFalse(active)
+    self.assertEqual(self.lp.lane_path_weight, 0.)
+    np.testing.assert_allclose(path[:, 1], 0.)
+    self.lp.lll_prob = self.lp.rll_prob = 1.
+    for _ in range(35):
+      self.step_transition()
+    self.lp.lanefull_mode = False
+    path, active = self.step_transition()
+    self.assertFalse(active)
+    self.assertEqual(self.lp.lane_path_weight, 0.)
+    np.testing.assert_allclose(path[:, 1], 0.)
+
+  def test_lane_change_releases_path_and_requires_new_confirmation(self):
+    self.prepare_transition()
+    for _ in range(35):
+      self.step_transition()
+    self.lp.lane_change_multiplier = 0.
+    path, active = self.step_transition()
+    self.assertFalse(active)
+    self.assertEqual(self.lp.lane_path_weight, 0.)
+    np.testing.assert_allclose(path[:, 1], 0.)
+    self.lp.lane_change_multiplier = 1.
+    for _ in range(20):
+      self.assertFalse(self.step_transition()[1])
+    self.assertTrue(self.step_transition()[1])
+    self.assertAlmostEqual(self.lp.lane_path_weight, .1)
 
 
 if __name__ == '__main__':
