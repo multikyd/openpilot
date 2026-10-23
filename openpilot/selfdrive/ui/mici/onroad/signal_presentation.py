@@ -2,6 +2,20 @@
 import math
 
 
+def signal_panel_visible(display):
+  """Keep learning/model observations out of the live signal panel."""
+  if display.source in ('TMAP', 'VISION'):
+    return (display.operatingMode in ('OFF', 'FLASH') or
+            any(getattr(display, direction+'State', 0) in (1, 2, 3)
+                for direction in ('straight', 'left', 'right')))
+  if display.source == 'EST':
+    low, high, confidence = display.estimateLow, display.estimateHigh, display.confidence
+    return (all(math.isfinite(v) for v in (low, high, confidence)) and
+            0 <= low <= high and high > 0 and confidence > 0 and
+            (display.operatingMode == 'WAIT' or display.predictionState in (1, 2)))
+  return False
+
+
 def timer_text(remain):
   return str(math.ceil(remain)) if math.isfinite(remain) and remain > 0 else '--'
 

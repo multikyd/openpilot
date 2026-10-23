@@ -2,11 +2,11 @@
 import math
 import pyray as rl
 from openpilot.system.ui.lib.text_measure import measure_text_cached
-from openpilot.selfdrive.ui.mici.onroad.signal_presentation import signal_lamps, countdown_rows
+from openpilot.selfdrive.ui.mici.onroad.signal_presentation import signal_lamps, countdown_rows, signal_panel_visible
 
 
 def draw_signal_panel(rect, font, display):
-  if not display.source or rect.width < 440:
+  if rect.width < 440 or not signal_panel_visible(display):
     return
   width, height = 232, 74
   x, y = rect.x+rect.width-width-8, rect.y+92
@@ -58,10 +58,6 @@ def draw_signal_panel(rect, font, display):
     value=f'~{round((display.estimateLow+display.estimateHigh)/2)}'
     detail=f'EST {"WAIT" if mode=="WAIT" else "RED" if display.predictionState==1 else "GREEN"} / {direction} / {distance}'
     text(f'{math.floor(display.estimateLow)}-{math.ceil(display.estimateHigh)}s',x,y+height+23,width,22,amber)
-  elif source=='LEARN':
-    detail+=f' / {display.samples} OBS'
-  elif source=='MODEL':
-    detail=f'MODEL {"WAIT" if mode=="MODEL_STOP" else "MOVE"} / {direction} / {distance}'
   if live and mode not in ('OFF','FLASH') and rows[0][0]:
     row_height=(height-10)/len(rows)
     for i,(label,state,value) in enumerate(rows):

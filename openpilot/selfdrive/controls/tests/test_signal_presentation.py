@@ -10,16 +10,56 @@ spec = importlib.util.spec_from_file_location('signal_presentation',
 presentation = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(presentation)
 countdown_rows, signal_lamps = presentation.countdown_rows, presentation.signal_lamps
+signal_panel_visible = presentation.signal_panel_visible
 
 
 def display(**updates):
   values = dict(source='TMAP', movement='other', straightState=2, leftState=1,
-                rightState=0, straightRemain=61.24, leftRemain=65.24, rightRemain=0.)
+                rightState=0, straightRemain=61.24, leftRemain=65.24, rightRemain=0.,
+                operatingMode='NORMAL', estimateLow=0., estimateHigh=0., confidence=1., predictionState=0)
   values.update(updates)
   return SimpleNamespace(**values)
 
 
 class TestSignalPresentation(unittest.TestCase):
+  def test_model_and_learning_panels_are_hidden_without_mutating_observations(self):
+    for source in ('', 'MODEL', 'LEARN', 'OTHER'):
+      value = display(source=source)
+      original = vars(value).copy()
+      self.assertFalse(signal_panel_visible(value))
+      self.assertEqual(vars(value), original)
+
+  def test_live_colors_and_untimed_vision_remain_visible(self):
+    for source in ('TMAP', 'VISION'):
+      for direction in ('straight', 'left', 'right'):
+        value = display(source=source, straightState=0, leftState=0, rightState=0,
+                        straightRemain=0., leftRemain=0., rightRemain=0.)
+        setattr(value, direction+'State', 2)
+        self.assertTrue(signal_panel_visible(value))
+
+  def test_empty_live_panel_is_hidden(self):
+    for source in ('TMAP', 'VISION'):
+      self.assertFalse(signal_panel_visible(display(source=source, straightState=0, leftState=0, rightState=0)))
+
+  def test_observed_off_and_flashing_signals_remain_visible(self):
+    for mode in ('OFF', 'FLASH'):
+      self.assertTrue(signal_panel_visible(display(source='VISION', operatingMode=mode,
+                                                 straightState=0, leftState=0, rightState=0)))
+
+  def test_valid_estimate_and_wait_range_remain_visible(self):
+    self.assertTrue(signal_panel_visible(display(source='EST', estimateLow=10., estimateHigh=15.,
+                                               confidence=.65, predictionState=1)))
+    self.assertTrue(signal_panel_visible(display(source='EST', estimateLow=0., estimateHigh=12.,
+                                               confidence=.3, operatingMode='WAIT')))
+
+  def test_invalid_estimates_are_hidden(self):
+    for updates in (dict(estimateLow=float('nan')), dict(estimateHigh=float('inf')),
+                    dict(estimateLow=20.), dict(estimateLow=-1.), dict(confidence=0.),
+                    dict(predictionState=0), dict(estimateLow=0., estimateHigh=0.)):
+      value = dict(source='EST', estimateLow=10., estimateHigh=15., confidence=.65, predictionState=1)
+      value.update(updates)
+      self.assertFalse(signal_panel_visible(display(**value)))
+
   def test_left_red_does_not_light_straight_red(self):
     self.assertEqual(signal_lamps(display()), (0, 0, 2))
 
