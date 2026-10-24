@@ -5,6 +5,10 @@ import pyray as rl
 from dataclasses import dataclass
 from openpilot.common.constants import CV
 from openpilot.selfdrive.ui.mici.onroad.torque_bar import TorqueBar
+from openpilot.selfdrive.ui.mici.onroad.lead_brake_panel import LeadBrakePanel
+from openpilot.selfdrive.ui.mici.onroad import SIDE_PANEL_WIDTH
+from openpilot.selfdrive.ui.mici.onroad.hud_layout import (LEFT_CENTER, HEADER_TOP, left_car_box,
+                                                        lower_notice_box, gap_bar_boxes, select_road_notice)
 from openpilot.selfdrive.ui.mici.onroad.signal_renderer import draw_signal_panel
 from openpilot.selfdrive.ui.mici.onroad.bookmark_transfer import BookmarkTransferBanner
 from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus, ChestnutState
@@ -207,18 +211,16 @@ class HudRenderer(Widget):
 
     self._draw_model_source(rect)
 
-    self._draw_steering_wheel(rect)
-    self._draw_current_speed(rect)
+    self._draw_lower_left(rect)
     self._draw_camera_offset(rect)
     if ui_state.started:
       self._bookmark_transfer.draw(rect, self._font_bold)
-    if (self._can_draw_top_icons and ui_state.started and ui_state.bumpTarget <= 0 and not ui_state.bumpLearningText and
+    if (self._can_draw_top_icons and ui_state.started and
         ui_state.sm.valid['carrotMan'] and ui_state.sm.alive['carrotMan'] and
         0 <= time.monotonic()-ui_state.sm.recv_time['carrotMan'] < 1):
       draw_signal_panel(rect, self._font_bold, ui_state.sm['carrotMan'].signalDisplay)
     if self._can_draw_top_icons and not self.setspeed_changed:
       self._draw_car_stat(rect)
-      self._draw_speed_limit_sign(rect)
       if ui_state.bumpTarget <= 0 and ui_state.bumpLearningText:
         # A brief result strip, confined to the middle; retain all left-side status icons.
         text = ui_state.bumpLearningText
@@ -263,22 +265,8 @@ class HudRenderer(Widget):
     size *= min(1., 72 / max(1., measured.x))
     width = measure_text_cached(self._font_bold, text, size).x
     center = rect.x + rect.width / 2
-    rl.draw_rectangle_rounded(rl.Rectangle(center-40, rect.y+4, 80, 40), .2, 8, rl.Color(0, 0, 0, 190))
+    rl.draw_rectangle_rounded(rl.Rectangle(center-40, rect.y+HEADER_TOP, 80, 40), .2, 8, rl.Color(0, 0, 0, 190))
     rl.draw_text_ex(self._font_bold, text, rl.Vector2(center-width/2, rect.y+7), size, 0, rl.WHITE)
-
-  def _draw_bump_target(self, rect: rl.Rectangle, center_x: float, target: float, distance: float, compact: bool = False) -> None:
-    # Preserve the existing DM/lead/gap/TPMS/wheel column on the 536x240 C4 screen.
-    img = self.img_speed_bump
-    icon_size = 64 if compact else 90
-    icon = rl.Rectangle(center_x-icon_size/2, rect.y+(52 if compact else 15), icon_size, icon_size)
-    rl.draw_texture_pro(img, rl.Rectangle(0, 0, img.width, img.height), icon, rl.Vector2(0, 0), 0, rl.WHITE)
-    speed = round(target * (1 if ui_state.is_metric else KM_TO_MILE))
-    for text, y, size, color in (
-        ("TARGET", 116 if compact else 105, 20 if compact else 24, rl.WHITE),
-        (str(speed), 138 if compact else 129, 54 if compact else 64, rl.Color(255, 220, 70, 255)),
-        (f"{max(0, distance):.0f}m", 198, 32, rl.WHITE)):
-      width = measure_text_cached(self._font_bold, text, size).x
-      rl.draw_text_ex(self._font_bold, text, rl.Vector2(center_x-width/2, rect.y+y), size, 0, color)
 
   def _draw_model_source(self, rect: rl.Rectangle) -> None:
     loading = ui_state.chestnut_state == ChestnutState.LOADING
@@ -409,20 +397,8 @@ class HudRenderer(Widget):
         source_color,
       )
 
-  # def _draw_current_speed(self, rect: rl.Rectangle) -> None:
-  #   """Draw the current vehicle speed and unit."""
-  #   speed_text = str(round(self.speed))
-  #   speed_text_size = measure_text_cached(self._font_bold, speed_text, FONT_SIZES.current_speed)
-  #   speed_pos = rl.Vector2(rect.x + rect.width / 2 - speed_text_size.x / 2, 180 - speed_text_size.y / 2)
-  #   rl.draw_text_ex(self._font_bold, speed_text, speed_pos, FONT_SIZES.current_speed, 0, COLORS.WHITE)
-
-  #   unit_text = tr("km/h") if ui_state.is_metric else tr("mph")
-  #   unit_text_size = measure_text_cached(self._font_medium, unit_text, FONT_SIZES.speed_unit)
-  #   unit_pos = rl.Vector2(rect.x + rect.width / 2 - unit_text_size.x / 2, 290 - unit_text_size.y / 2)
-  #   rl.draw_text_ex(self._font_medium, unit_text, unit_pos, FONT_SIZES.speed_unit, 0, COLORS.WHITE_TRANSLUCENT)
-
   # 536 X 240
-  def _draw_current_speed(self, rect: rl.Rectangle) -> None:
+  def draw_current_speed_sidebar(self, rect: rl.Rectangle) -> None:
     """Draw the current vehicle speed and unit."""
     s = ui_state
 
@@ -455,90 +431,57 @@ class HudRenderer(Widget):
     else:
       speed_color = COLORS.WHITE
 
-    # speed_pos = rl.Vector2(rect.x + rect.width - 100, rect.y)
-    # rl.draw_text_ex(self._font_bold, speed_text, speed_pos, FONT_SIZES.current_speed - 100, 0, speed_color)
+    sidebar = rl.Rectangle(rect.x+rect.width-SIDE_PANEL_WIDTH, rect.y, SIDE_PANEL_WIDTH, rect.height)
+    LeadBrakePanel.draw_speed(sidebar, self.speed, s.is_metric, speed_color)
 
-    font_size = FONT_SIZES.current_speed - 100
-    text_size = rl.measure_text_ex(self._font_bold, speed_text, font_size, 0)
-    right_x = rect.x + rect.width - 20
-    speed_pos = rl.Vector2(right_x - text_size.x, rect.y)
-    rl.draw_text_ex(self._font_bold, speed_text, speed_pos, font_size, 0, speed_color)
-
-  def _draw_speed_limit_sign(self, rect: rl.Rectangle) -> None:
-    """Draw KisaPilot-style speed limit sign."""
-    s_center_x = rect.x + 145
-    s_center_y = rect.y + 60
-    d_center_y = s_center_y + 60
-
-    diameters = (100, 80, 91)
-    rects = {
-      "inner": rl.Rectangle(s_center_x - diameters[1]//2, s_center_y - diameters[1]//2, diameters[1], diameters[1]),
-      "dist":  rl.Rectangle(s_center_x - 55, d_center_y, 115, 35),
-    }
-
-    type, limit_spd, dist = ui_state.xSpdType, ui_state.xSpdLimitOrg, ui_state.xSpdDist
-
-    learned = ui_state.bumpTarget > 0
-    if type == 22 or (learned and (type < 0 or dist <= 0)):
-      target = ui_state.bumpTarget if learned else ui_state.xSpdLimit
-      distance = ui_state.bumpDistance if learned else dist
-      self._draw_bump_target(rect, s_center_x, target, distance)
+  def _draw_lower_left(self, rect: rl.Rectangle) -> None:
+    s = ui_state
+    sm = s.sm
+    fresh = (sm.valid['carrotMan'] and sm.alive['carrotMan'] and
+             0 <= time.monotonic()-sm.recv_time['carrotMan'] < 1)
+    notice = select_road_notice(s.xSpdType, s.xSpdLimitOrg, s.xSpdLimit, s.xSpdDist,
+                                s.bumpTarget, s.bumpDistance) if fresh else None
+    # A critical steering instruction retains priority over advisory road notices.
+    if (notice is None or self._show_wheel_critical or not self._can_draw_top_icons or
+        self.setspeed_changed):
+      self._draw_steering_wheel(rect)
       return
-    if learned:
-      # Retain a simultaneous camera sign in its original position.
-      self._draw_bump_target(rect, rect.x+rect.width/2+18, ui_state.bumpTarget, ui_state.bumpDistance, compact=True)
-    if limit_spd <= 20 and dist == 0:
+    x, y, w, h = lower_notice_box(rect.x, rect.y, rect.height)
+    if h < 48:
+      self._draw_steering_wheel(rect)
       return
-
-    visual_offset = 1.2
-
-    if type == 22:
-      img = self.img_speed_bump
-      icon_x = s_center_x - self.img_width // 2
-      icon_y = s_center_y - self.img_width // 2
-      icon_rect = rl.Rectangle(icon_x, icon_y, self.img_width, self.img_width)
-      source_rect = rl.Rectangle(0, 0, img.width, img.height)
-      rl.draw_texture_pro(img, source_rect, icon_rect, rl.Vector2(0, 0), 0, rl.WHITE)
+    scale = min(1., h/82)
+    cx = rect.x+LEFT_CENTER
+    rl.draw_rectangle_rounded(rl.Rectangle(x,y,w,h), .12, 8, rl.Color(0,0,0,190))
+    def text(value, top, size, color, available=None, centered=False):
+      size *= scale
+      measured = measure_text_cached(self._font_bold, value, size)
+      size *= min(1., ((w-8) if available is None else available*scale)/max(1., measured.x))
+      measured = measure_text_cached(self._font_bold, value, size)
+      rl.draw_text_ex(self._font_bold, value, rl.Vector2(cx-measured.x/2, y+top*scale-(measured.y/2 if centered else 0)), size, 0, color)
+    text(notice.kind, 1, 10, rl.WHITE)
+    target = round(notice.speed*(1 if s.is_metric else KM_TO_MILE))
+    if notice.kind == 'CAM':
+      radius = 21*scale
+      rl.draw_circle(int(cx), int(y+37*scale), radius, rl.RED)
+      rl.draw_circle(int(cx), int(y+37*scale), radius*.79, rl.WHITE)
+      text(str(target), 37, 25, rl.BLACK, available=32, centered=True)
     else:
-      cx, cy = int(rects["inner"].x + rects["inner"].width / 2), int(rects["inner"].y + rects["inner"].height / 2)
-      rl.draw_circle(cx, cy, int(diameters[0] / 2), rl.RED)
-      rl.draw_circle(cx, cy, int(diameters[1] / 2), rl.WHITE)
-      text = str(int(limit_spd))
-      font_size = 60 if limit_spd < 100 else 50
-      text_size = rl.measure_text_ex(self._font_bold, text, font_size, 0)
-      text_x = rects["inner"].x + (rects["inner"].width - text_size.x*visual_offset) / 2
-      text_y = rects["inner"].y + (rects["inner"].height - text_size.y*visual_offset) / 2
-      rl.draw_text_ex(self._font_bold, text, rl.Vector2(text_x, text_y), font_size, 0, rl.BLACK)
-
-    if dist == 0:
-      return
-
-    opacity = max(0, min(255, int((600 - dist) * 0.425))) if dist <= 600 else 0
-    rl.draw_rectangle_rounded(rects["dist"], 0.35, 32, rl.Color(255, 0, 0, opacity))
-    rl.draw_rectangle_rounded_lines_ex(rects["dist"], 0.35, 32, 6, COLORS.WHITE_TRANSLUCENT)
-
-    dist_text = (
-      f"{dist:.0f}m" if dist < 1000 else
-      f"{dist/1000:.2f}km" if dist < 10000 else
-      f"{dist/1000:.1f}km"
-    )
-
-    font_size = 33
-    text_size = rl.measure_text_ex(self._font_bold, dist_text, font_size, 0)
-    text_x = rects["dist"].x + (rects["dist"].width - text_size.x*visual_offset) / 2
-    text_y = rects["dist"].y + (rects["dist"].height - text_size.y*visual_offset) / 2
-    rl.draw_text_ex(self._font_bold, dist_text, rl.Vector2(text_x, text_y), font_size, 0, rl.WHITE)
-
+      image = self.img_speed_bump
+      rl.draw_texture_pro(image, rl.Rectangle(0,0,image.width,image.height),
+                          rl.Rectangle(cx-16*scale,y+14*scale,32*scale,22*scale), rl.Vector2(0,0), 0, rl.WHITE)
+      text(str(target), 36, 20, rl.Color(255,220,70,255))
+    distance = f'{notice.distance:.0f}m' if notice.distance < 1000 else f'{notice.distance/1000:.1f}km'
+    text(distance, 60, 15, rl.WHITE)
 
   def _draw_car_stat(self, rect: rl.Rectangle) -> None:
     """Draw KisaPilot-style CAR Status."""
     s = ui_state
 
     img = self.img_car
-    x_center = rect.x + 26 + img.width // 2
-    y_center = rect.y + 135
-    icon_x = x_center - img.width // 2
-    icon_y = y_center - img.height // 2
+    icon_x, icon_y, _, _ = left_car_box(rect.x, rect.y)
+    x_center = rect.x+LEFT_CENTER
+    y_center = icon_y+self.img_car_height/2
     icon_rect = rl.Rectangle(icon_x, icon_y, self.img_car_width, self.img_car_height)
     source_rect = rl.Rectangle(0, 0, img.width, img.height)
     rl.draw_texture_pro(img, source_rect, icon_rect, rl.Vector2(0, 0), 0, rl.Color(255, 255, 255, 150))
@@ -549,7 +492,7 @@ class HudRenderer(Widget):
     rr = s.tpmsPressureRr
     unit = s.tpmsUnit  # 0: psi, 1: kpa, 2: bar
 
-    font_size = 20 if unit == 2 else (18 if unit != 0 else 21)
+    font_size = 22 if unit == 2 else (20 if unit != 0 else 24)
 
     def fmt_val(v):
       if v is None or v == 0 or v == 255:
@@ -557,7 +500,6 @@ class HudRenderer(Widget):
       return f"{int(round(v))}" if unit != 2 else f"{v:.1f}"
 
     def draw_value(offset_x, offset_y, value):
-      offset = 0.6 if unit == 2 else (0.6 if unit != 0 else 0.7)
       if value is None:
         col = rl.Color(255, 255, 255, 210)
         text = ""
@@ -571,21 +513,20 @@ class HudRenderer(Widget):
         text = fmt_val(value)
       tsz = measure_text_cached(self._font_bold, text, font_size).x
       rl.draw_text_ex(self._font_bold, text,
-                      rl.Vector2(offset_x - (tsz / 2)*offset, offset_y),
+                      rl.Vector2(offset_x-tsz/2, offset_y),
                       font_size, 0, col)
 
-    offset_add = 1.5 if unit == 2 else (1.2 if unit != 0 else 1.7)
-    x_offset = img.width // offset_add  # left_right wheel distance
+    x_offset = 22 if unit == 0 else 23  # left_right wheel distance
     y_offset_front = -img.height // 3.4  # front
     y_offset_rear = img.height // 4.2    # rear
 
     # offset based on tire loc
-    y_text_adjust = -10
+    front_text_adjust, rear_text_adjust = -21, -14
 
-    draw_value(x_center - x_offset, y_center + y_offset_front + y_text_adjust, fl)  # Front-left
-    draw_value(x_center + x_offset, y_center + y_offset_front + y_text_adjust, fr)  # Front-right
-    draw_value(x_center - x_offset, y_center + y_offset_rear + y_text_adjust, rl_p)  # Rear-left
-    draw_value(x_center + x_offset, y_center + y_offset_rear + y_text_adjust, rr)  # Rear-right
+    draw_value(x_center - x_offset, y_center + y_offset_front + front_text_adjust, fl)  # Front-left
+    draw_value(x_center + x_offset, y_center + y_offset_front + front_text_adjust, fr)  # Front-right
+    draw_value(x_center - x_offset, y_center + y_offset_rear + rear_text_adjust, rl_p)  # Rear-left
+    draw_value(x_center + x_offset, y_center + y_offset_rear + rear_text_adjust, rr)  # Rear-right
 
     if s.brakeLights:
       brake_width = 8
@@ -593,7 +534,7 @@ class HudRenderer(Widget):
       brake_spacing = 14
 
       brake_left = rl.Rectangle(
-        x_center - brake_spacing - brake_width + 14,
+        x_center - brake_spacing,
         y_center + img.height // 2 - 7,
         brake_width,
         brake_height
@@ -601,7 +542,7 @@ class HudRenderer(Widget):
       rl.draw_rectangle_rounded(brake_left, 0.9, 8, rl.Color(255, 0, 0, 180))
 
       brake_right = rl.Rectangle(
-        x_center + brake_spacing - 6,
+        x_center + brake_spacing - brake_width,
         y_center + img.height // 2 - 7,
         brake_width,
         brake_height
@@ -609,55 +550,20 @@ class HudRenderer(Widget):
       rl.draw_rectangle_rounded(brake_right, 0.9, 8, rl.Color(255, 0, 0, 180))
 
     if s.autoHold:
-      center_text = "AT\nHD"
+      center_text = "H"
       font = self._font_bold
-      font_size = 13
+      font_size = 9
       color = rl.Color(0, 255, 0, 230)
       lines = center_text.split("\n")
       line_height = font_size
-      total_height = line_height * len(lines)
-
       for i, line in enumerate(lines):
         tsz = measure_text_cached(font, line, font_size).x
-        rl.draw_text_ex(font, line, rl.Vector2(x_center - tsz / 2 + 4, y_center - total_height / 2 + i * line_height - 2), font_size, 0, color)
+        rl.draw_text_ex(font, line, rl.Vector2(x_center-tsz/2, icon_y+60+i*10), font_size, 0, color)
 
     if s.cruise_gap:
-      gap_count = int(s.cruise_gap)
-      gap_w, gap_h, spacing, radius = 18, 2, 2, 0
-      if gap_count == 1:
-        color = rl.Color(220, 60, 60, 255)    # Red
-      elif gap_count == 2:
-        color = rl.Color(230, 200, 60, 255)   # Yellow
-      elif gap_count == 3:
-        color = rl.Color(60, 200, 120, 255)   # Green
-      else:
-        color = rl.Color(230, 230, 230, 255)  # White
-      border = rl.WHITE
-      x = x_center - gap_w // 2 + 4
-      base_y = y_center - img.height // 2 + 2
-
-      for i in range(gap_count):
-        y = base_y - i * (gap_h + spacing)
-        rect = rl.Rectangle(x, y, gap_w, gap_h)
-        rl.draw_rectangle_rounded(rect, 0.9, radius, color)
-        rl.draw_rectangle_rounded_lines(rect, radius, 1, border)
-
-      lead_dist = s.radarDRel
-
-      if lead_dist is not None and 0 < lead_dist < 150:
-        dist_text = f"{lead_dist:.1f} m"
-
-        text_font = self._font_bold
-        text_size = 20
-        tsz = measure_text_cached(text_font, dist_text, text_size).x
-
-        top_y = base_y - (gap_count * (gap_h + spacing)) - 18
-
-        if lead_dist < 5:
-          color = rl.Color(255, 0, 0, 255)
-        elif lead_dist < 10:
-          color = rl.Color(255, 140, 0, 255)
-        else:
-          color = rl.Color(255, 255, 255, 230)
-
-        rl.draw_text_ex(text_font, dist_text, rl.Vector2(x_center - tsz / 2 + 5, top_y), text_size, 0, color)
+      gap_count = max(1, min(4, int(s.cruise_gap)))
+      color = {1: rl.Color(220,60,60,255), 2: rl.Color(230,200,60,255),
+               3: rl.Color(60,200,120,255), 4: rl.Color(230,230,230,255)}[gap_count]
+      for i, box in enumerate(gap_bar_boxes(rect.x, rect.y)):
+        ink = color if i < gap_count else rl.Color(70,80,90,140)
+        rl.draw_rectangle_rounded(rl.Rectangle(*box), .25, 4, ink)

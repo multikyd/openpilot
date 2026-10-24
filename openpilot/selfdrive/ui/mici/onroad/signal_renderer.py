@@ -2,18 +2,25 @@
 import math
 import pyray as rl
 from openpilot.system.ui.lib.text_measure import measure_text_cached
+from openpilot.selfdrive.ui.mici.onroad.hud_layout import signal_box
 from openpilot.selfdrive.ui.mici.onroad.signal_presentation import signal_lamps, countdown_rows, signal_panel_visible
 
 
 def draw_signal_panel(rect, font, display):
   if rect.width < 440 or not signal_panel_visible(display):
     return
+  x, y, width, height = signal_box(rect.x, rect.y, rect.width)
+  # Reuse the established 232x74 drawing in a smaller top-aligned viewport.
+  scale = width/232
   width, height = 232, 74
-  x, y = rect.x+rect.width-width-8, rect.y+92
+  def rectangle(px, py, w, h):
+    return rl.Rectangle(x+(px-x)*scale, y+(py-y)*scale, w*scale, h*scale)
   amber = rl.Color(255,205,80,255)
   red, green = rl.Color(255,82,88,255), rl.Color(100,240,78,255)
-  rl.draw_rectangle_rounded(rl.Rectangle(x,y,width,height), .23, 10, rl.Color(43,47,55,245))
-  rl.draw_rectangle_rounded_lines_ex(rl.Rectangle(x,y,width,height), .23, 10, 2, rl.Color(135,143,153,220))
+  rl.draw_rectangle_rounded(rectangle(x,y,width,height), .23, 10, rl.Color(43,47,55,245))
+  rl.draw_rectangle_rounded_lines_ex(rectangle(x,y,width,height), .23, 10, 2, rl.Color(135,143,153,220))
+
+  scale_view = scale
 
   def text(value, left, top, available, size, color, max_height=None):
     measured=measure_text_cached(font,value,size)
@@ -23,7 +30,8 @@ def draw_signal_panel(rect, font, display):
     size*=scale
     measured=measure_text_cached(font,value,size)
     ty=top+(max_height-measured.y)/2 if max_height is not None else top
-    rl.draw_text_ex(font,value,rl.Vector2(left+(available-measured.x)/2,ty),size,0,color)
+    rl.draw_text_ex(font,value,rl.Vector2(x+(left+(available-measured.x)/2-x)*scale_view,
+                                        y+(ty-y)*scale_view),size*scale_view,0,color)
 
   source=display.source
   live=source in ('TMAP','VISION')
@@ -35,13 +43,14 @@ def draw_signal_panel(rect, font, display):
   for i,state in enumerate(lamps):
     cx,cy=x+21+i*36,y+height/2
     background=state_color(state) if state and i!=1 else rl.Color(28,33,41,255)
-    rl.draw_circle(int(cx),int(cy),16,background)
+    rl.draw_circle(int(x+(cx-x)*scale),int(y+(cy-y)*scale),16*scale,background)
     if i==1:
       # A turn stop state leaves the arrow dark, matching the physical signal.
       ink=state_color(state) if state else rl.Color(65,74,85,255)
       for a,b in (((9,0),(-9,0)),((-9,0),(-1,-8)),((-9,0),(-1,8))):
         flip=-1 if arrow_right else 1
-        rl.draw_line_ex(rl.Vector2(cx+flip*a[0],cy+a[1]),rl.Vector2(cx+flip*b[0],cy+b[1]),4,ink)
+        rl.draw_line_ex(rl.Vector2(x+(cx+flip*a[0]-x)*scale,y+(cy+a[1]-y)*scale),
+                        rl.Vector2(x+(cx+flip*b[0]-x)*scale,y+(cy+b[1]-y)*scale),4*scale,ink)
 
   direction={'straight':'STRAIGHT','left':'LEFT','right':'RIGHT','observed':'OBS','other':'DIR ?'}.get(display.movement,'DIR ?')
   mode=display.operatingMode

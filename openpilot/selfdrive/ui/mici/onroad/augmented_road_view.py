@@ -10,8 +10,9 @@ from openpilot.selfdrive.ui.mici.onroad.driver_state import DriverStateRenderer
 from openpilot.selfdrive.ui.mici.onroad.hud_renderer import HudRenderer
 from openpilot.selfdrive.ui.mici.onroad.long_indicator import LongIndicator
 from openpilot.selfdrive.ui.mici.onroad.model_renderer import ModelRenderer
+from openpilot.selfdrive.ui.onroad.brake_light_overlay import BrakeLightOverlay
 from openpilot.selfdrive.ui.mici.onroad.navigation import NavigationPanel, PANEL_WIDTH
-from openpilot.selfdrive.ui.mici.onroad.confidence_ball import ConfidenceBall
+from openpilot.selfdrive.ui.mici.onroad.lead_brake_panel import LeadBrakePanel
 from openpilot.selfdrive.ui.mici.onroad.cameraview import CameraView
 from openpilot.system.ui.lib.application import FontWeight, gui_app, MousePos, MouseEvent, TextAlignment, TextAlignmentVertical
 from openpilot.system.ui.widgets.label import UnifiedLabel
@@ -172,11 +173,12 @@ class AugmentedRoadView(CameraView):
 
     self._navigation = NavigationPanel()
     self._model_renderer = ModelRenderer()
+    self._brake_light_overlay = BrakeLightOverlay()
     self._hud_renderer = HudRenderer()
     self._long_indicator = LongIndicator()
     self._alert_renderer = AlertRenderer()
     self._driver_state_renderer = DriverStateRenderer()
-    self._confidence_ball = ConfidenceBall()
+    self._lead_brake_panel = LeadBrakePanel()
     self._offroad_label = UnifiedLabel("start the car to\nuse openpilot", 54, FontWeight.DISPLAY,
                                        text_color=rl.Color(255, 255, 255, int(255 * 0.9)),
                                        alignment=TextAlignment.CENTER,
@@ -207,6 +209,7 @@ class AugmentedRoadView(CameraView):
   def _render(self, _):
     # Draw text if not onroad
     if not ui_state.started:
+      self._brake_light_overlay.clear()
       rl.draw_rectangle_rec(self.rect, rl.BLACK)
       self._offroad_label.render(self._rect)
       return
@@ -223,7 +226,7 @@ class AugmentedRoadView(CameraView):
     self._content_rect = rl.Rectangle(
       self.rect.x,
       self.rect.y,
-      self.rect.width - (PANEL_WIDTH if show_navigation else SIDE_PANEL_WIDTH),
+      self.rect.width - SIDE_PANEL_WIDTH - (PANEL_WIDTH if show_navigation else 0),
       self.rect.height,
     )
 
@@ -241,6 +244,13 @@ class AugmentedRoadView(CameraView):
 
     # Draw all UI overlays
     self._model_renderer.render(self._content_rect)
+    if self.device_camera is not None:
+      wide = self.stream_type == WIDE_CAM
+      camera = self.device_camera.wide_road if wide else self.device_camera.narrow_road
+      calibration = self.view_from_wide_calib if wide else self.view_from_calib
+      self._brake_light_overlay.render(self, self._content_rect, ui_state.sm, camera, calibration, self.stream_type)
+    else:
+      self._brake_light_overlay.clear()
 
     # Fade out bottom of overlays for looks
     rl.draw_texture_ex(self._fade_texture, rl.Vector2(self._content_rect.x, self._content_rect.y), 0.0, 1.0, rl.WHITE)
@@ -270,12 +280,14 @@ class AugmentedRoadView(CameraView):
     # Use self._content_rect for positioning within camera bounds
     if show_navigation:
       self._navigation.render(rl.Rectangle(self._content_rect.x + self._content_rect.width, self.rect.y, PANEL_WIDTH, self.rect.height))
-    else:
-      self._confidence_ball.render(self.rect)
+    self._hud_renderer.draw_current_speed_sidebar(self.rect)
+    self._lead_brake_panel.render(self.rect, ui_state.sm, self._brake_light_overlay)
 
     self._bookmark_icon.render(self.rect)
 
   def close(self):
+    if hasattr(self, "_brake_light_overlay"):
+      self._brake_light_overlay.close()
     self._navigation.close()
     super().close()
 
