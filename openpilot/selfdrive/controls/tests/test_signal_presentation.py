@@ -82,13 +82,29 @@ class TestSignalPresentation(unittest.TestCase):
     self.assertEqual(signal_lamps(display(source='EST')), (0, 0, 0))
 
   def test_unknown_direction_keeps_both_labelled_live_times(self):
-    self.assertEqual(countdown_rows(display()), [('S', 2, '62'), ('L', 1, '66')])
+    self.assertEqual(countdown_rows(display()), [('S', 2, '61'), ('L', 1, '65')])
 
   def test_selected_left_uses_left_time(self):
-    self.assertEqual(countdown_rows(display(movement='left')), [('', 1, '66')])
+    self.assertEqual(countdown_rows(display(movement='left')), [('', 1, '65')])
 
   def test_observed_uses_straight_time(self):
-    self.assertEqual(countdown_rows(display(movement='observed')), [('', 2, '62')])
+    self.assertEqual(countdown_rows(display(movement='observed')), [('', 2, '61')])
+
+  def test_half_second_advance_changes_only_tmap_text(self):
+    value=display(movement='straight',straightState=1,straightRemain=10.4)
+    original=vars(value).copy()
+    self.assertEqual(countdown_rows(value),[('',1,'10')])
+    self.assertEqual(signal_lamps(value),(1,0,0))
+    self.assertEqual(vars(value),original)
+    value.source='VISION'
+    self.assertEqual(countdown_rows(value),[('',1,'11')])
+
+  def test_advanced_zero_does_not_change_lamp_state_or_invent_missing_time(self):
+    value=display(movement='straight',straightState=1,straightRemain=.3)
+    self.assertEqual(countdown_rows(value),[('',1,'0')])
+    self.assertEqual(signal_lamps(value),(1,0,0))
+    value.straightRemain=0.
+    self.assertEqual(countdown_rows(value),[('',1,'--')])
 
   def test_three_digit_values_and_missing_timer(self):
     self.assertEqual(countdown_rows(display(leftRemain=100., straightRemain=0.)),

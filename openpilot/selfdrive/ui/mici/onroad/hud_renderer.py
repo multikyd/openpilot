@@ -459,20 +459,19 @@ class HudRenderer(Widget):
       size *= min(1., ((w-8) if available is None else available*scale)/max(1., measured.x))
       measured = measure_text_cached(self._font_bold, value, size)
       rl.draw_text_ex(self._font_bold, value, rl.Vector2(cx-measured.x/2, y+top*scale-(measured.y/2 if centered else 0)), size, 0, color)
-    text(notice.kind, 0, 14, rl.WHITE)
     target = round(notice.speed*(1 if s.is_metric else KM_TO_MILE))
     if notice.kind == 'CAM':
-      radius = 23*scale
-      rl.draw_circle(int(cx), int(y+42*scale), radius, rl.RED)
-      rl.draw_circle(int(cx), int(y+42*scale), radius*.79, rl.WHITE)
-      text(str(target), 42, 32, rl.BLACK, available=38, centered=True)
+      radius = 29*scale
+      rl.draw_circle(int(cx), int(y+30*scale), radius, rl.RED)
+      rl.draw_circle(int(cx), int(y+30*scale), radius*.79, rl.WHITE)
+      text(str(target), 30, 40, rl.BLACK, available=42, centered=True)
     else:
       image = self.img_speed_bump
       rl.draw_texture_pro(image, rl.Rectangle(0,0,image.width,image.height),
-                          rl.Rectangle(cx-20*scale,y+19*scale,40*scale,22*scale), rl.Vector2(0,0), 0, rl.WHITE)
-      text(str(target), 35, 28, rl.Color(255,220,70,255))
+                          rl.Rectangle(cx-24*scale,y,48*scale,24*scale), rl.Vector2(0,0), 0, rl.WHITE)
+      text(str(target), 22, 36, rl.Color(255,220,70,255))
     distance = f'{notice.distance:.0f}m' if notice.distance < 1000 else f'{notice.distance/1000:.1f}km'
-    text(distance, 64, 20, rl.WHITE)
+    text(distance, 60, 24, rl.WHITE)
 
   def _draw_car_stat(self, rect: rl.Rectangle) -> None:
     """Draw KisaPilot-style CAR Status."""

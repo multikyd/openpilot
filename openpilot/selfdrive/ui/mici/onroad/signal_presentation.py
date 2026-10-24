@@ -1,6 +1,10 @@
 """Direction-specific signal lamps and timers, independent of graphics."""
 import math
 
+# User-selected display lead, in addition to measured phone transport age.
+# Never applied to signal observations, learning, control or lamp colours.
+TMAP_COUNTDOWN_ADVANCE = .5
+
 
 def signal_panel_visible(display):
   """Keep learning/model observations out of the live signal panel."""
@@ -16,8 +20,8 @@ def signal_panel_visible(display):
   return False
 
 
-def timer_text(remain):
-  return str(math.ceil(remain)) if math.isfinite(remain) and remain > 0 else '--'
+def timer_text(remain, advance=0.):
+  return str(math.ceil(max(0., remain-advance))) if math.isfinite(remain) and remain > 0 else '--'
 
 
 def signal_lamps(display):
@@ -33,12 +37,13 @@ def signal_lamps(display):
 def countdown_rows(display):
   """Unknown movement retains labelled live timers instead of discarding them."""
   directions = (('straight', 'S'), ('left', 'L'), ('right', 'R'))
+  advance = TMAP_COUNTDOWN_ADVANCE if display.source == 'TMAP' else 0.
   selected = 'straight' if display.movement == 'observed' else display.movement
   if selected in ('straight', 'left', 'right'):
-    return [('', getattr(display, selected+'State', 0), timer_text(getattr(display, selected+'Remain', 0.)))]
+    return [('', getattr(display, selected+'State', 0), timer_text(getattr(display, selected+'Remain', 0.), advance))]
   if display.source in ('TMAP', 'VISION'):
     rows = [(label, getattr(display, direction+'State', 0),
-             timer_text(getattr(display, direction+'Remain', 0.)))
+             timer_text(getattr(display, direction+'Remain', 0.), advance))
             for direction, label in directions if getattr(display, direction+'State', 0) in (1, 2, 3)]
     if rows:
       return rows
