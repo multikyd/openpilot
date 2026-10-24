@@ -21,6 +21,81 @@ def scene(on=False, factor=1., left_only=False):
   return np.clip(im*factor,0,255).astype(np.uint8)
 
 
+class CenterTransitionTest(unittest.TestCase):
+  def run_frames(self, state, image, start, count):
+    for i in range(count):
+      result = state.update(image, start+i*.1)
+    return result
+
+  @staticmethod
+  def center_on():
+    image = scene()
+    image[20:25,68:92] = (240,70,30)
+    return image
+
+  def test_center_onset_does_not_require_side_brightness_change_or_pair_fit(self):
+    state = core.AdaptiveLamps()
+    # Side lamps exist, but their pair fit can be ambiguous at close range.
+    with patch.object(core, 'locate_lamps', return_value=()):
+      self.run_frames(state, scene(), 0., 6)
+      result = self.run_frames(state, self.center_on(), .6, 3)
+    self.assertEqual((result.state, result.reason), ('ON', 'CENTER_LAMP_RISE'))
+    self.assertEqual(len(result.lamps), 1)
+
+  def test_center_single_flash_is_not_confirmed(self):
+    state = core.AdaptiveLamps()
+    self.run_frames(state, scene(), 0., 6)
+    self.assertNotEqual(state.update(self.center_on(), .6).state, 'ON')
+    self.assertNotEqual(state.update(scene(), .7).state, 'ON')
+
+  def test_center_loss_immediately_hides_on(self):
+    state = core.AdaptiveLamps()
+    self.run_frames(state, scene(), 0., 6)
+    self.assertEqual(self.run_frames(state, self.center_on(), .6, 3).state, 'ON')
+    self.assertNotEqual(state.update(scene(), .9).state, 'ON')
+
+  def test_initial_center_red_is_not_an_onset(self):
+    result = self.run_frames(core.AdaptiveLamps(), self.center_on(), 0., 12)
+    self.assertNotEqual(result.state, 'ON')
+
+  def test_global_brightness_change_does_not_confirm_center(self):
+    for before, after in ((1., 1.1), (.3, 1.)):
+      tracker = core.CenterLampTransitions()
+      image = self.center_on()
+      for i in range(6):
+        rgb = np.clip(image.astype(float)*before,0,255).astype(np.uint8)
+        tracker.update(rgb,i*.1,core.red_components(rgb))
+      for i in range(6,10):
+        rgb = np.clip(image.astype(float)*after,0,255).astype(np.uint8)
+        self.assertIsNone(tracker.update(rgb,i*.1,core.red_components(rgb)))
+
+  def test_small_distant_red_dot_and_wide_red_strip_are_rejected(self):
+    for xs in (slice(75,80), slice(5,155)):
+      tracker = core.CenterLampTransitions()
+      for i in range(6):
+        rgb = scene()
+        tracker.update(rgb,i*.1,core.red_components(rgb))
+      rgb = scene();rgb[20:24,xs] = (240,70,30)
+      for i in range(6,10):
+        self.assertIsNone(tracker.update(rgb,i*.1,core.red_components(rgb)))
+
+  def test_center_without_lower_vehicle_lamp_evidence_is_not_initialized(self):
+    tracker = core.CenterLampTransitions()
+    rgb = np.full((140,160,3),110,np.uint8)
+    for i in range(6):tracker.update(rgb,i*.1,core.red_components(rgb))
+    rgb[20:25,68:92] = (240,70,30)
+    for i in range(6,10):
+      self.assertIsNone(tracker.update(rgb,i*.1,core.red_components(rgb)))
+
+  def test_target_reset_and_time_gap_clear_center_evidence(self):
+    for reset in (True, False):
+      state = core.AdaptiveLamps()
+      self.run_frames(state, scene(), 0., 6)
+      self.assertEqual(self.run_frames(state, self.center_on(), .6, 3).state, 'ON')
+      if reset:state.reset()
+      self.assertNotEqual(state.update(self.center_on(), 2.).state, 'ON')
+
+
 class AdaptiveTest(unittest.TestCase):
   def advance(self,state,image,start,n):
     result=None

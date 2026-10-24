@@ -1,7 +1,8 @@
 """Experimental leadOne-gated lamp observation. Never consumed by vehicle control.
 
 No trained vehicle/lamp detector: projection is a search region, not a vehicle box.
-A causal per-target baseline needs an observed brightness transition; startup is UNKNOWN.
+Causal per-target observers require a brightness/colour transition; startup is UNKNOWN.
+Centre-lamp changes can confirm ON independently of a side-lamp brightness rise.
 """
 from collections import deque
 from dataclasses import dataclass
@@ -115,15 +116,18 @@ def red_components(rgb):
   out = []
   for i in range(len(parents)):
     if parents[i] == i and 2 <= counts[i] <= h*w*.12:
-      x,y,x1,y1 = cores[i] if cores[i] is not None else bounds[i]
+      core = cores[i]
+      # A few saturated pixels must not collapse a long LED strip to a dot.
+      use_core = core is not None and core[2]-core[0]+1 >= .5*(bounds[i][2]-bounds[i][0]+1)
+      x,y,x1,y1 = core if use_core else bounds[i]
       out.append((x,y,x1-x+1,y1-y+1))
   return sorted(out,key=lambda a:a[2]*a[3],reverse=True)[:24] if len(out) <= 128 else []
 
 
-def locate_lamps(rgb, previous_geometry=None):
+def locate_lamps(rgb, previous_geometry=None, components=None):
   """Red-region pair heuristic within lead search ROI; ambiguous pairs are rejected."""
   h, w = rgb.shape[:2]
-  components = red_components(rgb)
+  components = red_components(rgb) if components is None else components
   center = lambda a: (a[0]+a[2]/2, a[1]+a[3]/2)
   pairs = []
   for a in components:
@@ -187,11 +191,109 @@ def lamp_intensities(rgb, lamps):
 
 
 
+class CenterLampTransitions:
+  """Causal upper-centre lamp onset within the current lead's search region.
+
+  The owner resets this observer on lead/camera changes. A red component alone
+  cannot confirm ON: require lower lamp evidence, an exposure-compensated rise
+  and three matching observations. Absence never establishes brake OFF.
+  """
+  # Conservative thresholds calibrated on separate test30 stop sequences.
+  CHROMA_RISE = 45.
+  RAW_RISE = 20.
+  MIN_RATIO = .6
+  CONFIRM_FRAMES = 3
+
+  def __init__(self):
+    self.history = deque(maxlen=3)  # Three bounded ROI copies, never full frames.
+    self.geometry = None
+    self.reference = None
+    self.count = 0
+    self.last_time = None
+
+  def clear_candidate(self):
+    self.geometry = self.reference = None
+    self.count = 0
+
+  @staticmethod
+  def stats(rgb, normalized, background):
+    h, w = rgb.shape[:2]
+    x, y, bw, bh = normalized
+    x0, y0 = max(0, int(x*w)), max(0, int(y*h))
+    x1 = min(w, max(x0+1, int((x+bw)*w)))
+    y1 = min(h, max(y0+1, int((y+bh)*h)))
+    patch = rgb[y0:y1, x0:x1].astype(float)
+    if not patch.size:
+      return None
+    excess = patch[:, :, 0]-np.maximum(patch[:, :, 1], patch[:, :, 2])
+    raw = float(np.percentile(patch[:, :, 0], 80))
+    chroma = float(np.percentile(excess, 80))
+    return np.array([raw, chroma, max(25., background)])
+
+  def update(self, rgb, now, components):
+    if self.last_time is not None and (now <= self.last_time or now-self.last_time > .4):
+      self.__init__()
+    self.last_time = now
+    h, w = rgb.shape[:2]
+    background = float(np.median(rgb[:, :, 0]))
+    candidates = []
+    for box in components:
+      x, y, bw, bh = box
+      cx, cy = x+bw/2, y+bh/2
+      if not (.30*w < cx < .70*w and .01*h < cy < .50*h and
+              max(3, .07*w) <= bw < .35*w and bh < .13*h and bw >= 1.2*bh):
+        continue
+      # Current lower side evidence ties this upper strip to the lead's rear.
+      lower = [b for b in components if b[2]*b[3] >= 3 and .05*h < b[1]+b[3]/2-cy < .55*h]
+      left = any(b[0]+b[2]/2 < cx-.12*w for b in lower)
+      right = any(b[0]+b[2]/2 > cx+.12*w for b in lower)
+      norm = np.array([x/w, y/h, bw/w, bh/h])
+      matched = self.geometry is not None and np.max(np.abs(norm[:2]-self.geometry[:2])) < .08
+      if not (left and right) and not (matched and self.count >= self.CONFIRM_FRAMES):
+        continue
+      current = self.stats(rgb, norm, background)
+      if current is None or current[0] < 130 or current[1] < 45:
+        continue
+      reference = self.reference if matched else None
+      if reference is None:
+        if len(self.history) < 3:
+          continue
+        reference = np.median([self.stats(p, norm, bg) for p, bg in self.history], axis=0)
+      exposure = current[2]/reference[2]
+      if not .5 <= exposure <= 2.:
+        continue  # A major exposure jump cannot establish a lamp onset.
+      delta = current-reference*exposure
+      ratio = delta[1]/max(25., reference[1]*exposure)
+      threshold = .5 if matched and self.count >= self.CONFIRM_FRAMES else 1.
+      if (delta[1] >= self.CHROMA_RISE*threshold and delta[0] >= self.RAW_RISE*threshold and
+          ratio >= self.MIN_RATIO*threshold):
+        candidates.append((float(delta[1]), box, norm, reference, matched))
+    result = None
+    if candidates:
+      candidates.sort(key=lambda candidate: candidate[0], reverse=True)
+      if len(candidates) == 1 or candidates[0][0] > 1.4*candidates[1][0]:
+        _, box, norm, reference, matched = candidates[0]
+        self.count = min(self.CONFIRM_FRAMES, self.count+1) if matched else 1
+        self.geometry, self.reference = norm, reference
+        if self.count >= self.CONFIRM_FRAMES:
+          result = box
+      else:
+        self.clear_candidate()
+    else:
+      self.clear_candidate()
+    self.history.append((rgb.copy(), background))
+    return result
+
+
 class AdaptiveLamps:
   def __init__(self):
     self.reset()
 
   def reset(self):
+    self.center = CenterLampTransitions()
+    self._reset_relative()
+
+  def _reset_relative(self):
     self.history = deque(maxlen=40)
     self.raw_history = deque(maxlen=40)
     self.prev_geometry = None
@@ -204,13 +306,23 @@ class AdaptiveLamps:
     self.reference_confirmed = False
 
   def update(self, rgb, now):
+    # Reuse the bounded component extraction for both observers.
+    components = red_components(rgb)
+    relative = self._update_relative(rgb, now, components)
+    middle = self.center.update(rgb, now, components)
+    if middle is not None:
+      lamps = relative.lamps[:2]+(middle,) if len(relative.lamps) >= 2 else (middle,)
+      return Observation("ON", "CENTER_LAMP_RISE", lamps, relative.gains)
+    return relative
+
+  def _update_relative(self, rgb, now, components):
     if self.last_time is not None and (now <= self.last_time or now-self.last_time > .6):
-      self.reset()
+      self._reset_relative()
     self.last_time = now
     if self.last_valid_time is not None and now-self.last_valid_time > .4:
-      self.reset()
+      self._reset_relative()
       self.last_time = now
-    lamps = locate_lamps(rgb, self.prev_geometry)
+    lamps = locate_lamps(rgb, self.prev_geometry, components)
     if not lamps:
       # Hide ON immediately, but preserve the same target's reference over a brief
       # missed observation. No old lamp locations are returned or drawn.
@@ -220,12 +332,12 @@ class AdaptiveLamps:
     h, w = rgb.shape[:2]
     geometry = np.array([((x+bw/2)/w, (y+bh/2)/h) for x, y, bw, bh in lamps])
     if self.prev_geometry is not None and np.max(np.abs(geometry[:2]-self.prev_geometry[:2])) > .12:
-      self.reset()
+      self._reset_relative()
     self.prev_geometry = geometry
     self.last_time = self.last_valid_time = now
     scores = lamp_scores(rgb, lamps)
     if scores is None:
-      self.reset()
+      self._reset_relative()
       return Observation(reason="LOW_VISIBILITY", lamps=lamps)
     # Compare side lamps even if center lamp is not visible at all times.
     sides = np.array([scores[0], scores[1], scores[2] if len(scores) > 2 else 0.])
