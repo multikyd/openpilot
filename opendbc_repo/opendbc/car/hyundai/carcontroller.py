@@ -8,6 +8,8 @@ from opendbc.car.hyundai.carstate import CarState
 from opendbc.car.hyundai.hyundaicanfd import CanBus
 from opendbc.car.hyundai.values import HyundaiFlags, Buttons, CarControllerParams, CAR, CAN_GEARS
 from opendbc.car.interfaces import CarControllerBase
+from opendbc.car.hyundai.steering_diagnostics import SteeringDiagnostics
+from openpilot.common.swaglog import cloudlog
 
 VisualAlert = structs.CarControl.HUDControl.VisualAlert
 LongCtrlState = structs.CarControl.Actuators.LongControlState
@@ -113,6 +115,7 @@ class CarController(CarControllerBase):
     self.params = CarControllerParams(CP)
     self.packer = CANPacker(dbc_names[Bus.pt])
     self.angle_limit_counter = 0
+    self.steering_diagnostics = SteeringDiagnostics()
 
     self.accel_last = 0
     self.apply_torque_last = 0
@@ -494,6 +497,30 @@ class CarController(CarControllerBase):
     new_actuators.accel = accel
     new_actuators.e2eStandstill = self.e2e_standstill
     new_actuators.kisaLog1 = self.kisa_log1
+
+    # Read-only diagnostics: these values never feed back into control or CAN packing.
+    if angle_control and self.steering_diagnostics is not None:
+      try:
+        diagnostic_events = self.steering_diagnostics.update(
+          now_nanos=now_nanos,
+          requested_deg=actuators.steeringAngleDeg, applied_deg=apply_angle,
+          maximum_deg=self.params.ANGLE_LIMITS.STEER_ANGLE_MAX,
+          speed_mps=CS.out.vEgo, actual_deg=CS.out.steeringAngleDeg,
+          driver_torque=CS.out.steeringTorque, eps_torque=CS.out.steeringTorqueEps,
+          driver_pressed=CS.out.steeringPressed,
+          lat_active=CC.latActive, request_active=apply_steer_req,
+          temporary_fault=CS.out.steerFaultTemporary, permanent_fault=CS.out.steerFaultPermanent,
+          can_valid=CS.out.canValid, can_timeout=CS.out.canTimeout,
+          mdps_original=getattr(CS, 'mdps_info', {}), can_sends=can_sends)
+        for diagnostic_event in diagnostic_events:
+          cloudlog.event('hyundai_steering_diagnostic', **diagnostic_event)
+      except Exception:
+        # Disable telemetry on failure; never modify, cancel or replace commands.
+        self.steering_diagnostics = None
+        try:
+          cloudlog.event('hyundai_steering_diagnostic_disabled', reason='telemetry_exception')
+        except Exception:
+          pass
 
     self.frame += 1
     return new_actuators, can_sends
