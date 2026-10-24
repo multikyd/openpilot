@@ -79,6 +79,8 @@ class LongitudinalPlanner:
     self.mpc = LongitudinalMpc(dt=dt)
     self.cutin_anticipation = CutInAnticipation()
     self.lead_gap_reserve = LeadGapReserve()
+    self._assist_log_state = None
+    self._assist_log_time = -100.
     self.fcw = False
     self.dt = dt
     self.allow_throttle = True
@@ -125,6 +127,24 @@ class LongitudinalPlanner:
                                           curvature if curvature is not None else 0.,
                                           sm.logMonoTime['radarState']*1e-9, now, enabled,
                                           current_accel=max(cs.aEgo, self.a_desired))
+
+  def log_follow_assistance(self, now, lead, gap_cap, before_gap, final_accel):
+    cut = self.cutin_anticipation
+    state = (cut.stage, cut.track_id, self.lead_gap_reserve.reason,
+             cut.limit is not None, gap_cap is not None)
+    active = cut.limit is not None or gap_cap is not None
+    if not active and self._assist_log_state is None:
+      return
+    changed = state != self._assist_log_state
+    elapsed = now-self._assist_log_time
+    if elapsed >= .5 and (changed or active and elapsed >= 1.):
+      cloudlog.event('longitudinal_follow_assist', cutin_stage=cut.stage, cutin_track=cut.track_id,
+                     cutin_cap=cut.limit, gap_state=self.lead_gap_reserve.reason, gap_cap=gap_cap,
+                     before_gap_a=float(before_gap), final_a=float(final_accel),
+                     lead_id=int(lead.radarTrackId), distance=float(lead.dRel), v_rel=float(lead.vRel),
+                     desired_distance=float(self.mpc.desired_distance), t_follow=float(self.mpc.t_follow))
+      self._assist_log_time = now
+      self._assist_log_state = state if active else None
 
   @staticmethod
   def parse_model(model_msg):
@@ -299,7 +319,9 @@ class LongitudinalPlanner:
                sm['selfdriveState'].enabled and not self.output_should_stop and
                not (cs.gasPressed or cs.brakePressed) and carrot.desireState <= .1 and
                carrot.xState not in [XState.e2eStop, XState.e2eStopped] and fresh and
-               sm.all_checks(['carState', 'radarState', 'modelV2', 'controlsState', 'selfdriveState'])))
+               sm.all_checks(['carState', 'radarState', 'modelV2', 'controlsState', 'selfdriveState'])),
+      desired_distance=self.mpc.desired_distance, planned_accel=output_a_target)
+    before_gap_a = output_a_target
     output_a_target, output_v_target_now, output_j_target = apply_lead_gap_cap(
       output_a_target, output_v_target_now, self.j_desired_trajectory[0], gap_cap,
       cs.vEgo, action_t, self.output_a_target, self.dt)
@@ -308,6 +330,7 @@ class LongitudinalPlanner:
     output_a_target, output_v_target_now, output_j_target = apply_lead_gap_cap(
       output_a_target, output_v_target_now, output_j_target, stop_cap,
       cs.vEgo, action_t, self.output_a_target, self.dt)
+    self.log_follow_assistance(now, sm['radarState'].leadOne, gap_cap, before_gap_a, output_a_target)
     self.output_a_target = output_a_target
     self.output_v_target_now = output_v_target_now
     self.output_j_target_now = output_j_target

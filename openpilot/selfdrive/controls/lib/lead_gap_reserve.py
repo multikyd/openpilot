@@ -2,7 +2,7 @@ import math
 
 
 class LeadGapReserve:
-  """A bounded extra deceleration ceiling, never a brake-release override."""
+  """Extra comfort cap; hand back to MPC smoothly without overriding its brakes."""
 
   def __init__(self):
     self.reset()
@@ -13,8 +13,12 @@ class LeadGapReserve:
     self.distance = self.relative_speed = 0.
     self.confirm = 0.
     self.cap = 0.
+    self.recovery_confirm = 0.
+    self.releasing = False
+    self.reason = 'off'
 
-  def update(self, lead, speed, follow, stop_distance, stamp, now, enabled):
+  def update(self, lead, speed, follow, stop_distance, stamp, now, enabled,
+             desired_distance=None, planned_accel=None):
     values = (speed, follow, stop_distance, stamp, now, lead.dRel, lead.vRel,
               lead.vLead, lead.aLeadK, lead.modelProb, lead.dPath)
     if (not enabled or not all(math.isfinite(v) for v in values) or
@@ -27,7 +31,7 @@ class LeadGapReserve:
       return None
     identity = ('radar', lead.radarTrackId) if lead.radar else ('vision',)
     if self.stamp is not None and stamp == self.stamp:
-      return self.cap if self.cap < 0. else None
+      return self.cap if self.cap < 0. or self.releasing else None
     dt = stamp-self.stamp if self.stamp is not None else 0.
     continuous = (self.identity == identity and .01 <= dt <= .2 and
                   abs(lead.dRel-self.distance-.5*(lead.vRel+self.relative_speed)*dt) <= 1.5)
@@ -35,7 +39,8 @@ class LeadGapReserve:
     self.distance, self.relative_speed = lead.dRel, lead.vRel
     if not continuous:
       # A new/cut-in target must establish its own history. MPC remains in charge.
-      self.confirm, self.cap = 0., 0.
+      self.confirm, self.cap, self.recovery_confirm = 0., 0., 0.
+      self.releasing, self.reason = False, 'confirming'
       return None
     self.confirm = min(1., self.confirm+dt)
     if self.confirm < .5:
@@ -52,12 +57,33 @@ class LeadGapReserve:
     if deficit > 1. and lead.vRel < .5:
       # Restore a moving time gap even when lead speed temporarily equals ours.
       target = min(target, -min(1.6, (closing+deficit/2.5)/1.4))
-    # Extra comfort action builds and releases gently. Stronger MPC braking wins.
-    rate = .6 if target < self.cap else .35
+    # Release only with a stable opening gap AND room according to the current
+    # MPC lead-distance objective. Relative speed alone is not sufficient.
+    room_confirmed = (desired_distance is not None and planned_accel is not None and
+                      math.isfinite(desired_distance) and math.isfinite(planned_accel) and
+                      lead.vRel >= 1. and lead.aLeadK >= -.2 and
+                      lead.dRel >= max(stop_distance+3., .5*speed) and
+                      lead.dRel >= max(0., desired_distance)+max(1., .1*speed))
+    self.recovery_confirm = self.recovery_confirm+dt if room_confirmed else 0.
+    recovering = self.recovery_confirm >= .25
+    if not recovering:
+      self.releasing = False
+      self.cap = min(0., self.cap)
+    elif self.cap < 0.:
+      self.releasing = True
+    if self.releasing:
+      # Continue the cap through zero until it meets the requested acceleration,
+      # avoiding an abrupt jump from the last negative cap to full acceleration.
+      target = max(0., planned_accel)
+    self.reason = 'recover' if self.releasing else 'reserve' if target < 0. else 'release' if self.cap < 0. else 'off'
+    # Existing stronger MPC braking always wins in apply_lead_gap_cap.
+    rate = .6 if target < self.cap else .9 if self.releasing else .35
     self.cap += max(-rate*dt, min(rate*dt, target-self.cap))
+    if self.releasing and self.cap >= target:
+      self.cap, self.releasing, self.reason = 0., False, 'off'
     if abs(self.cap) < 1e-5:
       self.cap = 0.
-    return self.cap if self.cap < 0. else None
+    return self.cap if self.cap < 0. or self.releasing else None
 
 
 def apply_lead_gap_cap(accel, velocity, jerk, cap, speed, action_time, previous_accel, dt):

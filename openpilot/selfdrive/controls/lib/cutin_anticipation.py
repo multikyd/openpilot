@@ -94,10 +94,21 @@ class CutInAnticipation:
       span = sample_time-h[0][0]
       inward = -math.copysign(1., offset)*lead.vLat
       observed = (abs(h[0][1])-abs(offset))/span if span > 0. else 0.
-      if span < .35 or inward < .15 or observed < .08 or abs(h[0][1])-abs(offset) < .04:
+      confirmed = span >= .35 and inward >= .15 and observed >= .08 and abs(h[0][1])-abs(offset) >= .04
+      recent = [p for p in h if sample_time-p[0] <= .3+1e-6]
+      recent_span = sample_time-recent[0][0]
+      movement = abs(recent[0][1])-abs(offset)
+      recent_inward = movement/recent_span if recent_span > 0. else 0.
+      # A short, strong, corroborated inward motion may suppress acceleration
+      # early. It cannot request braking without the normal confirmation.
+      fast_prepare = (span >= .2-1e-6 and len(recent) >= 5 and recent_span >= .2-1e-6 and
+                      lead.dRel < max(12., speed*.9) and lead.vRel <= 1. and
+                      min(probs) >= .8 and max(stds) <= .2 and
+                      inward >= .35 and recent_inward >= .18 and movement >= .06)
+      if not (confirmed or fast_prepare):
         continue
       # Both measured transverse motion and observed path approach must agree.
-      inward = min(inward, observed+.1)
+      inward = min(inward, max(observed, recent_inward if fast_prepare else observed)+.1)
       # Approximate combined half-width of two passenger vehicles, with margin.
       overlap_time = max(0., (abs(offset)-2.0)/inward)
       close_side = lead.dRel < max(8., speed*.5)
@@ -106,9 +117,9 @@ class CutInAnticipation:
       entry_x = lead.dRel+lead.vRel*min(horizon, overlap_time)
       if overlap_time > prepare_horizon or entry_x < -1. or entry_x > room+max(2., speed*.2):
         continue
-      candidate_target, candidate_stage = min(normal_accel, .3), 'yield'
+      candidate_target, candidate_stage = (min(normal_accel, 0.), 'prepare') if fast_prepare else (min(normal_accel, .3), 'yield')
       predicted_offset = lead.yRel+lead.vLat*horizon+center[1]
-      if (span >= .6 and overlap_time <= horizon and abs(predicted_offset) < 2.0 and
+      if (confirmed and span >= .6 and overlap_time <= horizon and abs(predicted_offset) < 2.0 and
           lead.vRel <= .5 and entry_x < room):
         severity = min(1., max(0., (room-entry_x)/max(room, 1.)))
         candidate_target, candidate_stage = -.15-.15*severity, 'coast'

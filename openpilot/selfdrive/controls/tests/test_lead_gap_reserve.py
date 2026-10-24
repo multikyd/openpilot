@@ -97,6 +97,56 @@ class TestLeadGapReserve(unittest.TestCase):
     self.lead.dRel=float('nan')
     self.assertIsNone(self.tick(80))
 
+  def recovery_tick(self, desired=2., planned=.7, relative=2., lead_accel=0.):
+    self.time += .05
+    self.lead.vRel, self.lead.vLead, self.lead.aLeadK = relative, 10.+relative, lead_accel
+    self.lead.dRel += relative*.05
+    return self.helper.update(self.lead, 10., .9, 3.6, self.time, self.time, True,
+                              desired_distance=desired, planned_accel=planned)
+
+  def test_opening_safe_gap_releases_faster_and_hands_over_smoothly(self):
+    self.tick(80)
+    previous = self.helper.cap
+    released_positive = False
+    for _ in range(100):
+      cap = self.recovery_tick()
+      output = .7 if cap is None else min(.7, cap)
+      self.assertLessEqual(output-previous, .9*.05+1e-8)
+      released_positive |= cap is not None and cap > 0.
+      previous = output
+    self.assertTrue(released_positive)
+    self.assertIsNone(cap)
+
+  def test_opening_but_insufficient_mpc_room_keeps_normal_release(self):
+    self.tick(80);previous = self.helper.cap
+    for _ in range(25):
+      self.recovery_tick(desired=50.)
+      self.assertLessEqual(self.helper.cap-previous, .35*.05+1e-8)
+      self.assertFalse(self.helper.releasing)
+      previous = self.helper.cap
+
+  def test_decelerating_lead_does_not_get_fast_release(self):
+    self.tick(80);previous = self.helper.cap
+    for _ in range(25):
+      self.recovery_tick(lead_accel=-.5)
+      self.assertLessEqual(self.helper.cap-previous, .35*.05+1e-8)
+      self.assertFalse(self.helper.releasing)
+      previous = self.helper.cap
+
+  def test_recovery_never_overrides_stronger_mpc_braking(self):
+    self.tick(80)
+    for _ in range(60):
+      cap = self.recovery_tick(planned=-2.)
+      self.assertEqual(apply_lead_gap_cap(-2., 5., -1., cap, 10., .2, -2., .05), (-2., 5., -1.))
+
+  def test_no_recovery_from_invalid_plan_or_repeated_observation(self):
+    self.tick(80)
+    for _ in range(25):self.recovery_tick(desired=float('nan'))
+    self.assertFalse(self.helper.releasing)
+    before = self.helper.recovery_confirm
+    self.helper.update(self.lead,10.,.9,3.6,self.time,self.time,True,desired_distance=0.,planned_accel=.7)
+    self.assertEqual(self.helper.recovery_confirm,before)
+
 
 if __name__ == '__main__':
   unittest.main()

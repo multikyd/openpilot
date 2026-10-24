@@ -139,6 +139,29 @@ class TestCutInAnticipation(unittest.TestCase):
     self.assertIsNone(helper.update(NS(leadsLeft=[], leadsRight=[]), fixture(), 20., 1.6, 0., 1.5, 1.5, False))
     self.assertFalse(helper.history)
 
+  def test_close_strong_inward_motion_prepares_before_normal_confirmation(self):
+    helper, trace = self.simulate(speed=20.,start=-2.6,lateral=.6,relative=-1.,distance=10.,duration=.3)
+    self.assertIsNotNone(trace[-1])
+    self.assertEqual(helper.stage,'prepare')
+    self.assertGreaterEqual(trace[-1],0.)
+
+  def test_distant_or_uncertain_candidate_has_no_short_confirmation(self):
+    for options in (dict(distance=30.),dict(confidence=.75)):
+      _, trace = self.simulate(speed=20.,start=-2.6,lateral=.6,relative=-1.,duration=.3,**options)
+      self.assertTrue(all(x is None for x in trace))
+
+  def test_recent_inward_reversal_prepares_without_premature_braking(self):
+    helper,model = CutInAnticipation(),fixture()
+    for i in range(20):
+      t=i*.05;moving=max(0.,t-.65)
+      y=-2.3-.4*min(t,.65)+.6*moving
+      lead=NS(present=True,radar=True,radarTrackId=201,dRel=10.,yRel=y,dPath=y,
+              vRel=0.,vLead=20.,vLat=.6 if moving>0 else -.4)
+      cap=helper.update(NS(leadsLeft=[],leadsRight=[lead]),model,20.,1.6,0.,t,t,True,current_accel=.1)
+    self.assertEqual(helper.stage,'prepare')
+    self.assertIsNotNone(cap)
+    self.assertGreaterEqual(cap,0.)
+
 
 if __name__ == '__main__':
   unittest.main()
