@@ -58,6 +58,39 @@ class TestAngleGuard(unittest.TestCase):
     self.assertTrue(out.active)
     self.assertEqual(out.torque_scale, 1.)
 
+  def test_moderate_high_angle_lag_keeps_steering_authority(self):
+    # Ordinary lag must not create torque reduction -> more lag -> handover.
+    for sign in (-1, 1):
+      for candidate, actual in ((175., 150.), (180., 158.), (188., 150.), (189., 140.)):
+        with self.subTest(sign=sign, candidate=candidate, actual=actual):
+          guard = Guard()
+          for i in range(100):
+            out = guard.update((i+1)*10_000_000, sign*candidate, sign*candidate,
+                               sign*actual, True, False)
+          self.assertEqual((out.active, out.state, out.torque_scale), (True, 1, 1.))
+          self.assertEqual(out.angle, sign*candidate)
+
+  def test_severe_tracking_error_still_reduces_torque_and_hands_over(self):
+    for sign in (-1, 1):
+      guard = Guard()
+      for i in range(60):
+        guard.update((i+1)*10_000_000, sign*150., sign*150., sign*149., True, False)
+      first = guard.update(610_000_000, sign*188., sign*188., sign*138., True, False)
+      self.assertTrue(first.active)
+      self.assertLess(first.torque_scale, 1.)
+      for i in range(62, 110):
+        out = guard.update(i*10_000_000, sign*188., sign*188., sign*138., True, False)
+      self.assertEqual((out.active, out.state, out.torque_scale), (False, 2, 0.))
+
+  def test_absolute_envelope_is_unchanged_even_with_small_tracking_error(self):
+    for sign in (-1, 1):
+      for candidate, actual in ((190., 189.), (189., 190.)):
+        with self.subTest(sign=sign, candidate=candidate, actual=actual):
+          out = Guard().update(10_000_000, sign*candidate, sign*candidate,
+                               sign*actual, True, False)
+          self.assertEqual((out.active, out.state, out.torque_scale), (False, 2, 0.))
+          self.assertEqual(out.reason, 'command_envelope')
+
   def test_short_tracking_error_does_not_latch(self):
     for _ in range(10):
       self.tick(requested=155., candidate=150., actual=90.)

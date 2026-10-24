@@ -71,7 +71,12 @@ class AngleSteeringGuard:
 
     error = candidate-actual
     warning = abs(candidate) >= self.WARN_ANGLE
-    risk = (warning and abs(error) >= 20.) or (abs(candidate) >= 100. and abs(error) >= self.TRACKING_ERROR)
+    # A 20-degree lag near 170 degrees can be ordinary actuator tracking delay.
+    # Reducing torque there increases the lag and can falsely latch a handover
+    # before the wheel reaches the requested angle (test35, route 53 at 40:31).
+    # Keep the warning separate from severe tracking-error protection; the
+    # absolute command/measured-angle envelope above still applies.
+    risk = abs(candidate) >= 100. and abs(error) >= self.TRACKING_ERROR
     self.risk_time = self.risk_time + dt if risk else 0.
     if self.risk_time >= self.MAX_RISK_TIME:
       self.held, self.reason = True, 'persistent_angle_or_tracking_error'
