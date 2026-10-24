@@ -175,7 +175,7 @@ class ModelRenderer(Widget):
 
     if render_lead_indicator:
       self._update_leads(sm)
-      self._draw_lead_indicator()
+      # Vehicle tracking/lamp boxes replace the coloured road bars.
     else:
       self._lead_vehicles = [LeadVehicle(), LeadVehicle()]
 

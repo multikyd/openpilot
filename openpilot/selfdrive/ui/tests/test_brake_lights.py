@@ -123,6 +123,19 @@ class AdaptiveTest(unittest.TestCase):
     im=scene();im[80:130,22:136]=0
     self.assertEqual(core.AdaptiveLamps().update(im,0).state,'UNKNOWN')
 
+  def test_large_saturated_lamps_are_kept_and_reflectors_not_selected(self):
+    im=np.full((160,180,3),80,np.uint8)
+    im[50:88,15:35]=(230,15,15);im[50:88,145:165]=(230,15,15)
+    im[55:82,20:30]=(255,240,225);im[55:82,150:160]=(255,240,225)
+    im[20:27,65:115]=(255,20,20)
+    im[125:132,15:35]=(180,15,15);im[125:132,145:165]=(180,15,15)
+    lamps=core.locate_lamps(im)
+    self.assertGreaterEqual(len(lamps),2)
+    self.assertTrue(all(y<100 for x,y,w,h in lamps[:2]))
+
+  def test_large_uniform_red_background_is_still_rejected(self):
+    self.assertFalse(core.locate_lamps(np.full((140,160,3),(220,20,20),np.uint8)))
+
   def test_projection_rejects_offscreen_small_invalid(self):
     k=np.array([[672,1141,0],[380,0,1141],[1,0,0]],float)
     self.assertIsNotNone(core.project_search(k,20,0,1.2,(760,1344)))
@@ -164,7 +177,7 @@ class OverlayLifecycleTest(unittest.TestCase):
     self.sm['radarState']=SimpleNamespace(leadOne=SimpleNamespace(present=True,dRel=20.,yRel=0.,vRel=0.,radarTrackId=3))
     self.sm['modelV2']=SimpleNamespace(frameId=100,position=SimpleNamespace(x=[0,100],z=[0,0]))
     self.frame=SimpleNamespace(frame_id=100,width=80,height=60,stride=80,uv_offset=4800,data=np.full(7200,128,np.uint8))
-    self.view=SimpleNamespace(frame=self.frame,client=SimpleNamespace(timestamp_sof=100e9))
+    self.view=SimpleNamespace(frame=self.frame,client=SimpleNamespace(timestamp_sof=100e9),_calc_frame_matrix=lambda rect:np.eye(3))
     self.config=SimpleNamespace(width=80,height=60,intrinsics=np.eye(3))
     self.rect=SimpleNamespace(x=0,y=0,width=80,height=60)
     self.o.last_submit=100. # no work submission in lifecycle tests
@@ -217,6 +230,18 @@ class OverlayLifecycleTest(unittest.TestCase):
     self.o.previous=(100.,21.52,0.,0.,3,0)
     self.o.label_cache=dict(mono=100.,source_sof=99.6)
     self.assertIsNone(self.o.label_sample(100.1))
+
+  def test_completed_crop_and_boxes_have_same_frame(self):
+    self.o.pending_sample=dict(mono=99.9,source_sof=99.9,frame_id=99,rgb=np.zeros((10,10,3),np.uint8))
+    result=Future()
+    lamps=((1,2,3,4),(6,2,3,4))
+    result.set_result((0,99.9,(0,0,80,60),1,core.Observation('ON',lamps=lamps),99,1.))
+    self.o.pending=result
+    self.run_render()
+    sample=self.o.label_sample(100.)
+    self.assertEqual(sample['frame_id'],99)
+    self.assertEqual(sample['lamps'],lamps)
+    self.assertEqual(sample['prediction'],'ON')
 
 
 if __name__=='__main__':unittest.main()

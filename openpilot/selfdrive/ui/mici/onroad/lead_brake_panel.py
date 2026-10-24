@@ -75,7 +75,6 @@ class LeadBrakePanel:
 
     rl.begin_scissor_mode(int(rect.x), int(rect.y), int(rect.width), int(rect.height))
     try:
-      text("LEAD", 0, 15, muted)
       w, h = 55*scale, 44*scale
       y = top+23*scale
       def point(x, yy):

@@ -57,31 +57,67 @@ def nv12_crop(frame, roi, max_size=192):
   return np.clip(rgb, 0, 255).astype(np.uint8), step
 
 
+def _dilate(mask):
+  padded = np.pad(mask, 1)
+  return np.logical_or.reduce([padded[y:y+mask.shape[0], x:x+mask.shape[1]] for y in range(3) for x in range(3)])
+
+
 def red_components(rgb):
   r, g, b = rgb.astype(np.float32).transpose(2, 0, 1)
-  mask = (r > 45) & (r > g*1.65) & (r > b*1.45)
+  red = (r >= 90) & (r > g*1.6) & (r > b*1.4) & (r-g > 45)
+  # A white/yellow saturated centre belongs to a lamp only near red evidence.
+  white = (r >= 160) & (g >= 100) & (b >= 70) & (r >= g*.9) & (g >= b*.85)
+  mask = red | (white & _dilate(_dilate(red)))
+  # Close one-pixel LED gaps without accepting an entire red backdrop.
+  padded = np.pad(_dilate(mask), 1, constant_values=True)
+  mask = np.logical_and.reduce([padded[y:y+mask.shape[0], x:x+mask.shape[1]] for y in range(3) for x in range(3)])
   h, w = mask.shape
-  if mask.sum() > h*w*.22:
-    return []  # red background/glare: do not invent a target
-  seen = np.zeros_like(mask)
+  if mask.mean() > .65:
+    return []
+  # Run-length connected components: bounded ROI, no Python per-pixel flood fill.
+  parents, bounds, cores, counts, previous = [], [], [], [], []
+  def find(i):
+    while parents[i] != i:
+      parents[i] = parents[parents[i]]
+      i = parents[i]
+    return i
+  for y, row in enumerate(mask):
+    transitions = np.flatnonzero(np.diff(np.pad(row.astype(np.int8), 1)))
+    current = []
+    cursor = 0
+    for start, stop in zip(transitions[::2], transitions[1::2]):
+      start, stop = int(start), int(stop)-1
+      i = len(parents)
+      if i >= 4096:
+        return []
+      parents.append(i); bounds.append([start,y,stop,y]); counts.append(stop-start+1)
+      bright = np.flatnonzero(r[y,start:stop+1] >= 170)
+      cores.append([start+int(bright[0]),y,start+int(bright[-1]),y] if len(bright) >= 1 else None)
+      while cursor < len(previous) and previous[cursor][1] < start-1:
+        cursor += 1
+      j = cursor
+      while j < len(previous) and previous[j][0] <= stop+1:
+        root = find(previous[j][2]); own = find(i)
+        if root != own:
+          parents[root] = own
+          bounds[own] = [min(bounds[own][0],bounds[root][0]),min(bounds[own][1],bounds[root][1]),
+                         max(bounds[own][2],bounds[root][2]),max(bounds[own][3],bounds[root][3])]
+          counts[own] += counts[root]
+          if cores[root] is not None:
+            if cores[own] is None:
+              cores[own] = cores[root][:]
+            else:
+              cores[own] = [min(cores[own][0],cores[root][0]),min(cores[own][1],cores[root][1]),
+                            max(cores[own][2],cores[root][2]),max(cores[own][3],cores[root][3])]
+        j += 1
+      current.append((start,stop,i))
+    previous = current
   out = []
-  for y, x in zip(*np.nonzero(mask)):
-    if seen[y, x]:
-      continue
-    stack = [(int(x), int(y))]
-    seen[y, x] = True
-    xs, ys = [], []
-    while stack:
-      a, c = stack.pop()
-      xs.append(a); ys.append(c)
-      for u, v in ((a-1, c), (a+1, c), (a, c-1), (a, c+1)):
-        if 0 <= u < w and 0 <= v < h and mask[v, u] and not seen[v, u]:
-          seen[v, u] = True
-          stack.append((u, v))
-    if 2 <= len(xs) <= h*w*.09:
-      out.append((min(xs), min(ys), max(xs)-min(xs)+1, max(ys)-min(ys)+1))
-  # Bound pair matching even in a highly fragmented red/noisy background.
-  return sorted(out, key=lambda a: a[2]*a[3], reverse=True)[:24] if len(out) <= 48 else []
+  for i in range(len(parents)):
+    if parents[i] == i and 2 <= counts[i] <= h*w*.12:
+      x,y,x1,y1 = cores[i] if cores[i] is not None else bounds[i]
+      out.append((x,y,x1-x+1,y1-y+1))
+  return sorted(out,key=lambda a:a[2]*a[3],reverse=True)[:24] if len(out) <= 128 else []
 
 
 def locate_lamps(rgb, previous_geometry=None):
@@ -97,10 +133,16 @@ def locate_lamps(rgb, previous_geometry=None):
       if not (.40*w < bx-ax < .94*w and abs(ay-by) < .12*h and
               abs((ax+bx)/2-w/2) < .16*w and .15*h < (ay+by)/2 < .86*h):
         continue
-      if max(a[2]*a[3], b[2]*b[3]) > 7*min(a[2]*a[3], b[2]*b[3]):
+      if min(a[2]*a[3],b[2]*b[3]) < max(3,h*w*.0004) or max(a[2]*a[3], b[2]*b[3]) > 7*min(a[2]*a[3], b[2]*b[3]):
         continue
-      cost = (abs(ay-by)/h + abs((ax+bx)/2-w/2)/w + .12*(ay+by)/2/h
+      cost = (abs(ay-by)/h + abs((ax+bx)/2-w/2)/w + .25*(ay+by)/2/h
               - .04*math.log1p(min(a[2]*a[3], b[2]*b[3])))
+      separation = bx-ax
+      upper = [c for c in components if c not in (a,b) and max(4,.12*min(a[2]*a[3],b[2]*b[3])) <= c[2]*c[3] <= 4*max(a[2]*a[3],b[2]*b[3]) and
+               abs(center(c)[0]-(ax+bx)/2) < separation*.17 and
+               .06*h < min(ay,by)-center(c)[1] < min(.45*h,.55*separation)]
+      if upper:
+        cost -= .22
       if previous_geometry is not None:
         current = np.array([[ax/w, ay/h], [bx/w, by/h]])
         cost += 1.5*float(np.max(np.abs(current-previous_geometry[:2])))
@@ -113,9 +155,9 @@ def locate_lamps(rgb, previous_geometry=None):
   _, left, right = pairs[0]
   lx, ly = center(left); rx, ry = center(right)
   middle = [a for a in components if a not in (left, right) and a[2] >= 3 and
-            a[2]*a[3] >= max(3, .12*min(left[2]*left[3], right[2]*right[3])) and
+            max(3, .12*min(left[2]*left[3], right[2]*right[3])) <= a[2]*a[3] <= 4*max(left[2]*left[3],right[2]*right[3]) and
             abs(center(a)[0]-(lx+rx)/2) < (rx-lx)*.17 and
-            .06*h < min(ly, ry)-center(a)[1] < .55*h]
+            .06*h < min(ly, ry)-center(a)[1] < min(.45*h,.55*(rx-lx))]
   if previous_geometry is not None and len(previous_geometry) == 3:
     middle.sort(key=lambda a: np.linalg.norm(np.array(center(a))/[w, h]-previous_geometry[2]))
   else:

@@ -41,6 +41,16 @@ class LabelWriterTest(unittest.TestCase):
       self.assertEqual(writer.submit(sample,label,now,1790000000.), 'NO FRAME')
     self.assertIsNone(writer.pool)
 
+  def test_frozen_review_and_box_feedback_saved(self):
+    with tempfile.TemporaryDirectory() as directory:
+      writer=labels.BrakeLabelWriter(directory);sample=self.sample();sample['review_started_mono']=10.1
+      self.assertEqual(writer.submit(sample,'ON',12.,1790000000.,box_feedback='missing'),'SAVING')
+      self.assertEqual(writer.pending.result(timeout=5),'SAVED')
+      record=json.loads(next(Path(directory).glob('*.json')).read_text())
+      self.assertEqual(record['box_feedback'],'missing');self.assertEqual(record['format_version'],2)
+      writer.close()
+      self.assertEqual(writer.submit(sample,'ON',21.,1790000000.,box_feedback='missing'),'NO FRAME')
+
   def test_no_unbounded_queue(self):
     writer = labels.BrakeLabelWriter()
     writer.pending = Future()
@@ -72,31 +82,62 @@ class LabelControlsTest(unittest.TestCase):
     cls.module = importlib.util.module_from_spec(spec)
     with patch.dict(sys.modules,dependencies):spec.loader.exec_module(cls.module)
 
-  def test_popup_big_buttons_fit_c4_and_expire(self):
-    controls = self.module.BrakeLabelControls()
-    detector = N(enabled=True,epoch=3,label_sample=lambda now:None)
-    rect = N(x=0,y=0,width=536,height=240)
+  def detector(self):
+    self.rgb=np.zeros((40,60,3),np.uint8)
+    return N(enabled=True,epoch=3,label_sample=lambda now:dict(rgb=self.rgb,mono=now,frame_id=42,lamps=[]))
+
+  def test_popup_large_buttons_and_whole_icon_touch_area(self):
+    controls=self.module.BrakeLabelControls();detector=self.detector();rect=N(x=0,y=0,width=536,height=240)
     with patch.object(self.module.time,'monotonic',return_value=10.):
       controls.render(rect,detector)
-      self.assertTrue(controls.tap(N(x=490,y=100),detector))
+      hit=controls.buttons[0][0]
+      self.assertGreaterEqual(hit.width,90);self.assertGreaterEqual(hit.height,88)
+      self.assertTrue(controls.tap(N(x=490,y=130),detector))
       controls.render(rect,detector)
-      self.assertEqual([a for r,a in controls.buttons],['ON','OFF','CANCEL'])
+      self.assertEqual([a for r,a in controls.buttons],['ON','OFF','correct','missing','SAVE','CANCEL'])
       for r,a in controls.buttons:
-        self.assertGreaterEqual(r.width,70);self.assertGreaterEqual(r.height,44)
+        self.assertGreaterEqual(r.width,130);self.assertGreaterEqual(r.height,48)
         self.assertLessEqual(r.x+r.width,536);self.assertLessEqual(r.y+r.height,240)
-    with patch.object(self.module.time,'monotonic',return_value=16.):
+    with patch.object(self.module.time,'monotonic',return_value=21.):
       controls.render(rect,detector);self.assertIsNone(controls.opened)
 
-  def test_changed_target_cannot_be_labelled(self):
-    controls = self.module.BrakeLabelControls()
-    detector = N(enabled=True,epoch=3,label_sample=lambda now:{'mono':now})
+  def test_frozen_frame_feedback_matches_original_not_new_target(self):
+    controls=self.module.BrakeLabelControls();detector=self.detector();rect=N(x=0,y=0,width=536,height=240)
     with patch.object(self.module.time,'monotonic',return_value=10.):
-      controls.render(N(x=0,y=0,width=536,height=240),detector)
-      controls.tap(N(x=490,y=100),detector)
-      controls.render(N(x=0,y=0,width=536,height=240),detector)
-      detector.epoch = 4
-      self.assertTrue(controls.tap(N(x=490,y=90),detector))
-      self.assertEqual(controls.message,'NO FRAME')
+      controls.render(rect,detector);controls.tap(N(x=490,y=120),detector)
+      controls.render(rect,detector)
+    self.rgb[:]=255;detector.epoch=4
+    self.assertTrue(np.all(controls.sample['rgb']==0))
+    with patch.object(self.module.time,'monotonic',return_value=12.),patch.object(controls.writer,'submit',return_value='SAVING') as submit:
+      controls.tap(N(x=300,y=60),detector) # ON
+      controls.tap(N(x=450,y=125),detector) # missing box
+      controls.tap(N(x=300,y=200),detector) # SAVE
+      self.assertEqual(submit.call_args.args[0]['frame_id'],42)
+      self.assertEqual(submit.call_args.args[1],'ON')
+      self.assertEqual(submit.call_args.kwargs['box_feedback'],'missing')
+      self.assertIsNone(controls.opened)
+
+  def test_modal_touch_does_not_leak_and_cancel_frees_preview(self):
+    controls=self.module.BrakeLabelControls();controls.opened=10.;controls.texture=N(id=5)
+    with patch.object(self.module.time,'monotonic',return_value=10.):
+      self.assertTrue(controls.tap(N(x=1,y=1),self.detector()))
+    controls.dismiss();self.assertIsNone(controls.texture)
+
+  def test_small_bookmark_direction_jitter_still_taps_car(self):
+    import ast
+    tree=ast.parse((UI/'mici/onroad/augmented_road_view.py').read_text(encoding='utf-8'))
+    cls=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='AugmentedRoadView')
+    method=next(n for n in cls.body if isinstance(n,ast.FunctionDef) and n.name=='_handle_mouse_release')
+    env=dict(ui_state=N(started=True),MousePos=object)
+    exec(compile(ast.Module(body=[method],type_ignores=[]),'actual_car_tap','exec'),env)
+    tap=MagicMock(return_value=True)
+    view=N(_bookmark_icon=N(interacting=lambda:True),_label_press=N(x=490,y=100),
+           _label_dragged=False,_brake_labels=N(tap=tap),_brake_light_overlay=N())
+    env['_handle_mouse_release'](view,N(x=489,y=100))
+    tap.assert_called_once()
+    tap.reset_mock();view._label_dragged=True;view._label_press=N(x=490,y=100)
+    env['_handle_mouse_release'](view,N(x=300,y=100))
+    tap.assert_not_called()
 
 
 if __name__ == '__main__':

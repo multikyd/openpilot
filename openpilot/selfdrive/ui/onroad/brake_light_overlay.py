@@ -31,6 +31,7 @@ class BrakeLightOverlay:
     self.retry_after = 0.
     self.context = None
     self.label_cache = None
+    self.pending_sample = None
 
   def clear(self):
     if self.previous is not None or self.display is not None:
@@ -42,6 +43,7 @@ class BrakeLightOverlay:
     self.display = None
     self.last_frame = None
     self.label_cache = None
+    self.pending_sample = None
 
   def label_sample(self, now):
     sample = self.label_cache
@@ -131,6 +133,9 @@ class BrakeLightOverlay:
       self.pending = None
       if epoch == self.epoch and now-captured < .35:
         self.display = (captured, result_roi, step, observation)
+        if self.pending_sample is not None and self.pending_sample['frame_id'] == frame_id:
+          self.label_cache = dict(self.pending_sample, prediction=observation.state,
+                                  prediction_mono=captured, lamps=observation.lamps, reason=observation.reason)
         event = (observation.state, observation.reason)
         if event != self.last_log or now-self.last_event > 5.:
           state_changed = self.last_log is None or observation.state != self.last_log[0]
@@ -144,7 +149,7 @@ class BrakeLightOverlay:
       rgb, step = nv12_crop(frame, roi)
       state, epoch, frame_id = self.adaptive, self.epoch, int(frame.frame_id)
       prediction = self.latest_observation(now)
-      self.label_cache = dict(rgb=rgb, mono=now, capture_wall=time.time(), frame_id=frame_id,
+      self.pending_sample = dict(rgb=rgb, mono=now, capture_wall=time.time(), frame_id=frame_id,
                               source_sof=stamp, stream=int(stream), roi=list(roi), step=step,
                               radar_track_id=int(lead.radarTrackId), d_rel=float(lead.dRel),
                               y_rel=float(lead.yRel), v_rel=float(lead.vRel),
@@ -158,13 +163,6 @@ class BrakeLightOverlay:
         self.pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="lead_lamps")
       self.pending = self.pool.submit(process)
       self.last_submit, self.last_frame = now, camera_key
-    if self.display is None or now-self.display[0] > .35:
-      return
-    captured, found_roi, step, observation = self.display
-    # Keep older detections from sliding onto another target after a sudden position change.
-    if abs(found_roi[0]-roi[0]) > roi[2]*.18 or abs(found_roi[1]-roi[1]) > roi[3]*.18:
-      self.display = None
-      return
     transform = view._calc_frame_matrix(rect)
     sx, sy = rect.width*transform[0, 0]/frame.width, rect.height*transform[1, 1]/frame.height
     ox = rect.x+(rect.width-frame.width*sx)/2+transform[0, 2]*rect.width/2
@@ -172,14 +170,17 @@ class BrakeLightOverlay:
     def screen(box):
       x, y, w, h = box
       return rl.Rectangle(float(ox+x*sx), float(oy+y*sy), float(w*sx), float(h*sy))
+    # This is a radar-projected search/track area, not a trained vehicle boundary.
+    region = screen(roi)
+    rl.draw_rectangle_lines_ex(region, 2.5, rl.Color(65,220,245,240))
+    if self.display is None or now-self.display[0] > .35:
+      return
+    captured, found_roi, step, observation = self.display
+    # Keep older detections from sliding onto another target after a sudden position change.
+    if abs(found_roi[0]-roi[0]) > roi[2]*.18 or abs(found_roi[1]-roi[1]) > roi[3]*.18:
+      self.display = None
+      return
     x, y, w, h = found_roi
-    # Gray corners are the geometric search region, NOT a detected vehicle boundary.
-    region = screen(found_roi)
-    gray = rl.Color(170, 185, 198, 150)
-    for px, sign in ((region.x, 1), (region.x+region.width, -1)):
-      for py, direction in ((region.y, 1), (region.y+region.height, -1)):
-        rl.draw_line_ex(rl.Vector2(px, py), rl.Vector2(px+sign*10, py), 1.5, gray)
-        rl.draw_line_ex(rl.Vector2(px, py), rl.Vector2(px, py+direction*10), 1.5, gray)
     color = rl.Color(255, 165, 50, 235) if observation.state == 'ON' else rl.Color(85, 205, 235, 210)
     for a, b, bw, bh in observation.lamps:
       rl.draw_rectangle_lines_ex(screen((x+a*step, y+b*step, bw*step, bh*step)), 2., color)

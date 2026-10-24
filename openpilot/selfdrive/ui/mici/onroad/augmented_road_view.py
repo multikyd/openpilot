@@ -220,9 +220,9 @@ class AugmentedRoadView(CameraView):
     # A swipe remains a bookmark gesture, never a lamp label or camera click.
     bookmark = self._bookmark_icon.interacting()
     press, self._label_press = self._label_press, None
-    if bookmark or self._label_dragged:
+    if not self._label_dragged and ui_state.started and press is not None and self._brake_labels.tap(mouse_pos, self._brake_light_overlay):
       return
-    if ui_state.started and press is not None and self._brake_labels.tap(mouse_pos, self._brake_light_overlay):
+    if bookmark or self._label_dragged:
       return
     super()._handle_mouse_release(mouse_pos)
 
@@ -230,7 +230,7 @@ class AugmentedRoadView(CameraView):
     # Draw text if not onroad
     if not ui_state.started:
       self._brake_light_overlay.clear()
-      self._brake_labels.opened = None
+      self._brake_labels.dismiss()
       self._brake_labels.buttons = []
       rl.draw_rectangle_rec(self.rect, rl.BLACK)
       self._offroad_label.render(self._rect)
@@ -304,6 +304,8 @@ class AugmentedRoadView(CameraView):
       self._navigation.render(rl.Rectangle(self._content_rect.x + self._content_rect.width, self.rect.y, PANEL_WIDTH, self.rect.height))
     self._hud_renderer.draw_current_speed_sidebar(self.rect)
     self._lead_brake_panel.render(self.rect, ui_state.sm, self._brake_light_overlay)
+    if alert_to_render is not None:
+      self._brake_labels.dismiss()
     self._brake_labels.render(self.rect, self._brake_light_overlay)
 
     self._bookmark_icon.render(self.rect)

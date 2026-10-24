@@ -13,8 +13,13 @@ class BrakeLabelWriter:
     self.pool = None
     self.pending = None
 
-  def submit(self, sample, label, now, wall):
-    if label not in ('ON', 'OFF') or not sample or not 0 <= now-sample['mono'] <= .35:
+  def submit(self, sample, label, now, wall, box_feedback=None):
+    if label not in ('ON', 'OFF') or not sample:
+      return 'NO FRAME'
+    review = sample.get('review_started_mono')
+    fresh = (0 <= now-sample['mono'] <= .35) if review is None else (
+      0 <= review-sample['mono'] <= .35 and 0 <= now-review <= 10.)
+    if not fresh or box_feedback not in (None, 'correct', 'incorrect', 'missing'):
       return 'NO FRAME'
     if self.pending is not None and not self.pending.done():
       return 'BUSY'
@@ -22,7 +27,7 @@ class BrakeLabelWriter:
     rgb = sample['rgb']
     if rgb.dtype.name != 'uint8' or rgb.ndim != 3 or rgb.shape[2] != 3 or max(rgb.shape[:2]) > 192:
       return 'NO FRAME'
-    metadata.update(label=label, label_mono=now, label_wall=wall, display_only=True, format_version=1)
+    metadata.update(label=label, label_mono=now, label_wall=wall, display_only=True, format_version=2, box_feedback=box_feedback)
     if self.pool is None:
       self.pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='brake_labels')
     # This crop owns its memory; no shared camera buffer is retained or read here.
@@ -63,6 +68,12 @@ class BrakeLabelWriter:
       os.replace(temporary, path)
     atomic(image, f'P6\n{width} {height}\n255\n'.encode()+rgb.tobytes())
     atomic(record, json.dumps(metadata, allow_nan=False).encode())
+    try:
+      from openpilot.common.swaglog import cloudlog
+      # Default rlog exports can reconstruct this exact annotated crop from video.
+      cloudlog.event('lead_brake_label', **metadata)
+    except Exception:
+      pass  # The durable image/JSON pair remains valid if diagnostic logging fails.
     return 'SAVED'
 
   def close(self):
