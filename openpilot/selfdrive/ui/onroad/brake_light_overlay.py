@@ -30,6 +30,7 @@ class BrakeLightOverlay:
     self.last_event = -30.
     self.retry_after = 0.
     self.context = None
+    self.label_cache = None
 
   def clear(self):
     if self.previous is not None or self.display is not None:
@@ -40,6 +41,14 @@ class BrakeLightOverlay:
     self.previous = None
     self.display = None
     self.last_frame = None
+    self.label_cache = None
+
+  def label_sample(self, now):
+    sample = self.label_cache
+    if (not self.enabled or self.previous is None or sample is None or
+        not 0 <= now-sample['mono'] <= .35 or not 0 <= now-sample['source_sof'] <= .4):
+      return None
+    return sample
 
   def latest_observation(self, now=None):
     now = time.monotonic() if now is None else now
@@ -134,6 +143,13 @@ class BrakeLightOverlay:
     if self.pending is None and now-self.last_submit >= .1-1e-6 and self.last_frame != camera_key:
       rgb, step = nv12_crop(frame, roi)
       state, epoch, frame_id = self.adaptive, self.epoch, int(frame.frame_id)
+      prediction = self.latest_observation(now)
+      self.label_cache = dict(rgb=rgb, mono=now, capture_wall=time.time(), frame_id=frame_id,
+                              source_sof=stamp, stream=int(stream), roi=list(roi), step=step,
+                              radar_track_id=int(lead.radarTrackId), d_rel=float(lead.dRel),
+                              y_rel=float(lead.yRel), v_rel=float(lead.vRel),
+                              prediction=prediction.state if prediction else 'UNKNOWN',
+                              prediction_mono=self.display[0] if prediction else None)
       def process():
         begin = time.monotonic()
         result = state.update(rgb, now)

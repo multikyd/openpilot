@@ -20,7 +20,8 @@ def signal_from_sinf(data):
   location = data.get('location', {})
   location = location if isinstance(location, dict) else {}
   lat, lon = normalized_position(location.get('latitude'), location.get('longitude'))
-  out = dict(lat=lat, lon=lon, distance=data.get('distance'))
+  out = dict(lat=lat, lon=lon, distance=data.get('distance'),
+             _source_timestamp_ms=data.get('_source_timestamp_ms'))
   for direction, key in (('straight', 'green'), ('left', 'left'), ('right', 'right'), ('uturn', 'uturn')):
     on = bool(data.get(key + 'LightOn'))
     state = 'GREEN_LIGHT_ON' if on else 'UNAVAILABLE'

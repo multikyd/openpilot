@@ -949,6 +949,8 @@ class CarrotMan:
     now = time.monotonic()
     navigation, physical_gps = self._signal_context(now)
     candidate = directional_signal(data, now, navigation, physical_gps)
+    from openpilot.selfdrive.carrot.signal_timing import display_timing
+    candidate.update(display_timing(data.get('_source_timestamp_ms'), time.time()))
     if not usable_signal(candidate):
       cloudlog.event("tmap_signal_rejected", raw=data, reason="invalid_or_unavailable")
       return False
@@ -1519,12 +1521,18 @@ class CarrotMan:
 
     if "ssinf" in obj:
       print(f"[NAVI ssinf RX] {json.dumps(obj['ssinf'], ensure_ascii=False)}", flush=True)
-      self._safe_dispatch_handler("ssinf", self.handle_traffic_light_detail, obj["ssinf"])
+      payload = obj["ssinf"]
+      if isinstance(payload, dict):
+        payload = dict(payload, _source_timestamp_ms=event_time_ms)
+      self._safe_dispatch_handler("ssinf", self.handle_traffic_light_detail, payload)
       handled = True
 
     if "sinf" in obj:
       print(f"[NAVI sinf RX] {json.dumps(obj['sinf'], ensure_ascii=False)}", flush=True)
-      self._safe_dispatch_handler("sinf", self.handle_traffic_light, obj["sinf"])
+      payload = obj["sinf"]
+      if isinstance(payload, dict):
+        payload = dict(payload, _source_timestamp_ms=event_time_ms)
+      self._safe_dispatch_handler("sinf", self.handle_traffic_light, payload)
       handled = True
 
     if "route" in obj:

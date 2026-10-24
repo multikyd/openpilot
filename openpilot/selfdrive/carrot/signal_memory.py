@@ -250,6 +250,10 @@ class SignalMemory:
     node=None;distance=0.;current={}
     signal=signal if isinstance(signal,dict) else {}
     age=now-number(signal.get('ts'),-100)
+    # Phone capture -> C4 receive age is additional to elapsed monotonic time.
+    # This affects display/phase observations only, never signal-follow controls.
+    display_age=number(signal.get('display_age_s'))
+    if not 0<=display_age<=3:display_age=0.
     slat,slon=normalized_position(signal.get('lat'),signal.get('lon'))
     if nav_ok and 0<=age<=3 and slat is not None and abs(slat)>1 and abs(slon)>1:
       ahead,side=geometry(dict(lat=slat,lon=slon))
@@ -265,7 +269,7 @@ class SignalMemory:
         for direction in LAMP_DIRECTIONS:
           light=signal.get('movements',{}).get(direction,{})
           state={'RED_LIGHT_ON':RED,'GREEN_LIGHT_ON':GREEN,'YELLOW_LIGHT_ON':YELLOW}.get(light.get('state'),0)
-          remaining=number(light.get('remain'))-age
+          remaining=number(light.get('remain'))-age-display_age
           current[direction]=(state,remaining if 0<remaining<=300 else 0.)
           if node is not None and state in (RED,GREEN) and 0<remaining<=300:
             self._record(node,direction,wall,'phase',state,remaining)

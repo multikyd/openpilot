@@ -206,5 +206,17 @@ class OverlayLifecycleTest(unittest.TestCase):
     self.sm['modelV2'].frameId=70
     self.run_render();self.assertIsNone(self.o.previous)
 
+  def test_manual_sample_expires_and_is_cleared_with_target(self):
+    self.o.previous=(99.9,21.52,0.,0.,3,0)
+    self.o.label_cache=dict(mono=99.9,source_sof=99.9)
+    self.assertIsNotNone(self.o.label_sample(100.))
+    self.assertIsNone(self.o.label_sample(100.3))
+    self.o.clear();self.assertIsNone(self.o.label_sample(100.))
+
+  def test_manual_sample_rejects_old_source_even_if_recently_copied(self):
+    self.o.previous=(100.,21.52,0.,0.,3,0)
+    self.o.label_cache=dict(mono=100.,source_sof=99.6)
+    self.assertIsNone(self.o.label_sample(100.1))
+
 
 if __name__=='__main__':unittest.main()

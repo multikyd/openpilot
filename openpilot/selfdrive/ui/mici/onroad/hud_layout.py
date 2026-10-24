@@ -4,7 +4,7 @@ import math
 
 HEADER_TOP = 4
 LEFT_CENTER = 46  # driver x=16 + width=60 / 2; also TPMS, gap and warning center
-SPEED_HEADER_HEIGHT = 56
+SPEED_HEADER_HEIGHT = 70
 
 
 def left_car_box(x, y):
@@ -12,7 +12,7 @@ def left_car_box(x, y):
 
 
 def lower_notice_box(x, y, height):
-  return (x+LEFT_CENTER-41, y+153, 82, min(90, max(0, height-159)))
+  return (x+LEFT_CENTER-41, y+150, 82, min(90, max(0, height-154)))
 
 
 def gap_bar_boxes(x, y):

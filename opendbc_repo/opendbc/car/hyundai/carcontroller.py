@@ -9,6 +9,7 @@ from opendbc.car.hyundai.hyundaicanfd import CanBus
 from opendbc.car.hyundai.values import HyundaiFlags, Buttons, CarControllerParams, CAR, CAN_GEARS
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.hyundai.steering_diagnostics import SteeringDiagnostics
+from opendbc.car.hyundai.angle_guard import AngleSteeringGuard
 from openpilot.common.swaglog import cloudlog
 
 VisualAlert = structs.CarControl.HUDControl.VisualAlert
@@ -116,6 +117,8 @@ class CarController(CarControllerBase):
     self.packer = CANPacker(dbc_names[Bus.pt])
     self.angle_limit_counter = 0
     self.steering_diagnostics = SteeringDiagnostics()
+    self.angle_guard = AngleSteeringGuard() if CP.carFingerprint == CAR.HYUNDAI_IONIQ_5_PE else None
+    self.angle_guard_state = 0
 
     self.accel_last = 0
     self.apply_torque_last = 0
@@ -295,6 +298,19 @@ class CarController(CarControllerBase):
     if not CC.latActive:
       apply_torque = 0
       self.lkas_max_torque = 0
+
+    if angle_control and self.angle_guard is not None:
+      guard = self.angle_guard.update(now_nanos, float(actuators.steeringAngleDeg), float(apply_angle),
+                                      float(CS.out.steeringAngleDeg), CC.latActive,
+                                      CS.out.steerFaultTemporary or CS.out.steerFaultPermanent)
+      apply_angle, apply_steer_req = guard.angle, guard.active
+      self.lkas_max_torque = int(round(float(self.lkas_max_torque) * guard.torque_scale))
+      CS.angle_guard_state = guard.state
+      if guard.state != self.angle_guard_state:
+        cloudlog.event('hyundai_angle_guard', state=guard.state, reason=guard.reason,
+                       actual_deg=float(CS.out.steeringAngleDeg), requested_deg=float(actuators.steeringAngleDeg),
+                       output_deg=guard.angle, torque_scale=guard.torque_scale)
+      self.angle_guard_state = guard.state
 
     self.apply_angle_last = apply_angle
 

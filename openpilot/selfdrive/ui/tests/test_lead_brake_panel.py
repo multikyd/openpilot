@@ -32,7 +32,7 @@ class PanelTest(unittest.TestCase):
   @classmethod
   def setUpClass(cls):
     ray=MagicMock();ray.Rectangle=lambda x,y,w,h:SimpleNamespace(x=x,y=y,width=w,height=h);ray.Vector2=lambda x,y:SimpleNamespace(x=x,y=y)
-    dependencies={'pyray':ray,'openpilot.selfdrive.ui.mici.onroad':SimpleNamespace(SIDE_PANEL_WIDTH=60),
+    dependencies={'pyray':ray,'openpilot.selfdrive.ui.mici.onroad':SimpleNamespace(SIDE_PANEL_WIDTH=80),
       'openpilot.selfdrive.ui.mici.onroad.lead_brake_state':state_module,
       'openpilot.selfdrive.ui.mici.onroad.hud_layout':layout,
       'openpilot.system.ui.lib.application':SimpleNamespace(gui_app=SimpleNamespace(font=lambda *a:None),FontWeight=SimpleNamespace(MEDIUM=1,BOLD=2),FONT_SCALE=1.16,font_fallback=lambda f:f),
@@ -71,7 +71,7 @@ class PanelTest(unittest.TestCase):
     with patch.object(panel,'draw') as draw,patch.object(self.module.time,'monotonic',return_value=100.):
       panel.render(SimpleNamespace(x=15,y=25,width=540,height=240),sm,detector)
       r,s=draw.call_args.args
-      self.assertEqual((r.x,r.y,r.width,r.height),(495,81,60,184));self.assertEqual(s.status_text,'ON?')
+      self.assertEqual((r.x,r.y,r.width,r.height),(475,95,80,170));self.assertEqual(s.status_text,'ON?')
 
   def test_three_digit_speed_fits_and_visible_top_is_aligned(self):
     m=self.module
@@ -87,7 +87,7 @@ class PanelTest(unittest.TestCase):
       self.assertGreaterEqual(pos.x,rect.x+3-.001)
       self.assertLessEqual(pos.x+len(text)*size*.65,rect.x+rect.width-3+.001)
       self.assertAlmostEqual(pos.y+40*size*1.16/200,rect.y+layout.HEADER_TOP)
-      self.assertLessEqual(145*size*1.16/200,38.001)
+      self.assertLessEqual(145*size*1.16/200,48.001)
     m.gui_app.font=lambda *args:None
 
   def test_disabled_is_hidden(self):

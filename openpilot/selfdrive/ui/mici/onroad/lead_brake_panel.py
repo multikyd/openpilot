@@ -27,7 +27,7 @@ class LeadBrakePanel:
     font = gui_app.font(FontWeight.BOLD)
     value = str(round(max(0., speed)))
     available = max(1., rect.width-6)
-    size = 42.
+    size = 54.
     measured = measure_text_cached(font, value, size)
     size *= min(1., available/max(1., measured.x))
     effective = font_fallback(font)
@@ -39,21 +39,21 @@ class LeadBrakePanel:
       top = min(g.offsetY for g in glyphs)
       bottom = max(g.offsetY+g.image.height for g in glyphs)
       ink_height = (bottom-top)*size*FONT_SCALE/effective.baseSize
-      size *= min(1., 38/max(1., ink_height))
+      size *= min(1., 48/max(1., ink_height))
       top_offset = top*size*FONT_SCALE/effective.baseSize
     measured = measure_text_cached(font, value, size)
     rl.draw_text_ex(font, value, rl.Vector2(rect.x+(rect.width-measured.x)/2,
                                          rect.y+HEADER_TOP-top_offset), size, 0, color)
     unit = 'km/h' if metric else 'mph'
-    size = 10.
+    size = 12.
     measured = measure_text_cached(font, unit, size)
-    rl.draw_text_ex(font, unit, rl.Vector2(rect.x+(rect.width-measured.x)/2, rect.y+43),
+    rl.draw_text_ex(font, unit, rl.Vector2(rect.x+(rect.width-measured.x)/2, rect.y+55),
                     size, 0, rl.Color(220, 226, 233, 255))
 
   @staticmethod
   def draw(rect, state):
-    # Fit the existing 60px strip; do not take space from the camera or navigation.
-    scale = min(1., rect.width/60., rect.height/174.)
+    # Wider strip gives larger speed digits, lamps and brake-state text.
+    scale = min(1., rect.width/80., rect.height/170.)
     if scale <= 0:
       return
     cx = rect.x+rect.width/2
@@ -75,8 +75,8 @@ class LeadBrakePanel:
 
     rl.begin_scissor_mode(int(rect.x), int(rect.y), int(rect.width), int(rect.height))
     try:
-      text("LEAD", 0, 13, muted)
-      w, h = 43*scale, 37*scale
+      text("LEAD", 0, 15, muted)
+      w, h = 55*scale, 44*scale
       y = top+23*scale
       def point(x, yy):
         return rl.Vector2(cx+x*w, y+yy*h)
@@ -94,9 +94,9 @@ class LeadBrakePanel:
           rl.draw_rectangle_rounded(rl.Rectangle(p.x-2*scale, p.y-2*scale, ww*w+4*scale, hh*h+4*scale),
                                     .4, 4, rl.Color(255, 174, 54, 38))
         rl.draw_rectangle_rounded(rl.Rectangle(p.x, p.y, ww*w, max(1., hh*h)), .35, 4, color)
-      text("BRAKE", 71, 12, color)
-      text(state.status_text, 88, 12, color)
-      text(f"{state.distance:.1f} m", 114, 14, white)
+      text("BRAKE", 71, 16, color)
+      text(state.status_text, 91, 16, color)
+      text(f"{state.distance:.1f} m", 115, 18, white)
       arrow_y = top+143*scale
       arrow_color = color if state.motion else muted
       if state.motion:
@@ -106,6 +106,6 @@ class LeadBrakePanel:
                           rl.Vector2(cx+sign*6*scale, arrow_y+3*scale*direction), 1.8*scale, arrow_color)
       else:
         rl.draw_line_ex(rl.Vector2(cx-5*scale, arrow_y), rl.Vector2(cx+5*scale, arrow_y), scale, muted)
-      text(state.motion_text, 153, 11, muted)
+      text(state.motion_text, 150, 14, muted)
     finally:
       rl.end_scissor_mode()

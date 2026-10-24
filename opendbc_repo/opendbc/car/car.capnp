@@ -257,6 +257,7 @@ struct CarState {
   cruiseGap @86 :Int8;
   cruiseButtons @87 :Float32;
   gasTok @88 :Bool;
+  steeringAngleGuardState @89 :UInt8; # 0 normal, 1 limiting warning, 2 assist unavailable
 
   struct TPMS {
     unit @0 :Int8;

@@ -74,4 +74,4 @@ def draw_signal_panel(rect, font, display):
            min(48,row_height),state_color(state),max_height=row_height)
   else:
     text(value,x+113,y+5,width-121,64,color,max_height=height-10)
-  text(detail,x,y+height+4,width,13,amber if source=='EST' else rl.WHITE)
+  text(detail,x+10,y+height+4,width-20,20,amber if source=='EST' else rl.WHITE)
