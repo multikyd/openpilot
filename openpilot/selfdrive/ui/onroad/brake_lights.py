@@ -198,11 +198,14 @@ class CenterLampTransitions:
   cannot confirm ON: require lower lamp evidence, an exposure-compensated rise
   and three matching observations. Absence never establishes brake OFF.
   """
-  # Conservative thresholds calibrated on separate test30 stop sequences.
+  # Conservative thresholds checked against the test9-test35 front-camera scan.
+  # The scan supports a strong per-target red/chroma transition, but its
+  # candidates are not independent labels, so keep the onset thresholds strict.
   CHROMA_RISE = 45.
   RAW_RISE = 20.
   MIN_RATIO = .6
   CONFIRM_FRAMES = 3
+  MAX_CANDIDATE_MISSES = 1
   REFERENCE_GRACE = .4
 
   def __init__(self):
@@ -210,12 +213,14 @@ class CenterLampTransitions:
     self.geometry = None
     self.reference = None
     self.count = 0
+    self.candidate_misses = 0
     self.last_seen = None
     self.last_time = None
 
   def clear_candidate(self):
     self.geometry = self.reference = None
     self.count = 0
+    self.candidate_misses = 0
     self.last_seen = None
 
   @staticmethod
@@ -287,11 +292,17 @@ class CenterLampTransitions:
     unambiguous = bool(candidates) and (len(candidates) == 1 or candidates[0][0] > 1.4*candidates[1][0])
     if unambiguous:
       _, box, norm, reference, matched = candidates[0]
-      self.count = min(self.CONFIRM_FRAMES, self.count+1) if matched else 1
+      self.count = min(self.CONFIRM_FRAMES, self.count + 1) if matched else 1
+      self.candidate_misses = 0
       self.geometry, self.reference = norm, reference
       self.last_seen = now
       if self.count >= self.CONFIRM_FRAMES:
         result = box
+    elif self.count < self.CONFIRM_FRAMES and self.count > 0 and self.candidate_misses < self.MAX_CANDIDATE_MISSES:
+      # A single dim/occluded sample inside the 5 Hz camera stream should not
+      # discard an otherwise consistent onset. The box is still hidden on this
+      # frame; this only preserves the causal confirmation streak.
+      self.candidate_misses += 1
     elif self.count < self.CONFIRM_FRAMES:
       self.clear_candidate()
     # With missing/ambiguous evidence, never return an old box or ON. An already
