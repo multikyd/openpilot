@@ -203,17 +203,20 @@ class CenterLampTransitions:
   RAW_RISE = 20.
   MIN_RATIO = .6
   CONFIRM_FRAMES = 3
+  REFERENCE_GRACE = .4
 
   def __init__(self):
     self.history = deque(maxlen=3)  # Three bounded ROI copies, never full frames.
     self.geometry = None
     self.reference = None
     self.count = 0
+    self.last_seen = None
     self.last_time = None
 
   def clear_candidate(self):
     self.geometry = self.reference = None
     self.count = 0
+    self.last_seen = None
 
   @staticmethod
   def stats(rgb, normalized, background):
@@ -234,6 +237,8 @@ class CenterLampTransitions:
     if self.last_time is not None and (now <= self.last_time or now-self.last_time > .4):
       self.__init__()
     self.last_time = now
+    if self.last_seen is not None and now-self.last_seen > self.REFERENCE_GRACE:
+      self.clear_candidate()
     h, w = rgb.shape[:2]
     background = float(np.median(rgb[:, :, 0]))
     candidates = []
@@ -241,7 +246,7 @@ class CenterLampTransitions:
       x, y, bw, bh = box
       cx, cy = x+bw/2, y+bh/2
       if not (.30*w < cx < .70*w and .01*h < cy < .50*h and
-              max(3, .07*w) <= bw < .35*w and bh < .13*h and bw >= 1.2*bh):
+              3 <= bw < .35*w and bh < .13*h and bw >= 1.2*bh):
         continue
       # Current lower side evidence ties this upper strip to the lead's rear.
       lower = [b for b in components if b[2]*b[3] >= 3 and .05*h < b[1]+b[3]/2-cy < .55*h]
@@ -249,10 +254,19 @@ class CenterLampTransitions:
       right = any(b[0]+b[2]/2 > cx+.12*w for b in lower)
       norm = np.array([x/w, y/h, bw/w, bh/h])
       matched = self.geometry is not None and np.max(np.abs(norm[:2]-self.geometry[:2])) < .08
-      if not (left and right) and not (matched and self.count >= self.CONFIRM_FRAMES):
+      # A different component cannot replace a still-confirmed lamp during
+      # the grace period; reacquire only after the old reference expires.
+      if self.count >= self.CONFIRM_FRAMES and not matched:
+        continue
+      confirmed = matched and self.count >= self.CONFIRM_FRAMES
+      # Entry and maintenance use different floors. Downsampling a confirmed
+      # thin LED strip must not erase its OFF reference for one dimmer frame.
+      if bw < max(3, (.04 if confirmed else .07)*w):
+        continue
+      if not (left and right) and not confirmed:
         continue
       current = self.stats(rgb, norm, background)
-      if current is None or current[0] < 130 or current[1] < 45:
+      if current is None or current[0] < (110 if confirmed else 130) or current[1] < (35 if confirmed else 45):
         continue
       reference = self.reference if matched else None
       if reference is None:
@@ -264,23 +278,24 @@ class CenterLampTransitions:
         continue  # A major exposure jump cannot establish a lamp onset.
       delta = current-reference*exposure
       ratio = delta[1]/max(25., reference[1]*exposure)
-      threshold = .5 if matched and self.count >= self.CONFIRM_FRAMES else 1.
+      threshold = .5 if confirmed else 1.
       if (delta[1] >= self.CHROMA_RISE*threshold and delta[0] >= self.RAW_RISE*threshold and
           ratio >= self.MIN_RATIO*threshold):
         candidates.append((float(delta[1]), box, norm, reference, matched))
     result = None
-    if candidates:
-      candidates.sort(key=lambda candidate: candidate[0], reverse=True)
-      if len(candidates) == 1 or candidates[0][0] > 1.4*candidates[1][0]:
-        _, box, norm, reference, matched = candidates[0]
-        self.count = min(self.CONFIRM_FRAMES, self.count+1) if matched else 1
-        self.geometry, self.reference = norm, reference
-        if self.count >= self.CONFIRM_FRAMES:
-          result = box
-      else:
-        self.clear_candidate()
-    else:
+    candidates.sort(key=lambda candidate: candidate[0], reverse=True)
+    unambiguous = bool(candidates) and (len(candidates) == 1 or candidates[0][0] > 1.4*candidates[1][0])
+    if unambiguous:
+      _, box, norm, reference, matched = candidates[0]
+      self.count = min(self.CONFIRM_FRAMES, self.count+1) if matched else 1
+      self.geometry, self.reference = norm, reference
+      self.last_seen = now
+      if self.count >= self.CONFIRM_FRAMES:
+        result = box
+    elif self.count < self.CONFIRM_FRAMES:
       self.clear_candidate()
+    # With missing/ambiguous evidence, never return an old box or ON. An already
+    # confirmed reference alone survives until REFERENCE_GRACE expires above.
     self.history.append((rgb.copy(), background))
     return result
 

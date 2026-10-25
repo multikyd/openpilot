@@ -54,6 +54,53 @@ class CenterTransitionTest(unittest.TestCase):
     self.assertEqual(self.run_frames(state, self.center_on(), .6, 3).state, 'ON')
     self.assertNotEqual(state.update(scene(), .9).state, 'ON')
 
+  def test_confirmed_center_survives_dimming_without_erasing_off_reference(self):
+    state = core.AdaptiveLamps()
+    self.run_frames(state, scene(), 0., 6)
+    self.assertEqual(self.run_frames(state, self.center_on(), .6, 3).state, 'ON')
+    reference = state.center.reference.copy()
+    dim = scene();dim[20:25,68:92] = (125,25,25)
+    self.assertEqual(state.update(dim, .9).state, 'ON')
+    np.testing.assert_array_equal(state.center.reference, reference)
+
+  def test_confirmed_thin_strip_uses_maintenance_width_not_entry_width(self):
+    state = core.AdaptiveLamps()
+    self.run_frames(state, scene(), 0., 6)
+    self.assertEqual(self.run_frames(state, self.center_on(), .6, 3).state, 'ON')
+    thin = scene();thin[20:21,76:85] = (240,70,30)
+    self.assertEqual(state.update(thin, .9).reason, 'CENTER_LAMP_RISE')
+    fresh = core.AdaptiveLamps()
+    self.run_frames(fresh, scene(), 0., 6)
+    self.assertNotEqual(self.run_frames(fresh, thin, .6, 5).state, 'ON')
+
+  def test_short_miss_hides_box_but_preserves_reference_for_reacquisition(self):
+    state = core.AdaptiveLamps()
+    self.run_frames(state, scene(), 0., 6)
+    self.run_frames(state, self.center_on(), .6, 3)
+    reference = state.center.reference.copy()
+    self.assertNotEqual(state.update(scene(), .9).state, 'ON')
+    np.testing.assert_array_equal(state.center.reference, reference)
+    self.assertEqual(state.update(self.center_on(), 1.).state, 'ON')
+
+  def test_long_loss_discards_confirmed_reference_without_stale_on(self):
+    state = core.AdaptiveLamps()
+    self.run_frames(state, scene(), 0., 6)
+    self.run_frames(state, self.center_on(), .6, 3)
+    for i in range(9,15):
+      self.assertNotEqual(state.update(scene(), i*.1).state, 'ON')
+    self.assertIsNone(state.center.reference)
+    self.assertNotEqual(state.update(self.center_on(), 1.5).state, 'ON')
+
+  def test_nearby_component_cannot_replace_a_confirmed_center_during_grace(self):
+    state = core.AdaptiveLamps()
+    self.run_frames(state, scene(), 0., 6)
+    self.run_frames(state, self.center_on(), .6, 3)
+    geometry = state.center.geometry.copy()
+    different = scene();different[20:25,92:116] = (240,70,30)
+    for t in (.9, 1., 1.1):
+      self.assertNotEqual(state.update(different, t).reason, 'CENTER_LAMP_RISE')
+    np.testing.assert_array_equal(state.center.geometry, geometry)
+
   def test_initial_center_red_is_not_an_onset(self):
     result = self.run_frames(core.AdaptiveLamps(), self.center_on(), 0., 12)
     self.assertNotEqual(result.state, 'ON')
