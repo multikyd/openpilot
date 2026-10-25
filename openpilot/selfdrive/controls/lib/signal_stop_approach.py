@@ -30,14 +30,22 @@ class SignalStopApproach:
     predicted = max(0., self.distance-speed*dt) if self.distance is not None else distance
     gap = distance-predicted
     world_target = distance+self.travel
-    eligible = (.5 <= speed <= 15. and distance > buffer+3. and
-                .25 < gap <= 20. and distance > buffer+10. and self.extension_used < 12.)
+    following_correction = self.outward_confirm >= .75
+    eligible = (.5 <= speed <= 15. and predicted > buffer+2. and
+                .25 < gap <= (35. if following_correction else 20.) and
+                distance > buffer+6. and self.extension_used < 12.)
     if eligible:
-      if self.outward_candidate is None or abs(world_target-self.outward_candidate) > 1.5:
+      if self.outward_candidate is None or abs(world_target-self.outward_candidate) > 3.:
         self.outward_candidate = world_target
         self.outward_confirm = 0.
       else:
         self.outward_confirm += dt
+        # Follow a locally consistent estimate instead of comparing every
+        # frame with one frozen observation. The model's stop endpoint moves
+        # as braking changes its velocity horizon (test36). A fast runaway
+        # estimate still breaks confirmation; isolated large jumps cannot start
+        # a correction. Output extension retains its rate and total bounds.
+        self.outward_candidate += (1.-math.exp(-dt/.2))*(world_target-self.outward_candidate)
     else:
       self.outward_candidate = None
       self.outward_confirm = 0.

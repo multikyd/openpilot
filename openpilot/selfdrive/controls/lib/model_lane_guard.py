@@ -18,6 +18,7 @@ class ModelLaneGuard:
     self.evidence = 0.0
     self.last_model_time = None
     self.last_boundary = None
+    self.last_reliable_time = None
     self.penetration = 0.0
     self.confidence = 0.0
 
@@ -83,7 +84,15 @@ class ModelLaneGuard:
         self.reset()
         return curvature
       continuing = self.evidence > 0. or abs(self.accel) > 1e-4
+      lane_code = getattr(cs, 'rightLaneLine' if side > 0 else 'leftLaneLine', 0)
+      painted_boundary = math.isfinite(lane_code) and 10 <= lane_code < 30
+      recent_reliable = (self.last_reliable_time is not None and
+                         0. <= model_time-self.last_reliable_time <= .75)
       min_probability, max_std = (.55, .35) if continuing else (.65, .3)
+      if painted_boundary and recent_reliable:
+        # Brief weaker observations may continue a recently reliable painted
+        # boundary, but cannot acquire one from low confidence alone.
+        min_probability, max_std = .4, .35
       if not (min_probability <= probability <= 1. and 0. <= std < max_std):
         return self._release(curvature, cs.vEgo, dt)
       lookahead = float(np.clip(cs.vEgo * (np.clip(actuator_delay, .1, .6) + .6), 12., 24.))
@@ -119,16 +128,23 @@ class ModelLaneGuard:
         return curvature
       # Mild width uncertainty may release a correction, but cannot introduce one.
       min_width, max_width, spread = (2.6, 4.4, .9) if continuing else (2.8, 4.2, .7)
+      narrow_painted = painted_boundary and (recent_reliable or (probability >= .65 and std < .3))
+      if narrow_painted:
+        min_width = 2.45
       if np.any(widths < min_width) or np.any(widths > max_width) or np.ptp(widths) > spread:
         return self._release(curvature, cs.vEgo, dt)
+      if probability >= .65 and std < .3:
+        self.last_reliable_time = model_time
       clearances = right-predicted if side > 0 else predicted-left
       # Start before the old 1.35m center-to-line boundary, including future
       # model path points. A centered narrow corridor must remain untouched.
       ramp_weight = float(np.interp(abs(curvature), [.003, .010], [0., 1.]))
-      margin = min(1.35+.20*ramp_weight, .5*float(np.min(widths))-.15)
+      margin = min(1.35+.20*ramp_weight, .5*float(np.min(widths))-(.08 if narrow_painted else .15))
       penetration = max(0., margin-float(np.min(clearances))-.03)
-      confidence = min(float(np.interp(probability, [.55, .9], [0., 1.])),
-                       float(np.interp(std, [.12, .35], [1., 0.])))
+      probability_weight = float(np.interp(probability, [.55, .9], [0., 1.]))
+      if painted_boundary and recent_reliable:
+        probability_weight = max(probability_weight, .35*float(np.interp(probability, [.4, .65], [0., 1.])))
+      confidence = min(probability_weight, float(np.interp(std, [.12, .35], [1., 0.])))
     except (AttributeError, IndexError, TypeError, ValueError):
       self.reset()
       return curvature

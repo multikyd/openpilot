@@ -210,6 +210,36 @@ class TestModelLaneGuard(unittest.TestCase):
     k=.0025
     self.assertTrue(all(v==k for v in self.settle(ModelLaneGuard(),model,cs,k)))
 
+  def test_recent_painted_boundary_supports_a_narrow_corridor_in_both_directions(self):
+    for side in (-1, 1):
+      model,cs,k=fixture(side,offset=.4)
+      center=model.position.y-side*.4
+      model.laneLines[1].y=center-1.275;model.laneLines[2].y=center+1.275
+      setattr(cs,'rightLaneLine' if side>0 else 'leftLaneLine',11)
+      g=ModelLaneGuard();values=self.settle(g,model,cs,k)
+      self.assertLess(abs(values[-1]),abs(k))
+      model.laneLineProbs[2 if side>0 else 1]=.48
+      self.settle(g,model,cs,k,start=101.55,steps=8)
+      self.assertGreater(g.confidence,0.)
+      self.assertGreater(g.evidence,0.)
+      self.assertLess(g.accel*side,0.)
+
+  def test_weak_painted_line_cannot_acquire_without_recent_reliable_geometry(self):
+    model,cs,k=fixture();cs.rightLaneLine=11;model.laneLineProbs[2]=.48
+    self.assertTrue(all(v==k for v in self.settle(ModelLaneGuard(),model,cs,k)))
+
+  def test_painted_line_memory_expires_without_reliable_observations(self):
+    model,cs,k=fixture();cs.rightLaneLine=11;g=ModelLaneGuard();self.settle(g,model,cs,k)
+    model.laneLineProbs[2]=.48
+    self.settle(g,model,cs,k,start=101.5,steps=30)
+    self.assertEqual(g.confidence,0.)
+    self.assertEqual(g.evidence,0.)
+
+  def test_centered_narrow_painted_corridor_keeps_original_turn(self):
+    model,cs,k=fixture(offset=0.);cs.rightLaneLine=11
+    model.laneLines[1].y=model.position.y-1.275;model.laneLines[2].y=model.position.y+1.275
+    self.assertTrue(all(v==k for v in self.settle(ModelLaneGuard(),model,cs,k)))
+
 
 if __name__ == '__main__':
   unittest.main()

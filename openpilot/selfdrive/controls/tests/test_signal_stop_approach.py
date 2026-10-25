@@ -68,6 +68,21 @@ class TestSignalStopApproach(unittest.TestCase):
 
 class TestStopCorrection(unittest.TestCase):
  def update(self,g,d,v=4):return g.update(d,v,0.,2.16,4.6,True,.05)
+ def test_slowly_changing_world_estimate_can_recover_early_target(self):
+  g=SignalStopApproach();self.update(g,40)
+  for i in range(60):
+   self.update(g,42-(i+1)*.05)  # 4m/s travel, model world target drifts 3m/s.
+   self.assertLessEqual(g.accel_cap or 0.,0.)
+  self.assertGreater(g.extension_used,1.)
+  self.assertLessEqual(g.extension_used,3.)
+ def test_noisy_but_consistent_correction_does_not_restart_each_frame(self):
+  g=SignalStopApproach();self.update(g,40)
+  for i in range(60):self.update(g,44-4*(i+1)*.05+(.9 if i%2 else -.9))
+  self.assertGreater(g.extension_used,1.)
+ def test_committed_near_stop_does_not_start_an_outward_correction(self):
+  g=SignalStopApproach();self.update(g,7)
+  for i in range(30):self.update(g,10-4*(i+1)*.05)
+  self.assertEqual(g.extension_used,0.)
  def test_stable_outward_correction_is_adopted(self):
   g=SignalStopApproach();self.update(g,40)
   for i in range(100):self.update(g,42-4*(i+1)*.05)
