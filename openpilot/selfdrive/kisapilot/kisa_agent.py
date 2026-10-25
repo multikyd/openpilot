@@ -7,6 +7,10 @@ import datetime
 import os
 import subprocess
 import pty
+import codecs
+import fcntl
+import termios
+import struct
 import select
 import re
 
@@ -166,11 +170,12 @@ def get_item_details(item_path):
     try:
         size = os.path.getsize(item_path)
         modified_time = os.path.getmtime(item_path)
-        modified_date = datetime.datetime.fromtimestamp(modified_time).strftime('%Y-%m-%d %H:%M:%S')
+        modified_date = datetime.datetime.fromtimestamp(modified_time, datetime.timezone(datetime.timedelta(hours=9))).strftime('%Y-%m-%d %H:%M:%S')
     except Exception:
         size = -1
+        modified_time = None
         modified_date = "N/A"
-    return {"name": name, "path": item_path, "is_dir": is_dir, "size": size, "modified": modified_date}
+    return {"name": name, "path": item_path, "is_dir": is_dir, "size": size, "modified": modified_date, "modified_unix": modified_time, "modified_timezone": "Asia/Seoul"}
 
 @app.route('/files', methods=['GET'])
 def list_files():
@@ -1151,6 +1156,11 @@ def terminal_start():
                 os._exit(1)
 
         else:
+            try:
+                fcntl.ioctl(master_fd, termios.TIOCSWINSZ, struct.pack("HHHH", 32, 100, 0, 0))
+            except OSError:
+                pass
+            decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
             PTY_SESSIONS[cmd_uuid] = {
                 "pid": pid,
                 "fd": master_fd,
@@ -1173,9 +1183,7 @@ def terminal_start():
                         if not data:
                             break
                         if cmd_uuid in PTY_SESSIONS:
-                            PTY_SESSIONS[cmd_uuid]["output"] += data.decode(
-                                errors="ignore"
-                            )
+                            PTY_SESSIONS[cmd_uuid]["output"] += decoder.decode(data)
                         else:
                             break
                     except OSError:
