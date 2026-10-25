@@ -151,6 +151,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"ShowRadarInfo", {PERSISTENT, INT, "1"}},
     {"ShowPlotMode", {PERSISTENT, INT, "0"}},
     {"RecordRoadCam", {PERSISTENT, INT, "0"}},
+    {"RecordingRunning", {CLEAR_ON_MANAGER_START, BOOL, "0"}},
     {"HDPuse", {PERSISTENT, INT, "0"}},
     {"AutoCruiseControl", {PERSISTENT, INT, "0"}},
     {"CruiseEcoControl", {PERSISTENT, INT, "0"}},
