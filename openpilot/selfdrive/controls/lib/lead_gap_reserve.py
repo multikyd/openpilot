@@ -14,6 +14,7 @@ class LeadGapReserve:
     self.confirm = 0.
     self.cap = 0.
     self.recovery_confirm = 0.
+    self.handover_confirm = 0.
     self.releasing = False
     self.reason = 'off'
 
@@ -39,7 +40,7 @@ class LeadGapReserve:
     self.distance, self.relative_speed = lead.dRel, lead.vRel
     if not continuous:
       # A new/cut-in target must establish its own history. MPC remains in charge.
-      self.confirm, self.cap, self.recovery_confirm = 0., 0., 0.
+      self.confirm, self.cap, self.recovery_confirm, self.handover_confirm = 0., 0., 0., 0.
       self.releasing, self.reason = False, 'confirming'
       return None
     self.confirm = min(1., self.confirm+dt)
@@ -66,6 +67,18 @@ class LeadGapReserve:
                       lead.dRel >= max(0., desired_distance)+max(1., .1*speed))
     self.recovery_confirm = self.recovery_confirm+dt if room_confirmed else 0.
     recovering = self.recovery_confirm >= .25
+    # Stop adding comfort braking once the lead is pulling away and MPC has
+    # already relaxed its brakes. Full room is still required before allowing
+    # a positive cap: this phase can only return toward MPC's negative/zero
+    # command, never manufacture acceleration into a short gap.
+    opening = (desired_distance is not None and planned_accel is not None and
+               math.isfinite(desired_distance) and math.isfinite(planned_accel) and
+               lead.vRel >= .8 and lead.aLeadK >= -.2 and
+               lead.dRel >= max(stop_distance+3., .7*speed) and
+               desired_distance <= reserve and planned_accel >= -.8 and
+               target == 0.)
+    self.handover_confirm = self.handover_confirm+dt if opening else 0.
+    handing_over = self.handover_confirm >= .2
     if not recovering:
       self.releasing = False
       self.cap = min(0., self.cap)
@@ -75,9 +88,12 @@ class LeadGapReserve:
       # Continue the cap through zero until it meets the requested acceleration,
       # avoiding an abrupt jump from the last negative cap to full acceleration.
       target = max(0., planned_accel)
-    self.reason = 'recover' if self.releasing else 'reserve' if target < 0. else 'release' if self.cap < 0. else 'off'
+    elif handing_over:
+      target = min(0., planned_accel)
+    self.reason = ('recover' if self.releasing else 'handover' if handing_over and self.cap < target
+                   else 'reserve' if target < 0. else 'release' if self.cap < 0. else 'off')
     # Existing stronger MPC braking always wins in apply_lead_gap_cap.
-    rate = .6 if target < self.cap else .9 if self.releasing else .35
+    rate = .6 if target < self.cap else .9 if self.releasing else 1.2 if handing_over else .35
     self.cap += max(-rate*dt, min(rate*dt, target-self.cap))
     if self.releasing and self.cap >= target:
       self.cap, self.releasing, self.reason = 0., False, 'off'

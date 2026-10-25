@@ -18,6 +18,29 @@ class Observation:
   gains: tuple = ()
 
 
+@dataclass(frozen=True)
+class CopiedNV12:
+  data: bytes
+  stride: int
+  uv_offset: int
+
+
+def copy_nv12_roi(frame, roi):
+  """Detach a chroma-aligned crop before a worker touches shared camera memory."""
+  x,y,w,h = roi
+  x0,y0 = x//2*2,y//2*2
+  x1,y1 = (x+w+1)//2*2,(y+h+1)//2*2
+  if not (0 <= x0 < x1 <= frame.width and 0 <= y0 < y1 <= frame.height):
+    raise ValueError('NV12 crop outside frame')
+  width,height = x1-x0,y1-y0
+  raw = np.frombuffer(frame.data,dtype=np.uint8)
+  luma = np.ndarray((height,width),np.uint8,buffer=raw,offset=y0*frame.stride+x0,strides=(frame.stride,1))
+  chroma = np.ndarray((height//2,width),np.uint8,buffer=raw,
+                      offset=frame.uv_offset+(y0//2)*frame.stride+x0,strides=(frame.stride,1))
+  copied = CopiedNV12(luma.tobytes()+chroma.tobytes(),width,width*height)
+  return copied,(x-x0,y-y0,w,h)
+
+
 def project_search(matrix, distance, lateral, ground_z, shape):
   """Project a 2.2 m x 1.9 m lead search plane, using the UI's calibrated convention."""
   if not all(math.isfinite(v) for v in (distance, lateral, ground_z)) or not 3 < distance < 65:
@@ -188,6 +211,71 @@ def lamp_intensities(rgb, lamps):
     red = rgb[max(0, y-1):min(h, y+bh+1), max(0, x-1):min(w, x+bw+1), 0].ravel()
     values.append(float(np.sort(red)[-max(2, len(red)//5):].mean()))
   return np.array(values)
+
+
+class VehicleOutline:
+  """Lamp-seeded image-edge refinement inside the projected lead search region.
+
+  This is a local contour estimate, not a trained object detector. Unresolved
+  edges produce no vehicle rectangle instead of promoting the search ROI.
+  """
+  def __init__(self):
+    self.geometry = None
+    self.time = None
+    self.confirm = 0
+
+  def update(self, rgb, lamps, now):
+    if self.time is None or not 0 < now-self.time <= .35:
+      self.geometry = None
+      self.confirm = 0
+    self.time = now
+    if len(lamps) < 2:
+      self.confirm = 0
+      return None
+    h,w = rgb.shape[:2]
+    left,right = lamps[:2]
+    lx,rx = left[0]+left[2]/2,right[0]+right[2]/2
+    ly,ry = left[1]+left[3]/2,right[1]+right[3]/2
+    if not (.4*w < rx-lx < .94*w and abs(ly-ry) < .12*h):
+      self.confirm = 0
+      return None
+    gray = rgb.astype(np.float32).mean(axis=2)
+    gx = np.abs(np.diff(gray,axis=1))
+    gy = np.abs(np.diff(gray,axis=0))
+    rows = slice(max(1,int(.1*h)),min(h,int(max(ly,ry)+.20*h)))
+    def peak(values, low, high):
+      low,high = max(1,int(low)),min(len(values)-1,int(high))
+      if high-low < 3:
+        return None
+      segment = values[low:high]
+      index = int(np.argmax(segment))+low
+      # A coherent edge must stand out from its local texture/noise.
+      return index if values[index] > max(3.,1.35*float(np.median(segment))) else None
+    columns = gx[rows].mean(axis=0)
+    x0 = peak(columns,lx-.18*w,left[0]+1)
+    x1 = peak(columns,right[0]+right[2],rx+.18*w)
+    if x0 is None or x1 is None or not .5*w < x1-x0 < .98*w:
+      self.confirm = 0
+      return None
+    horizontal = gy[:,x0+int(.1*(x1-x0)):x1-int(.1*(x1-x0))].mean(axis=1)
+    y0 = peak(horizontal,.02*h,min(ly,ry)-.14*h)
+    y1 = peak(horizontal,max(max(ly,ry)+.08*h,.8*h),.98*h)
+    if y0 is None or y1 is None or not .4*h < y1-y0 < .98*h:
+      self.confirm = 0
+      return None
+    geometry = np.array([x0/w,y0/h,x1/w,y1/h])
+    if self.geometry is None or np.max(np.abs(geometry-self.geometry)) > .16:
+      self.geometry = geometry
+      self.confirm = 1
+      return None
+    self.geometry += .35*(geometry-self.geometry)
+    self.confirm += 1
+    if self.confirm < 3:
+      return None
+    x0,y0,x1,y1 = self.geometry*[w,h,w,h]
+    x0 = min(x0,float(left[0]))
+    x1 = max(x1,float(right[0]+right[2]))
+    return (float(x0),float(y0),float(x1-x0),float(y1-y0))
 
 
 

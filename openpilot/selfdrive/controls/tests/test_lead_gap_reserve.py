@@ -147,6 +147,33 @@ class TestLeadGapReserve(unittest.TestCase):
     self.helper.update(self.lead,10.,.9,3.6,self.time,self.time,True,desired_distance=0.,planned_accel=.7)
     self.assertEqual(self.helper.recovery_confirm,before)
 
+  def test_opening_partial_gap_returns_to_mpc_without_positive_acceleration(self):
+    self.lead.dRel=10.;self.tick(80)
+    initial=self.helper.cap
+    for _ in range(15):
+      before=self.helper.cap
+      self.recovery_tick(desired=12.,planned=-.2,relative=1.)
+      self.assertLessEqual(self.helper.cap,0.)
+      self.assertLessEqual(self.helper.cap-before,1.2*.05+1e-8)
+      self.assertFalse(self.helper.releasing)
+    self.assertGreater(self.helper.cap,initial+.35*.75)
+
+  def test_partial_handover_requires_physical_room(self):
+    self.tick(80)
+    for _ in range(10):
+      before=self.helper.cap
+      self.recovery_tick(desired=12.,planned=.7,relative=1.)
+      self.assertLessEqual(self.helper.cap-before,.35*.05+1e-8)
+      self.assertEqual(self.helper.handover_confirm,0.)
+
+  def test_closing_again_cancels_partial_handover(self):
+    self.lead.dRel=10.;self.tick(80)
+    for _ in range(8):self.recovery_tick(desired=12.,planned=-.2,relative=1.)
+    self.assertGreater(self.helper.handover_confirm,0.)
+    self.recovery_tick(desired=12.,planned=-1.,relative=-1.)
+    self.assertEqual(self.helper.handover_confirm,0.)
+    self.assertFalse(self.helper.releasing)
+
 
 if __name__ == '__main__':
   unittest.main()

@@ -319,7 +319,7 @@ class OverlayLifecycleTest(unittest.TestCase):
   def test_track_switch_discards_old_worker_result(self):
     self.o.previous=(99.9,21.52,0.,0.,2,0)
     self.o.context=(0,tuple(np.eye(3).ravel()))
-    result=Future();result.set_result((0,99.9,(0,0,80,60),1,core.Observation('ON'),99,1.))
+    result=Future();result.set_result((0,99.9,(0,0,80,60),1,core.Observation('ON'),99,1.,np.zeros((60,80,3),np.uint8),None))
     self.o.pending=result
     self.run_render()
     self.assertGreater(self.o.epoch,0);self.assertIsNone(self.o.display)
@@ -357,13 +357,66 @@ class OverlayLifecycleTest(unittest.TestCase):
     self.o.pending_sample=dict(mono=99.9,source_sof=99.9,frame_id=99,rgb=np.zeros((10,10,3),np.uint8))
     result=Future()
     lamps=((1,2,3,4),(6,2,3,4))
-    result.set_result((0,99.9,(0,0,80,60),1,core.Observation('ON',lamps=lamps),99,1.))
+    result.set_result((0,99.9,(0,0,80,60),1,core.Observation('ON',lamps=lamps),99,1.,np.zeros((60,80,3),np.uint8),None))
     self.o.pending=result
     self.run_render()
     sample=self.o.label_sample(100.)
     self.assertEqual(sample['frame_id'],99)
     self.assertEqual(sample['lamps'],lamps)
     self.assertEqual(sample['prediction'],'ON')
+
+  def test_delayed_worker_keeps_new_scale_and_detached_camera_pixels(self):
+    class Deferred:
+      def submit(self,fn):
+        self.fn=fn;self.future=Future();return self.future
+    deferred=Deferred();self.o.pool=deferred;self.o.last_submit=0.
+    self.o.display=(99.9,(0,0,80,60),1,core.Observation('UNKNOWN'))
+    original=core.nv12_crop
+    with patch.object(self.module,'nv12_crop',side_effect=lambda fr,roi:original(fr,roi,max_size=30)):
+      self.run_render()  # Old display is read before the new job completes.
+      self.frame.data[:]=0
+      result=deferred.fn()
+    self.assertEqual(result[3],3)
+    self.assertTrue(np.all(result[7]==128))
+    deferred.future.set_result(result)
+    self.run_render()
+    sample=self.o.label_sample(100.)
+    self.assertEqual(sample['step'],3)
+    self.assertEqual(sample['frame_id'],100)
+    self.assertEqual(sample['resampling'],'point')
+
+  def test_only_confirmed_lamp_rectangles_are_filled(self):
+    ray=self.module.rl
+    for state,expected in [('ON',2),('UNKNOWN',0),('OFF',0)]:
+      ray.draw_rectangle_rec.reset_mock()
+      self.o.display=(99.9,(0,0,80,60),1,core.Observation(state,lamps=((5,30,8,4),(60,30,8,4))), (2,2,74,54))
+      self.run_render()
+      self.assertEqual(ray.draw_rectangle_rec.call_count,expected)
+      for call in ray.draw_rectangle_rec.call_args_list:self.assertEqual(call.args[0].width,8.)
+
+
+class CropAndOutlineTest(unittest.TestCase):
+  def test_odd_aligned_copy_matches_source_and_survives_camera_overwrite(self):
+    raw=np.arange(24*18*3//2,dtype=np.uint8)
+    frame=SimpleNamespace(data=raw,width=20,height=18,stride=24,uv_offset=24*18)
+    roi=(3,1,13,13);expected,step=core.nv12_crop(frame,roi,max_size=7)
+    copied,local=core.copy_nv12_roi(frame,roi)
+    raw[:]=0
+    result,result_step=core.nv12_crop(copied,local,max_size=7)
+    np.testing.assert_array_equal(result,expected);self.assertEqual(result_step,step)
+
+  def test_outline_uses_image_edges_and_requires_repeated_evidence(self):
+    rgb=np.full((160,180,3),40,np.uint8);rgb[15:140,15:165]=140
+    lamps=((24,80,12,8),(144,80,12,8));g=core.VehicleOutline()
+    self.assertIsNone(g.update(rgb,lamps,0.));self.assertIsNone(g.update(rgb,lamps,.1))
+    x,y,w,h=g.update(rgb,lamps,.2)
+    self.assertAlmostEqual(x,14.);self.assertAlmostEqual(y,14.)
+    self.assertAlmostEqual(w,150.);self.assertAlmostEqual(h,125.)
+    self.assertIsNone(g.update(rgb,(),.3))
+
+  def test_textureless_or_ambiguous_outline_is_not_a_vehicle_rectangle(self):
+    g=core.VehicleOutline();rgb=np.full((160,180,3),100,np.uint8)
+    for i in range(10):self.assertIsNone(g.update(rgb,((24,80,12,8),(144,80,12,8)),i*.1))
 
 
 if __name__=='__main__':unittest.main()
