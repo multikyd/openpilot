@@ -328,6 +328,15 @@ class Track:
     return f"x: {self.dRel:4.1f}  y: {self.yRel:4.1f}  v: {self.vRel:4.1f}  a: {self.aLeadK:4.1f}"
 
 
+def is_stationary_side_track(t) -> bool:
+  # A wide vision-distance distribution must not turn a stationary roadside
+  # return into the lead. Keep in-path stops and genuinely inward cut-ins.
+  inward = -math.copysign(1., t.dPath) * t.yvLead
+  approaching_path = inward >= .3 and abs(t.dPath_future) < 1.5
+  return (t.vLead < 2. and abs(t.dPath) > 2. and t.in_lane_prob < .2 and
+          not approaching_path)
+
+
 def match_vision_to_track(v_ego: float, lead: capnp._DynamicStructReader, lead_prob: float,
                           tracks: dict[int, Track], update_counters: bool = True):
   if not tracks:
@@ -408,6 +417,12 @@ def match_vision_to_track(v_ego: float, lead: capnp._DynamicStructReader, lead_p
   first_score, second_score, extra_score = -1e18, -1e18, -1e18
 
   for t in tracks.values():
+    if is_stationary_side_track(t):
+      t.score = 0.0
+      if update_counters:
+        t.selected_count = 0
+        t.is_stopped_car_count = 0
+      continue
     s1, s2 = score_pair(t)
     t.score = s1
 
@@ -752,6 +767,10 @@ class RadarD:
   def get_sticky_track(self, tracks: dict[int, Track]) -> Track | None:
     sticky_tracks = []
     for t in tracks.values():
+      if is_stationary_side_track(t):
+        t.selected_count = 0
+        t.is_stopped_car_count = 0
+        continue
       if t.selected_count > 0 and abs(t.sticky_dPath) > t.sticky_dpath_limit():
         t.selected_count = 0
         t.is_stopped_car_count = 0

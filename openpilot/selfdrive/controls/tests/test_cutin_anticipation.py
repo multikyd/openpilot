@@ -13,7 +13,8 @@ def fixture():
 
 class TestCutInAnticipation(unittest.TestCase):
   def simulate(self, speed=20., start=-2.8, lateral=.6, relative=-3., distance=20., duration=1.5,
-               curvature=0., enabled=True, confidence=.99, offset_error=0., changing_id=False, stale=False):
+               curvature=0., enabled=True, confidence=.99, offset_error=0., changing_id=False, stale=False,
+               normal_accel=1.6):
     helper, model, trace = CutInAnticipation(), fixture(), []
     model.laneLineProbs[1] = confidence
     for i in range(round(duration/.05)):
@@ -23,7 +24,7 @@ class TestCutInAnticipation(unittest.TestCase):
                 dRel=distance+relative*t, yRel=y, dPath=y+offset_error, vRel=relative,
                 vLead=speed+relative, vLat=lateral)
       radar = NS(leadsLeft=[lead] if start > 0 else [], leadsRight=[lead] if start < 0 else [])
-      cap = helper.update(radar, model, speed, 1.6, curvature, t, t+.3 if stale else t, enabled)
+      cap = helper.update(radar, model, speed, normal_accel, curvature, t, t+.3 if stale else t, enabled)
       trace.append(cap)
     return helper, trace
 
@@ -161,6 +162,56 @@ class TestCutInAnticipation(unittest.TestCase):
     self.assertEqual(helper.stage,'prepare')
     self.assertIsNotNone(cap)
     self.assertGreaterEqual(cap,0.)
+
+  def test_close_closing_cut_in_opens_room_before_lead_switch(self):
+    helper, trace = self.simulate(speed=16., start=-3.2, lateral=.6, relative=-1.5,
+                                  distance=8., duration=1.2, normal_accel=.4)
+    self.assertEqual(helper.stage, 'coast')
+    self.assertLess(trace[-1], -.5)
+    self.assertGreaterEqual(trace[-1], -1.5)
+
+  def test_lane_occlusion_continues_only_confirmed_target_briefly(self):
+    helper, _ = self.simulate(speed=16., start=-3.2, lateral=.6, relative=-1.5,
+                              distance=8., duration=1.2)
+    model = fixture()
+    model.laneLineStds[2] = .55
+    def update(t, state=helper, key=201):
+      y = -3.2+.6*t
+      lead = NS(present=True, radar=True, radarTrackId=key, dRel=8.-1.5*t,
+                yRel=y, dPath=y, vRel=-1.5, vLead=14.5, vLat=.6)
+      return state.update(NS(leadsLeft=[], leadsRight=[lead]), model, 16., 1.6, 0., t, t, True)
+    self.assertIsNotNone(update(1.2))
+    self.assertEqual(helper.stage, 'coast')
+    self.assertIsNone(update(1.75))
+    fresh = CutInAnticipation()
+    self.assertIsNone(update(1.2, fresh))
+
+  def test_urgent_cut_in_keeps_stronger_planner_braking(self):
+    helper, _ = self.simulate(speed=16., start=-3.2, lateral=.6, relative=-1.5,
+                              distance=8., duration=1.2)
+    lead = NS(present=True, radar=True, radarTrackId=201, dRel=6.2, yRel=-2.48,
+              dPath=-2.48, vRel=-1.5, vLead=14.5, vLat=.6)
+    cap = helper.update(NS(leadsLeft=[], leadsRight=[lead]), fixture(), 16., -3., 0., 1.2, 1.2, True)
+    self.assertLessEqual(cap, -3.)
+
+  def test_urgent_cut_in_is_symmetric_and_ramps_braking(self):
+    options = dict(speed=16., relative=-1.5, distance=8., duration=1.2, normal_accel=.4)
+    _, right = self.simulate(start=-3.2, lateral=.6, **options)
+    _, left = self.simulate(start=3.2, lateral=-.6, **options)
+    self.assertEqual(left, right)
+    values = [.4]+[v for v in right if v is not None]
+    self.assertTrue(all(b-a >= -1.5*.05-1e-8 for a, b in zip(values, values[1:])))
+
+  def test_cached_lane_cannot_confirm_a_different_vehicle(self):
+    helper, _ = self.simulate(speed=16., start=-3.2, lateral=.6, relative=-1.5,
+                              distance=8., duration=1.2, normal_accel=.4)
+    model = fixture()
+    model.laneLineStds[2] = .55
+    lead = NS(present=True, radar=True, radarTrackId=205, dRel=6.2, yRel=-2.48,
+              dPath=-2.48, vRel=-1.5, vLead=14.5, vLat=.6)
+    helper.update(NS(leadsLeft=[], leadsRight=[lead]), model, 16., .4, 0., 1.2, 1.2, True)
+    self.assertIsNone(helper.track_id)
+    self.assertNotIn(205, helper.history)
 
 
 if __name__ == '__main__':
