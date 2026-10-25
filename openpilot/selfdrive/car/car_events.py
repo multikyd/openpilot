@@ -186,13 +186,6 @@ class CarEvents:
           self.do_shutdown = True
           self.params.put_bool("DoShutdown", True)
 
-    # Proactive angle-command protection is distinct from the physical EPS fault bits.
-    if self.CP.brand == 'hyundai':
-      if CS.steeringAngleGuardState == 1:
-        events.add(EventName.steerSaturated)
-      elif CS.steeringAngleGuardState == 2:
-        events.add(EventName.steerTempUnavailable)
-
     # Handle permanent and temporary steering faults
     self.steering_unpressed = 0 if CS.steeringPressed else self.steering_unpressed + 1
     if CS.steerFaultTemporary:
