@@ -605,7 +605,8 @@ class LongitudinalMpc:
     return min(normal_max, -self.early_lead_decel) if self.early_lead_decel else normal_max
 
   def update(self, carrot, reset_state, radarstate, v_cruise, x, v, a, j, personality=log.LongitudinalPersonality.standard,
-             prev_accel_constraint=True, future_curvature=None, allow_turn_resume=False, allow_congestion=False, cutin_accel_limit=None):
+             prev_accel_constraint=True, future_curvature=None, allow_turn_resume=False, allow_congestion=False, cutin_accel_limit=None,
+             turn_exit_strength=0.):
     v_ego = self.x0[1]
     a_ego = self.x0[2]
     t_follow = carrot.get_T_FOLLOW(personality, v_ego, a_ego)
@@ -769,8 +770,14 @@ class LongitudinalMpc:
     self.t_follow = t_follow
 
     # Apply this cycle's follow/jerk factor and lead acceleration-change cost.
+    # Only soften cruise recovery when none of the existing safety caps is binding.
+    # Lead obstacles, stop objectives, acceleration bounds and braking costs remain.
+    exit_strength = float(np.clip(turn_exit_strength, 0., 1.)) if np.isfinite(turn_exit_strength) else 0.
+    exit_strength = exit_strength if (mode == 'acc' and not reset_state and
+                                     self.turn_loss_limit is None and cruise_max_a >= self.max_a-1e-6) else 0.
     self.set_weights(prev_accel_constraint, personality=personality,
-                     jerk_factor=carrot.jerk_factor_apply, a_change_cost_starting=carrot.aChangeCostStarting)
+                     jerk_factor=carrot.jerk_factor_apply*(1.-.35*exit_strength),
+                     a_change_cost_starting=carrot.aChangeCostStarting)
     self.run()
     if (np.any(lead_xv_0[FCW_IDXS,0] - self.x_sol[FCW_IDXS,0] < CRASH_DISTANCE) and
             radarstate.leadOne.modelProb > 0.9):
