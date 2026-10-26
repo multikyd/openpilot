@@ -10,6 +10,7 @@ import numpy as np
 import pyray as rl
 from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.controls.radard import RADAR_TO_CAMERA
+from openpilot.selfdrive.ui.onroad.brake_vehicle_model import BrakeVehicleModel, fuse_observation
 from openpilot.selfdrive.ui.onroad.brake_lights import AdaptiveLamps, VehicleOutline, copy_nv12_roi, nv12_crop, project_search
 
 
@@ -34,8 +35,14 @@ class BrakeLightOverlay:
     self.context = None
     self.label_cache = None
     self.pending_sample = None
+    self.vehicle_model = BrakeVehicleModel()
+    self.last_vehicle_status = None
+    self.last_vehicle_log = -10.
+    self.model_roi = None
 
   def clear(self):
+    self.vehicle_model.clear()
+    self.model_roi = None
     if self.previous is not None or self.display is not None:
       self.epoch += 1
       self.adaptive = AdaptiveLamps()
@@ -57,13 +64,15 @@ class BrakeLightOverlay:
 
   def latest_observation(self, now=None):
     now = time.monotonic() if now is None else now
-    if (not self.enabled or self.previous is None or self.display is None or
-        not 0 <= now-self.display[0] <= .35):
+    if not self.enabled or self.previous is None:
       return None
-    return self.display[3]
+    observation = self.display[3] if self.display is not None and 0 <= now-self.display[0] <= .35 else None
+    hint = self.vehicle_model.current_state(self.model_roi, self.epoch, now) if self.model_roi is not None else None
+    return fuse_observation(observation, hint) if observation is not None or hint is not None else None
 
   def close(self):
     self.clear()
+    self.vehicle_model.close()
     if self.pool is not None:
       self.pool.shutdown(wait=False, cancel_futures=True)
       self.pool = None
@@ -131,19 +140,27 @@ class BrakeLightOverlay:
         self.clear()
     self.context = context
     self.previous = current
+    self.model_roi = roi
+    model_body = self.vehicle_model.tick(frame, roi, self.epoch, now, fps=rl.get_fps())
+    if self.vehicle_model.status != self.last_vehicle_status or (self.vehicle_model.report is not None and now-self.last_vehicle_log >= 5.):
+      cloudlog.event("lead_vehicle_model_ui", status=self.vehicle_model.status,
+                     result=self.vehicle_model.report, frame_id=int(frame.frame_id),
+                     radar_track_id=int(lead.radarTrackId), display_only=True)
+      self.last_vehicle_status, self.last_vehicle_log = self.vehicle_model.status, now
     if self.pending is not None and self.pending.done():
       epoch, captured, result_roi, result_step, observation, frame_id, duration, rgb, body = self.pending.result()
       self.pending = None
       if epoch == self.epoch and now-captured < .35:
         self.display = (captured, result_roi, result_step, observation, body)
+        shown = fuse_observation(observation, self.vehicle_model.current_state(roi, self.epoch, now))
         if self.pending_sample is not None and self.pending_sample['frame_id'] == frame_id:
-          self.label_cache = dict(self.pending_sample, rgb=rgb, step=result_step, resampling='point', prediction=observation.state,
-                                  prediction_mono=captured, lamps=observation.lamps, reason=observation.reason)
-        event = (observation.state, observation.reason)
+          self.label_cache = dict(self.pending_sample, rgb=rgb, step=result_step, resampling='point', prediction=shown.state, legacy_prediction=observation.state,
+                                  prediction_mono=captured, lamps=observation.lamps, reason=shown.reason)
+        event = (shown.state, shown.reason)
         if event != self.last_log or now-self.last_event > 5.:
-          state_changed = self.last_log is None or observation.state != self.last_log[0]
+          state_changed = self.last_log is None or shown.state != self.last_log[0]
           if state_changed or now-self.last_event >= .5:
-            cloudlog.event("lead_brake_lights_ui", state=observation.state, reason=observation.reason,
+            cloudlog.event("lead_brake_lights_ui", state=shown.state, reason=shown.reason, legacy_state=observation.state,
                            lamps=len(observation.lamps), gains=list(observation.gains), frame_id=frame_id,
                            d_rel=float(lead.dRel), v_rel=float(lead.vRel), processing_ms=round(duration, 2),
                            roi=list(result_roi), step=result_step, lamp_boxes=list(observation.lamps),
@@ -181,6 +198,12 @@ class BrakeLightOverlay:
     # A projected search region must not masquerade as a detected vehicle edge.
     if self.show_search:
       rl.draw_rectangle_lines_ex(screen(roi), 1., rl.Color(65,220,245,90))
+    shown = self.latest_observation(now)
+    display_state = shown.state if shown is not None else 'UNKNOWN'
+    color = (rl.Color(255,165,50,235) if display_state == 'ON' else
+             rl.Color(85,205,235,210) if display_state == 'OFF' else rl.Color(170,170,170,150))
+    if model_body is not None:
+      rl.draw_rectangle_lines_ex(screen(model_body), 2., color)
     if self.display is None or now-self.display[0] > .35:
       return
     captured, found_roi, display_step, observation = self.display[:4]
@@ -190,13 +213,9 @@ class BrakeLightOverlay:
       return
     x, y, w, h = found_roi
     body = self.display[4] if len(self.display) > 4 else None
-    if body is not None:
+    if body is not None and model_body is None:
       a,b,bw,bh = body
       rl.draw_rectangle_lines_ex(screen((x+a*display_step,y+b*display_step,bw*display_step,bh*display_step)),
-                                 2., rl.Color(65,220,245,220))
-    color = rl.Color(255, 165, 50, 235) if observation.state == 'ON' else rl.Color(85, 205, 235, 210)
-    for a, b, bw, bh in observation.lamps:
-      box = screen((x+a*display_step, y+b*display_step, bw*display_step, bh*display_step))
-      if observation.state == 'ON':
-        rl.draw_rectangle_rec(box, rl.Color(255,165,50,85))
-      rl.draw_rectangle_lines_ex(box, 2., color)
+                                 2., color)
+    # Individual lamp locations remain internal observations/label metadata.
+    # Only the whole vehicle outline carries the displayed ON/OFF/UNKNOWN state.

@@ -385,14 +385,44 @@ class OverlayLifecycleTest(unittest.TestCase):
     self.assertEqual(sample['frame_id'],100)
     self.assertEqual(sample['resampling'],'point')
 
-  def test_only_confirmed_lamp_rectangles_are_filled(self):
+  def test_only_vehicle_outline_is_drawn_for_all_lamp_states(self):
     ray=self.module.rl
-    for state,expected in [('ON',2),('UNKNOWN',0),('OFF',0)]:
+    for state,expected in [('ON',0),('UNKNOWN',0),('OFF',0)]:
       ray.draw_rectangle_rec.reset_mock()
       self.o.display=(99.9,(0,0,80,60),1,core.Observation(state,lamps=((5,30,8,4),(60,30,8,4))), (2,2,74,54))
       self.run_render()
       self.assertEqual(ray.draw_rectangle_rec.call_count,expected)
       for call in ray.draw_rectangle_rec.call_args_list:self.assertEqual(call.args[0].width,8.)
+
+  def test_model_outline_is_not_duplicated_with_heuristic_outline(self):
+    ray=self.module.rl
+    ray.draw_rectangle_lines_ex.reset_mock()
+    self.o.display=(99.9,(0,0,80,60),1,core.Observation('UNKNOWN'),(2,2,74,54))
+    with patch.object(self.o.vehicle_model,'tick',return_value=(4,4,70,50)):
+      self.run_render()
+    self.assertEqual(ray.draw_rectangle_lines_ex.call_count,1)
+    self.assertEqual(self.o.latest_observation(100.).state,'UNKNOWN')
+
+  def test_model_outline_can_render_without_inventing_lamp_boxes(self):
+    ray=self.module.rl
+    ray.draw_rectangle_lines_ex.reset_mock()
+    ray.draw_rectangle_rec.reset_mock()
+    self.o.display=None
+    with patch.object(self.o.vehicle_model,'tick',return_value=(4,4,70,50)):
+      self.run_render()
+    self.assertEqual(ray.draw_rectangle_lines_ex.call_count,1)
+    ray.draw_rectangle_rec.assert_not_called()
+
+  def test_model_on_hint_colors_vehicle_without_drawing_lamp_boxes(self):
+    ray=self.module.rl
+    ray.draw_rectangle_rec.reset_mock()
+    self.o.display=(99.9,(0,0,80,60),1,core.Observation('UNKNOWN',lamps=((5,30,8,4),(60,30,8,4))),None)
+    with patch.object(self.o.vehicle_model,'tick',return_value=(4,4,70,50)), patch.object(self.o.vehicle_model,'current_state',return_value=dict(state='ON',confidence=.95,age=.1)):
+      self.run_render()
+      self.assertEqual(self.o.latest_observation(100.).state,'ON')
+    self.assertEqual(ray.draw_rectangle_rec.call_count,0)
+    self.assertEqual(self.o.display[3].state,'UNKNOWN')
+    for call in ray.draw_rectangle_rec.call_args_list:self.assertEqual(call.args[0].width,8.)
 
 
 class CropAndOutlineTest(unittest.TestCase):
