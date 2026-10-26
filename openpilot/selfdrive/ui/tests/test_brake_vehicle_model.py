@@ -97,12 +97,14 @@ class VehicleModelTest(unittest.TestCase):
     self.assertIsNone(h.tick(frame,(0,0,80,60),2,100.))
     self.assertIsNone(h.result)
 
-  def test_slow_inference_disables_without_affecting_lamp_observer(self):
+  def test_slow_inference_waits_before_bounded_retry(self):
     h = self.helper()
     h.outbox.put(('result',0,99.9,(0,0,80,60),None,1.1))
     self.assertIsNone(h.tick(NS(),(0,0,80,60),0,100.))
-    self.assertFalse(h.enabled)
-    self.assertEqual(h.status,'inference_too_slow')
+    self.assertTrue(h.enabled)
+    self.assertEqual(h.status,'retry_wait:inference_too_slow')
+    self.assertEqual(h.retry_at,130.)
+    self.assertEqual(h.report['elapsed_ms'],1100.)
 
   def test_one_pending_frame_and_adaptive_duty_cycle(self):
     h = self.helper()
@@ -154,6 +156,72 @@ class VehicleModelTest(unittest.TestCase):
       h._launch()
     self.assertEqual(calls,['priority','queue','queue','spawn'])
     h.close()
+
+  def test_warmup_has_no_live_frame_submission_and_its_own_timeout(self):
+    h=self.helper();h.ready=False;h.started=80.;h.phase='warmup'
+    with patch.object(model,'copy_nv12_roi') as copy:
+      h.tick(NS(),(0,0,80,60),0,110.)
+      self.assertTrue(h.enabled)
+      self.assertEqual(h.retry_count,0)
+      copy.assert_not_called()
+      h.tick(NS(),(0,0,80,60),0,141.)
+    self.assertEqual(h.status,'retry_wait:warmup_timeout')
+
+  def test_live_timeout_is_distinct_from_process_exit(self):
+    h=self.helper();h.busy=True;h.submitted=100.
+    h.tick(NS(),(0,0,80,60),0,102.1)
+    self.assertEqual(h.status,'retry_wait:inference_timeout')
+    self.assertIsNone(h.report['exit_code'])
+    class Dead(FakeProcess):
+      exitcode=-9
+      pid=123
+      def is_alive(self):return False
+    h=self.helper();h.process=Dead()
+    h.tick(NS(),(0,0,80,60),0,100.)
+    self.assertEqual(h.status,'retry_wait:worker_exit')
+    self.assertEqual(h.report['exit_code'],-9)
+    self.assertEqual(h.report['worker_pid'],123)
+
+  def test_retry_budget_and_no_work_during_cooldown(self):
+    h=self.helper()
+    h._fail('inference_timeout',100.)
+    with patch.object(model,'Thread') as thread:
+      h.tick(NS(),(0,0,80,60),0,120.)
+      thread.assert_not_called()
+    self.assertEqual(h.retry_at,130.)
+    h._fail('inference_timeout',140.)
+    self.assertEqual(h.retry_at,200.)
+    h._fail('inference_timeout',210.)
+    self.assertFalse(h.enabled)
+    self.assertEqual(h.status,'disabled:inference_timeout')
+
+  def test_late_result_is_not_shown_after_warmup(self):
+    h=self.helper()
+    h.outbox.put(('result',0,98.,(0,0,80,60),dict(box=(0,0,80,60),confidence=.9,state='ON'),.4))
+    self.assertIsNone(h.tick(NS(),(0,0,80,60),0,100.))
+    self.assertIsNone(h.result)
+
+  def test_worker_warms_with_dummy_input_before_ready(self):
+    calls=[]
+    class Session:
+      def get_inputs(self):return [NS(name='images',shape=[1,3,640,640])]
+      def get_outputs(self):return [NS(shape=[1,6,8400])]
+      def run(self,outputs,inputs):
+        calls.append(inputs['images'].shape)
+        return [np.zeros((1,6,8400),np.float32)]
+    ort=NS(SessionOptions=lambda:NS(),ExecutionMode=NS(ORT_SEQUENTIAL=0),InferenceSession=lambda *a,**k:Session())
+    inbox,outbox=Queue(),Queue();inbox.put(None)
+    with patch.dict('sys.modules',{'onnxruntime':ort}),patch.object(model,'_background_priority'),patch.object(model,'use_runtime'):
+      model._worker(inbox,outbox,'dummy')
+    self.assertEqual(outbox.get()[0:2],('phase','warmup'))
+    self.assertEqual(outbox.get()[0],'ready')
+    self.assertEqual(calls,[(1,3,640,640)])
+
+  def test_priority_is_not_lowered_twice_in_child(self):
+    calls=[]
+    with patch.object(model.os,'sched_setscheduler',create=True),patch.object(model.os,'sched_setaffinity',create=True),patch.object(model.os,'sched_param',create=True),patch.object(model.os,'SCHED_OTHER',0,create=True),patch.object(model.os,'nice',side_effect=lambda n:10 if n==0 else calls.append(n),create=True):
+      model._background_priority()
+    self.assertEqual(calls,[])
 
 
 if __name__ == '__main__':

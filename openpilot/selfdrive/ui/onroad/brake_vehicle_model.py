@@ -102,7 +102,7 @@ def _background_priority():
     except OSError:
       pass
   if hasattr(os, 'nice'):
-    os.nice(10)
+    os.nice(max(0, 10-os.nice(0)))
 
 
 def _worker(inbox, outbox, path):
@@ -122,7 +122,11 @@ def _worker(inbox, outbox, path):
     inp = session.get_inputs()[0]
     if inp.shape != [1,3,640,640] or session.get_outputs()[0].shape != [1,6,8400]:
       raise ValueError('Unexpected brake model interface')
-    outbox.put(('ready',))
+    # Pay first-run allocation/kernel setup before capturing a live frame.
+    outbox.put(('phase', 'warmup'))
+    warmup_start = time.monotonic()
+    session.run(None, {inp.name: np.zeros((1,3,640,640), dtype=np.float32)})
+    outbox.put(('ready', time.monotonic()-warmup_start))
     while True:
       job = inbox.get()
       if job is None:
@@ -157,11 +161,17 @@ class BrakeVehicleModel:
     self.status = 'idle' if self.enabled else 'unavailable'
     self.report = None
     self.low_fps_since = None
+    self.retry_count = 0
+    self.retry_at = 0.
+    self.phase = 'idle'
+    self.phase_started = 0.
+    self.launch_generation = 0
 
   def clear(self):
     self.result = None
 
   def close(self):
+    self.launch_generation += 1
     self.launching = False
     if self.process is not None:
       if self.process.is_alive():
@@ -181,7 +191,26 @@ class BrakeVehicleModel:
     self.result = None
     self.close()
 
-  def _launch(self):
+  def _fail(self, reason, now, elapsed=None):
+    # Distinguish a dead process from a live-but-slow worker before cleanup.
+    self.report = dict(self.report or {}, failure=reason, phase=self.phase,
+                       elapsed_ms=round(elapsed*1000, 1) if elapsed is not None else None,
+                       exit_code=getattr(self.process, 'exitcode', None),
+                       worker_pid=getattr(self.process, 'pid', None), retry_count=self.retry_count)
+    self.result = None
+    self.close()
+    if self.retry_count < 2:
+      self.retry_count += 1
+      self.retry_at = now+30.*self.retry_count
+      self.status = 'retry_wait:'+reason
+      self.report.update(retry_count=self.retry_count, retry_delay_s=30.*self.retry_count)
+      self.launch_error = False
+    else:
+      self.enabled = False
+      self.status = 'disabled:'+reason
+
+  def _launch(self, generation=None):
+    generation = self.launch_generation if generation is None else generation
     try:
       _background_priority()
       ctx = mp.get_context('spawn')
@@ -190,7 +219,7 @@ class BrakeVehicleModel:
       inbox.put_nowait(('ping',))
       process = ctx.Process(target=_worker, args=(inbox,outbox,str(MODEL)), daemon=True)
       process.start()
-      if not self.enabled or not self.launching:
+      if not self.enabled or not self.launching or generation != self.launch_generation:
         process.terminate()
         process.join(timeout=.01)
         for q in (inbox,outbox):
@@ -199,9 +228,10 @@ class BrakeVehicleModel:
         return
       self.inbox, self.outbox, self.process = inbox, outbox, process
       self.launching = False
-    except Exception:
-      self.launch_error = True
-      self.launching = False
+    except Exception as exc:
+      if generation == self.launch_generation:
+        self.launch_error = type(exc).__name__
+        self.launching = False
 
   def tick(self, frame, roi, epoch, now, fps=None):
     if not self.enabled:
@@ -214,56 +244,71 @@ class BrakeVehicleModel:
         return None
     else:
       self.low_fps_since = None
+    if now < self.retry_at:
+      return None
     try:
       if self.launch_error:
-        self.disable('worker_setup_error')
+        self._fail('worker_setup_error:'+str(self.launch_error), now)
         return None
       if self.process is None:
         if not self.launching:
           self.launching = True
           self.started = now
-          self.status = 'loading'
-          Thread(target=self._launch, name='brake_model_launch', daemon=True).start()
+          self.phase = self.status = 'loading'
+          self.phase_started = now
+          self.last_submit = -100.
+          Thread(target=self._launch, args=(self.launch_generation,), name='brake_model_launch', daemon=True).start()
         elif now-self.started > 20.:
-          self.disable('worker_start_timeout')
+          self._fail('worker_start_timeout', now, now-self.started)
         return None
       for _ in range(2):
         try:
           message = self.outbox.get_nowait()
         except Empty:
           break
-        if message[0] == 'ready':
+        if message[0] == 'phase':
+          self.phase = self.status = message[1]
+          self.phase_started = now
+        elif message[0] == 'ready':
           self.ready = True
-          self.status = 'ready'
+          self.phase = self.status = 'ready'
+          self.report = dict(warmup_ms=round(message[1]*1000,1) if len(message)>1 else None,
+                             retry_count=self.retry_count)
         elif message[0] == 'error':
-          self.disable('load_or_run_error:'+message[1])
+          self._fail('load_or_run_error:'+message[1], now)
           return None
         elif message[0] == 'result':
           _, generation, captured, found_roi, chosen, elapsed = message
           self.busy = False
           self.interval = max(1., elapsed*5)  # At most ~20% of one CPU core.
-          self.report = dict(duration_ms=round(elapsed*1000,1), state=chosen['state'] if chosen else 'UNKNOWN',
+          self.report = dict(self.report or {}, duration_ms=round(elapsed*1000,1), state=chosen['state'] if chosen else 'UNKNOWN',
                              confidence=chosen['confidence'] if chosen else 0., matched=chosen is not None)
           if elapsed > 1.:
-            self.disable('inference_too_slow')
+            self._fail('inference_too_slow', now, elapsed)
             return None
           if generation == epoch and 0 <= now-captured < 1.:
             self.result = (generation, captured, found_roi, chosen)
-      if (not self.process.is_alive() or (not self.ready and now-self.started > 20.) or
-          (self.busy and now-self.submitted > 2.)):
-        self.disable('worker_stalled_or_exited')
+      if not self.process.is_alive():
+        self._fail('worker_exit', now)
+        return None
+      if not self.ready and now-self.started > 60.:
+        self._fail('warmup_timeout' if self.phase == 'warmup' else 'model_load_timeout', now, now-self.started)
+        return None
+      if self.busy and now-self.submitted > 2.:
+        self._fail('inference_timeout', now, now-self.submitted)
         return None
       if self.ready and not self.busy and now-self.last_submit >= self.interval:
         copied, _ = copy_nv12_roi(frame, (0,0,frame.width,frame.height))
         try:
           self.inbox.put_nowait((epoch,now,roi,frame.width,frame.height,copied))
           self.busy = True
+          self.phase = 'inference'
           self.submitted = self.last_submit = now
         except Full:
           pass
       return self.current_box(roi, epoch, now)
-    except Exception:
-      self.disable('worker_setup_error')
+    except Exception as exc:
+      self._fail('worker_setup_error:'+type(exc).__name__, now)
       return None
 
   def current_box(self, roi, epoch, now):

@@ -32,6 +32,7 @@ from openpilot.common.hardware import PC, COMMA_HARDWARE
 from openpilot.common.constants import CV
 
 from openpilot.selfdrive.carrot.carrot_serv import CarrotServ
+from openpilot.selfdrive.carrot.navi_transport import DISCOVERY_PORTS, NaviSourceMux, NaviTcpServer
 
 from openpilot.common.gps import get_gps_location_service
 
@@ -371,7 +372,8 @@ class CarrotMan:
             msg = self.make_send_message()
             if self.broadcast_ip is not None:
               dat = msg.encode('utf-8')
-              sock.sendto(dat, (self.broadcast_ip, self.broadcast_port))
+              for navi_port in DISCOVERY_PORTS:
+                sock.sendto(dat, (self.broadcast_ip, navi_port))
             #for i in range(1, 255):
             #  ip_tuple = socket.inet_aton(self.broadcast_ip)
             #  new_ip = ip_tuple[:-1] + bytes([i])
@@ -1476,7 +1478,7 @@ class CarrotMan:
       self._last_rgdata_timestamp_ms = timestamp_ms
       return False, last_ts
 
-  def _dispatch_obj(self, obj: Any):
+  def _dispatch_obj(self, obj: Any, ordered=False):
     if obj is None:
       return
 
@@ -1508,7 +1510,7 @@ class CarrotMan:
       handled = True
 
     if "rgdata" in obj:
-      stale, last_ts = self._is_stale_rgdata(event_time_ms)
+      stale, last_ts = (False, 0) if ordered else self._is_stale_rgdata(event_time_ms)
       if stale:
         print(f"[STALE DROP] rgdata ts={event_time_ms} <= last={last_ts}")
       else:
@@ -1553,53 +1555,47 @@ class CarrotMan:
       traceback.print_exc()
       return None
 
+  def _navi_source_changed(self, source, addr):
+    # Clear the previous app before applying the selected app's position/signal cache.
+    self.remote_addr = addr
+    self._directional_signal = None
+    self._last_complex_crossroad = {}
+    self.params_memory.remove(NAVI_IMAGE_PARAM)
+    self.handle_route([])
+    self.params_memory.remove("TrafficLight")
+    self.params_memory.remove("TrafficLightContext")
+    serv = self.carrot_serv
+    serv.active_count = serv.active_sdi_count = 0
+    serv.nSdiType = serv.nSdiPlusType = serv.nSdiBlockType = serv.nSdiPlusBlockType = -1
+    serv.nSdiDist = serv.nSdiPlusDist = serv.nSdiBlockDist = serv.nSdiPlusBlockDist = 0
+    serv.nSdiBlockSpeed = serv.nSdiPlusBlockSpeed = 0
+    serv.nSdiSpeedLimit = serv.nSdiPlusSpeedLimit = 0
+    serv.xSpdType = -1
+    serv.xSpdLimit = serv.xSpdLimit_org = serv.xSpdDist = 0
+    serv.nTBTTurnType = serv.nTBTTurnTypeNext = -1
+    serv.nTBTDist = serv.nTBTDistNext = 0
+    serv.signal_lane_points = []
+    serv.nRoadLimitSpeed = serv.nPosSpeed = 0
+    serv.vpPosPointLatNavi = serv.vpPosPointLonNavi = 0
+    serv.last_update_gps_time_navi = 0
+    serv.szSdiDescr = serv.szTBTMainText = serv.szTBTMainTextNext = ""
+    cloudlog.event("navi_source_selected", source=source or "none", remote=str(addr))
+
+  def _navi_transport_received(self, source, packet):
+    raw = packet.get("raw_naver")
+    raw = raw if isinstance(raw, dict) else {}
+    safety = raw.get("safety")
+    safety = safety[:16] if isinstance(safety, list) else []
+    cloudlog.event("navi_guidance_rx", source=source, state=packet.get("navi_state"),
+                   rgdata=packet.get("rgdata"), mode=raw.get("mode"),
+                   safety=safety)
+
   def carrot_navi_tcp_server(self, port: int = 7712):
-    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server.bind(("0.0.0.0", port))
-    server.listen(5)
-    print("TCP server listening", port)
+    mux = NaviSourceMux(lambda obj: self._dispatch_obj(obj, ordered=True),
+                        self._navi_source_changed, self._navi_transport_received)
+    self._navi_tcp_server = NaviTcpServer(mux, port)
+    self._navi_tcp_server.serve()
 
-    while True:
-      conn, addr = server.accept()
-      self.remote_addr = addr
-      print("Connected:", addr)
-      conn.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-      try:
-        f = conn.makefile("r", encoding="utf-8", errors="ignore")
-        while True:
-          try:
-            line = f.readline()
-          except socket.timeout:
-            print("TCP timeout: closing connection", addr)
-            break
-
-          if not line:
-            break
-
-          s = line.strip()
-          if not s:
-            continue
-
-          try:
-            obj = json.loads(s)
-          except Exception:
-            obj = s
-
-          try:
-            self._dispatch_obj(obj)
-          except Exception as e:
-            print("dispatch error:", e, "raw:", repr(s[:200]))
-
-      except Exception as e:
-        print("TCP error:", e)
-
-      finally:
-        try:
-          conn.close()
-        except Exception:
-          pass
-        self.remote_addr = None
 
 def main():
   from openpilot.selfdrive.carrot.crash_diagnostics import enable_crash_diagnostics
