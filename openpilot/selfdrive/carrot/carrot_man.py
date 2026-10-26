@@ -1574,6 +1574,9 @@ class CarrotMan:
     serv.xSpdLimit = serv.xSpdLimit_org = serv.xSpdDist = 0
     serv.nTBTTurnType = serv.nTBTTurnTypeNext = -1
     serv.nTBTDist = serv.nTBTDistNext = 0
+    serv.xTurnInfo = serv.xTurnInfoNext = -1
+    serv.xDistToTurn = serv.xDistToTurnNext = 0
+    serv.nSdiSection = 0
     serv.signal_lane_points = []
     serv.nRoadLimitSpeed = serv.nPosSpeed = 0
     serv.vpPosPointLatNavi = serv.vpPosPointLonNavi = 0
