@@ -400,7 +400,7 @@ class OverlayLifecycleTest(unittest.TestCase):
     self.o.display=(99.9,(0,0,80,60),1,core.Observation('UNKNOWN'),(2,2,74,54))
     with patch.object(self.o.vehicle_model,'tick',return_value=(4,4,70,50)):
       self.run_render()
-    self.assertEqual(ray.draw_rectangle_lines_ex.call_count,1)
+    self.assertEqual(ray.draw_rectangle_lines_ex.call_count,2)
     self.assertEqual(self.o.latest_observation(100.).state,'UNKNOWN')
 
   def test_model_outline_can_render_without_inventing_lamp_boxes(self):
@@ -410,8 +410,21 @@ class OverlayLifecycleTest(unittest.TestCase):
     self.o.display=None
     with patch.object(self.o.vehicle_model,'tick',return_value=(4,4,70,50)):
       self.run_render()
-    self.assertEqual(ray.draw_rectangle_lines_ex.call_count,1)
+    self.assertEqual(ray.draw_rectangle_lines_ex.call_count,2)
     ray.draw_rectangle_rec.assert_not_called()
+
+  def test_detected_vehicle_is_bright_cyan_or_brake_orange_with_thick_outline(self):
+    ray=self.module.rl
+    for state,expected in [('UNKNOWN',(0,220,255,255)),('OFF',(0,220,255,255)),('ON',(255,145,0,255))]:
+      ray.draw_rectangle_lines_ex.reset_mock()
+      self.o.display=(99.9,(0,0,80,60),1,core.Observation(state),(2,2,74,54))
+      with patch.object(ray,'Color',side_effect=lambda *rgba:rgba),patch.object(self.o.vehicle_model,'tick',return_value=None):
+        self.run_render()
+      calls=ray.draw_rectangle_lines_ex.call_args_list
+      self.assertEqual(len(calls),2)
+      self.assertEqual(calls[0].args[1:],(8.,(0,0,0,230)))
+      self.assertEqual(calls[1].args[1:],(5.,expected))
+      self.assertEqual(self.o.display[3].state,state)
 
   def test_model_on_hint_colors_vehicle_without_drawing_lamp_boxes(self):
     ray=self.module.rl

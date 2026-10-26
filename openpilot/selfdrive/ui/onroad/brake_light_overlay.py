@@ -200,10 +200,15 @@ class BrakeLightOverlay:
       rl.draw_rectangle_lines_ex(screen(roi), 1., rl.Color(65,220,245,90))
     shown = self.latest_observation(now)
     display_state = shown.state if shown is not None else 'UNKNOWN'
-    color = (rl.Color(255,165,50,235) if display_state == 'ON' else
-             rl.Color(85,205,235,210) if display_state == 'OFF' else rl.Color(170,170,170,150))
+    # Cyan means detected vehicle, not a confirmed brake-OFF classification.
+    # Only positive brake evidence changes the outline to orange.
+    color = rl.Color(255,145,0,255) if display_state == 'ON' else rl.Color(0,220,255,255)
+    def draw_vehicle(box):
+      bounds = screen(box)
+      rl.draw_rectangle_lines_ex(bounds, 8., rl.Color(0,0,0,230))
+      rl.draw_rectangle_lines_ex(bounds, 5., color)
     if model_body is not None:
-      rl.draw_rectangle_lines_ex(screen(model_body), 2., color)
+      draw_vehicle(model_body)
     if self.display is None or now-self.display[0] > .35:
       return
     captured, found_roi, display_step, observation = self.display[:4]
@@ -215,7 +220,6 @@ class BrakeLightOverlay:
     body = self.display[4] if len(self.display) > 4 else None
     if body is not None and model_body is None:
       a,b,bw,bh = body
-      rl.draw_rectangle_lines_ex(screen((x+a*display_step,y+b*display_step,bw*display_step,bh*display_step)),
-                                 2., color)
+      draw_vehicle((x+a*display_step,y+b*display_step,bw*display_step,bh*display_step))
     # Individual lamp locations remain internal observations/label metadata.
     # Only the whole vehicle outline carries the displayed ON/OFF/UNKNOWN state.
