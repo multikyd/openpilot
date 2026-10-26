@@ -134,6 +134,12 @@ function launch {
     agnos_init
   fi
 
+  # Prepare optional brake perception once from bundled wheels, including prebuilt boots.
+  # No network/pip or changes to the primary Python environment are needed.
+  if [ -f /AGNOS ] && [ -f "$DIR/tools/prepare_brake_vehicle_runtime.py" ]; then
+    timeout 60s python3 "$DIR/tools/prepare_brake_vehicle_runtime.py" || echo "Optional brake runtime preparation skipped"
+  fi
+
   # write tmux scrollback to a file
   tmux capture-pane -pq -S-1000 > /tmp/launch_log
 

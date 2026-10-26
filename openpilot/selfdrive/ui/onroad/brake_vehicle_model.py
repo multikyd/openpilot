@@ -9,6 +9,7 @@ from queue import Empty, Full
 import time
 from threading import Thread
 import numpy as np
+from openpilot.common.brake_model_runtime import runtime_directory, use_runtime, mark_broken
 from openpilot.selfdrive.ui.onroad.brake_lights import Observation, copy_nv12_roi
 
 MODEL = Path(__file__).resolve().parent / 'models' / 'brake_light_v4.onnx'
@@ -107,7 +108,12 @@ def _background_priority():
 def _worker(inbox, outbox, path):
   try:
     _background_priority()
-    import onnxruntime as ort
+    runtime = use_runtime()
+    try:
+      import onnxruntime as ort
+    except Exception:
+      mark_broken(runtime)
+      raise
     options = ort.SessionOptions()
     options.intra_op_num_threads = options.inter_op_num_threads = 1
     options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
@@ -138,7 +144,7 @@ def _worker(inbox, outbox, path):
 class BrakeVehicleModel:
   def __init__(self):
     self.enabled = (os.environ.get('LEAD_BRAKE_MODEL', '1') != '0' and MODEL.is_file() and
-                    importlib.util.find_spec('onnxruntime') is not None)
+                    (runtime_directory() is not None or importlib.util.find_spec('onnxruntime') is not None))
     self.process = None
     self.launching = False
     self.launch_error = False
