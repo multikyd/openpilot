@@ -218,7 +218,7 @@ class LongitudinalPlanner:
                        not (cs.gasPressed or cs.brakePressed) and carrot.desireState <= .1 and
                        carrot.myDrivingMode.value in (3, 4) and
                        carrot.xState not in [XState.e2eStop, XState.e2eStopped, XState.e2ePrepare] and
-                       carrot.signal_follow.strength <= 0. and carrot.signal_stop_approach.accel_cap is None and
+                       carrot.signal_follow.strength <= 0. and
                        fresh and preview_valid and sm.all_checks(
                          ['carState', 'radarState', 'modelV2', 'controlsState', 'selfdriveState'])),
       v_ego=v_ego, steering_angle=cs.steeringAngleDeg, curvature=sm['controlsState'].curvature,
@@ -362,10 +362,6 @@ class LongitudinalPlanner:
       output_a_target, output_v_target_now, self.j_desired_trajectory[0], gap_cap,
       cs.vEgo, action_t, self.output_a_target, self.dt)
     # Keep the command/velocity consistent even while MPC acceleration unwinds.
-    stop_cap = carrot.signal_stop_approach.accel_cap if not reset_state and self.mpc.mode == 'acc' else None
-    output_a_target, output_v_target_now, output_j_target = apply_lead_gap_cap(
-      output_a_target, output_v_target_now, output_j_target, stop_cap,
-      cs.vEgo, action_t, self.output_a_target, self.dt)
     self.log_follow_assistance(now, sm['radarState'].leadOne, gap_cap, before_gap_a, output_a_target)
     self.output_a_target = output_a_target
     self.output_v_target_now = output_v_target_now

@@ -6,8 +6,6 @@ import os
 import time
 from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.carrot.signal_follow import SignalFollowAssist
-from openpilot.selfdrive.carrot.manual_stop_line import ManualStopLineCorrection
-from openpilot.selfdrive.controls.lib.signal_stop_approach import SignalStopApproach, SignalStopOverride
 
 from openpilot.cereal import log
 from openpilot.common.params import Params
@@ -183,14 +181,6 @@ class CarrotPlanner:
     self.last_event_time = 0.0
     self.signal_follow = SignalFollowAssist(os.getenv("TMAP_SIGNAL_FOLLOW", "1") != "0")
     self._signal_memory = Params("/dev/shm/params")
-    self._manual_stop_correction = ManualStopLineCorrection()
-    self.signal_stop_approach = SignalStopApproach()
-    self.signal_stop_override = SignalStopOverride()
-    self._stop_trace_time = -1.
-    self._stop_recheck_pending = False
-    self._manual_stop_target = {}
-    self._manual_stop_read_time = -1.
-    self._manual_stop_reported = False
     self._signal_snapshot = {}
     self._signal_read_time = -1.0
     self._signal_log_time = -1.0
@@ -610,26 +600,10 @@ class CarrotPlanner:
     #self.check_model_stopping(v, v_ego, self.xStop, y)
     self.check_model_stopping(v_cruise, v, v_ego, a_ego, x[-1], y, radarstate.leadOne.dRel if lead_detected else 1000)
 
-    signal_stopping_enabled = self.myDrivingMode != DrivingMode.High and self.trafficLightDetectMode != 0
-    if not signal_stopping_enabled:
+    if self.myDrivingMode == DrivingMode.High or self.trafficLightDetectMode == 0:
       self.trafficState = TrafficState.off
-    elif abs(carstate.steeringAngleDeg) > 20 and self.xState not in [XState.e2eStop, XState.e2eStopped]:
-      # Steering filters new stop detections, but must not cancel a stop in progress.
+    if abs(carstate.steeringAngleDeg) > 20:
       self.trafficState = TrafficState.off
-
-    recheck_stop = self.signal_stop_override.update(
-      carstate.gasPressed, self.xState in [XState.e2eStop, XState.e2eStopped],
-      v_ego, signal_stopping_enabled and mode == 'acc', lead_detected,
-      self.trafficState == TrafficState.green, DT_MDL)
-    if recheck_stop and np.isfinite(stop_model_x_rl) and 0. <= stop_model_x_rl < 100.:
-      # A brief pedal correction does not discard the preceding red-stop intent.
-      # Rebuild from the current model, rather than the pre-pedal frozen target.
-      self.xState = XState.e2eStop
-      self.actual_stop_distance = stop_model_x_rl
-      self.traffic_starting_count = 0
-      self._stop_recheck_pending = True
-      cloudlog.event('signal_stop_recheck', speed=float(v_ego), model_distance=float(x[31]),
-                     filtered_distance=float(stop_model_x_rl))
 
     #self.update_user_control()
     if carstate.gasPressed or carstate.brakePressed:
@@ -698,9 +672,7 @@ class CarrotPlanner:
       else:
         self.xState = XState.e2eCruise
 
-    # An unknown signal is not a release: the state machine owns stop completion.
-    # Explicitly disabling signal stopping still removes its stop target.
-    if not signal_stopping_enabled or self.xState not in [XState.e2eStop, XState.e2eStopped]:
+    if self.trafficState in [TrafficState.off, TrafficState.green] or self.xState not in [XState.e2eStop, XState.e2eStopped]:
       stop_model_x = 1000.0
 
     if self.user_stop_distance >= 0:
@@ -733,60 +705,10 @@ class CarrotPlanner:
     stop_dist = max(stop_dist, 0.0)
 
     stopping_active = (self.xState in [XState.e2eStop, XState.e2eStopped])
-    approach_enabled = (signal_stopping_enabled and stopping_active and mode == 'acc' and
-                        not lead_detected and sm['carControl'].longActive and sm['selfdriveState'].enabled and
-                        not (carstate.gasPressed or carstate.brakePressed) and
-                        sm.all_checks(service_list=['carState', 'modelV2', 'radarState', 'carControl', 'selfdriveState']))
-    if not stopping_active:
-      self._stop_recheck_pending = False
-    if self._stop_recheck_pending and approach_enabled:
-      # Do not carry pedal-induced positive acceleration into automatic stopping.
-      self.signal_stop_approach.ceiling = min(0., self.signal_stop_approach.ceiling or 0.)
-      self.signal_stop_approach.confirm = max(.2, self.signal_stop_approach.confirm)
-      self._stop_recheck_pending = False
-    manual_now=time.monotonic()
-    if manual_now-self._manual_stop_read_time>=.2:
-      self._manual_stop_read_time=manual_now
-      try:
-        raw=self._signal_memory.get('ManualStopLineTarget')
-        self._manual_stop_target=json.loads(raw) if raw else {}
-      except (ValueError,TypeError):
-        self._manual_stop_target={}
-    manual_active = approach_enabled
-    previous_manual_offset = self._manual_stop_correction.offset
-    stop_dist=self._manual_stop_correction.update(
-      stop_dist,self._manual_stop_target,manual_now,v_ego,self.stop_distance,
-      self.trafficStopDistanceAdjust,manual_active,DT_MDL)
-    # The learned point shifts both the stop target and its braking envelope.
-    # Rebase only its bounded incremental correction, independently of model
-    # endpoint drift; otherwise the old envelope still stops the car early.
-    manual_delta = self._manual_stop_correction.offset-previous_manual_offset
-    if self.signal_stop_approach.distance is not None:
-      self.signal_stop_approach.distance = max(0., self.signal_stop_approach.distance+manual_delta)
-    approach_input = stop_dist
-    stop_dist = self.signal_stop_approach.update(
-      stop_dist, v_ego, a_ego, self.comfort_brake,
-      max(0., self.stop_distance-self.trafficStopDistanceAdjust+1.), approach_enabled, DT_MDL)
-    if not manual_active:
-      self._manual_stop_reported=False
-    elif abs(self._manual_stop_correction.offset)>.001 and not self._manual_stop_reported:
-      cloudlog.event('manual_stop_line_correction',offset=self._manual_stop_correction.offset,
-                     stop_distance=stop_dist,target=self._manual_stop_target)
-      self._manual_stop_reported=True
     if stopping_active and stop_dist < 300.0:
       stop_dist_soft = max(stop_dist - 1.0, 0.0)
       v_soft = float(np.sqrt(max(0.0, 2.0 * self.comfort_brake * stop_dist_soft)))
       v_cruise = min(v_cruise, v_soft)
-
-    trace_now = time.monotonic()
-    if stopping_active and trace_now-self._stop_trace_time >= 1.:
-      self._stop_trace_time = trace_now
-      cloudlog.event('signal_stop_trace', speed=float(v_ego), state=self.xState.name,
-                     model_distance=float(x[31]), filtered_distance=float(stop_model_x_raw),
-                     bounded_distance=float(stop_model_x_rl), approach_input=float(approach_input),
-                     final_distance=float(stop_dist), extension=float(self.signal_stop_approach.extension_used),
-                     clearance=float(self.stop_distance), traffic_adjust=float(self.trafficStopDistanceAdjust),
-                     gas=bool(carstate.gasPressed), brake=bool(carstate.brakePressed))
 
     self.v_cruise = v_cruise
     self.stop_dist = stop_dist
