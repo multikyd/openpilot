@@ -292,6 +292,13 @@ class LongitudinalPlanner:
                                       not sm['carState'].leftBlinker and not sm['carState'].rightBlinker and
                                       not sm['carState'].steeringPressed and abs(sm['carState'].steeringAngleDeg) < 30. and
                                       sm.all_checks(['carState', 'radarState', 'modelV2'])),
+                    allow_stop_approach=(self.CP.openpilotLongitudinalControl and not reset_state and
+                                         sm['selfdriveState'].enabled and not force_slow_decel and not self.output_should_stop and
+                                         not (cs.gasPressed or cs.brakePressed or cs.leftBlinker or cs.rightBlinker) and
+                                         not cs.steeringPressed and abs(cs.steeringAngleDeg) < 30. and
+                                         carrot.desireState <= .1 and carrot.myDrivingMode.value == 3 and fresh and
+                                         sm.all_checks(['carState', 'radarState', 'modelV2', 'controlsState', 'selfdriveState'])),
+                    radar_stamp=sm.logMonoTime['radarState']*1e-9, observation_time=now,
                     cutin_accel_limit=self.get_cutin_accel_limit(sm, carrot, reset_state,
                                                                accel_limits_turns[1], curvature_future))
 

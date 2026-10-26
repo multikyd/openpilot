@@ -5,6 +5,7 @@ import numpy as np
 from openpilot.cereal import log
 from opendbc.car.interfaces import ACCEL_MIN
 from openpilot.selfdrive.controls.lib.congestion_follow import CongestionFollow
+from openpilot.selfdrive.controls.lib.stop_approach import StopApproach, stop_approach_reference
 from openpilot.common.realtime import DT_MDL
 from openpilot.common.swaglog import cloudlog
 # WARNING: imports outside of constants will not trigger a rebuild
@@ -275,6 +276,8 @@ class LongitudinalMpc:
 
   def reset(self):
     self.congestion_follow = CongestionFollow()
+    self.stop_approach = StopApproach()
+    self._stop_approach_active = False
     self.solver.reset()
 
     self.x_sol = np.zeros((N+1, X_DIM))
@@ -606,7 +609,7 @@ class LongitudinalMpc:
 
   def update(self, carrot, reset_state, radarstate, v_cruise, x, v, a, j, personality=log.LongitudinalPersonality.standard,
              prev_accel_constraint=True, future_curvature=None, allow_turn_resume=False, allow_congestion=False, cutin_accel_limit=None,
-             turn_exit_strength=0.):
+             turn_exit_strength=0., allow_stop_approach=False, radar_stamp=0., observation_time=0.):
     v_ego = self.x0[1]
     a_ego = self.x0[2]
     t_follow = carrot.get_T_FOLLOW(personality, v_ego, a_ego)
@@ -750,6 +753,28 @@ class LongitudinalMpc:
 
     else:
       raise NotImplementedError(f'Planner mode {self.mode} not recognized in planner update')
+
+    # Shift only the soft distance objective during a confirmed easing approach.
+    # Keep t_follow, stop_distance, obstacle predictions and danger constraints intact.
+    approach_bias = self.stop_approach.update(
+      radarstate.leadOne, radarstate.leadTwo, v_ego, a_ego, self.desired_distance, stop_distance,
+      radar_stamp, observation_time,
+      enabled=(allow_stop_approach and mode == 'acc' and not reset_state and
+               carrot.xState not in [XState.e2eStop, XState.e2eStopped, XState.e2ePrepare] and
+               carrot.signal_follow.strength <= 0. and carrot.signal_stop_approach.accel_cap is None and
+               self.turn_loss_limit is None and cutin_accel_limit is None and jam_accel >= self.max_a-1e-6))
+    self.yref[:,0] = 0.
+    if approach_bias > 0.:
+      self.yref[:,0] = stop_approach_reference(
+        approach_bias, self.v_solution, lead_xv_0[:,1], lead_0_obstacle,
+        np.full(N+1, 1e6) if self.stop_approach.same_lead(radarstate.leadOne, radarstate.leadTwo) else lead_1_obstacle,
+        cruise_obstacle, x2)
+    approach_active = bool(np.any(self.yref[:,0] < 0.))
+    if approach_active != self._stop_approach_active:
+      cloudlog.event('low_speed_stop_approach', active=approach_active,
+                     bias_m=float(approach_bias), v_ego=float(v_ego),
+                     distance=float(radarstate.leadOne.dRel), lead_id=int(radarstate.leadOne.radarTrackId))
+      self._stop_approach_active = approach_active
 
     self.yref[:,1] = x
     self.yref[:,2] = v
