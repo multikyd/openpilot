@@ -12,16 +12,19 @@ import numpy as np
 from openpilot.common.brake_model_runtime import runtime_directory, use_runtime, mark_broken
 from openpilot.selfdrive.ui.onroad.brake_lights import Observation, copy_nv12_roi
 
-MODEL = Path(__file__).resolve().parent / 'models' / 'brake_light_v4.onnx'
+LEGACY_MODEL = Path(__file__).resolve().parent / 'models' / 'brake_light_v4.onnx'
+LIGHT_MODEL = LEGACY_MODEL.with_name('brake_light_v4_320.onnx')
+QUANT_MODEL = LEGACY_MODEL.with_name('brake_light_v4_320_int8.onnx')
+MODEL = LIGHT_MODEL if LIGHT_MODEL.is_file() else LEGACY_MODEL
 
 
 def intersection(a, b):
   return max(0., min(a[0]+a[2], b[0]+b[2])-max(a[0], b[0])) * max(0., min(a[1]+a[3], b[1]+b[3])-max(a[1], b[1]))
 
 
-def decode_predictions(output, width, height, confidence=.65):
+def decode_predictions(output, width, height, confidence=.65, input_size=640):
   raw = np.asarray(output)
-  if raw.shape != (1, 6, 8400):
+  if input_size not in (320, 640) or raw.shape != (1, 6, sum((input_size//s)**2 for s in (8,16,32))):
     raise ValueError('Unexpected brake model output')
   rows = raw[0].T
   ids = np.argmax(rows[:, 4:], axis=1)
@@ -32,8 +35,8 @@ def decode_predictions(output, width, height, confidence=.65):
     cx, cy, w, h = rows[i, :4]
     if w <= 0 or h <= 0:
       continue
-    x1, y1 = max(0., float(cx-w/2)*width/640), max(0., float(cy-h/2)*height/640)
-    x2, y2 = min(float(width), float(cx+w/2)*width/640), min(float(height), float(cy+h/2)*height/640)
+    x1, y1 = max(0., float(cx-w/2)*width/input_size), max(0., float(cy-h/2)*height/input_size)
+    x2, y2 = min(float(width), float(cx+w/2)*width/input_size), min(float(height), float(cy+h/2)*height/input_size)
     box = (x1, y1, x2-x1, y2-y1)
     if box[2] < 10 or box[3] < 10:
       continue
@@ -79,10 +82,12 @@ def fuse_observation(observation, hint):
   return Observation(hint['state'], 'MODEL_'+hint['state'], observation.lamps, observation.gains)
 
 
-def nv12_input(frame, width, height):
-  # Stretch full-range NV12 to the model's 640x640 RGB input.
-  xx = np.clip((np.arange(640)+.5)*width/640-.5, 0, width-1).astype(int)
-  yy = np.clip((np.arange(640)+.5)*height/640-.5, 0, height-1).astype(int)
+def nv12_input(frame, width, height, input_size=640):
+  # Keep the original full-frame NV12 conversion; only network input size varies.
+  if input_size not in (320, 640):
+    raise ValueError('Unexpected brake model input size')
+  xx = np.clip((np.arange(input_size)+.5)*width/input_size-.5, 0, width-1).astype(int)
+  yy = np.clip((np.arange(input_size)+.5)*height/input_size-.5, 0, height-1).astype(int)
   raw = np.frombuffer(frame.data, np.uint8)
   luma = raw[yy[:, None]*frame.stride+xx].astype(np.float32)
   uv = frame.uv_offset+(yy[:, None]//2)*frame.stride+(xx//2)*2
@@ -98,7 +103,8 @@ def _background_priority():
     os.sched_setscheduler(0, os.SCHED_OTHER, os.sched_param(0))
   if hasattr(os, 'sched_setaffinity'):
     try:
-      os.sched_setaffinity(0, {0})
+      # Share the existing background CPU pool instead of pinning to one core.
+      os.sched_setaffinity(0, set(range(min(4, os.cpu_count() or 1))))
     except OSError:
       pass
   if hasattr(os, 'nice'):
@@ -118,15 +124,42 @@ def _worker(inbox, outbox, path):
     options.intra_op_num_threads = options.inter_op_num_threads = 1
     options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
     options.log_severity_level = 3
-    session = ort.InferenceSession(path, options, providers=['CPUExecutionProvider'])
-    inp = session.get_inputs()[0]
-    if inp.shape != [1,3,640,640] or session.get_outputs()[0].shape != [1,6,8400]:
-      raise ValueError('Unexpected brake model interface')
-    # Pay first-run allocation/kernel setup before capturing a live frame.
-    outbox.put(('phase', 'warmup'))
-    warmup_start = time.monotonic()
-    session.run(None, {inp.name: np.zeros((1,3,640,640), dtype=np.float32)})
-    outbox.put(('ready', time.monotonic()-warmup_start))
+    paths = [Path(path)]
+    if (paths[0].name == LIGHT_MODEL.name and QUANT_MODEL.is_file() and
+        os.getenv('LEAD_BRAKE_VARIANT', 'auto') == 'auto'):
+      paths.append(QUANT_MODEL)
+    best, benchmarks = None, []
+    for candidate in paths:
+      try:
+        load_start = time.monotonic()
+        candidate_session = ort.InferenceSession(str(candidate), options, providers=['CPUExecutionProvider'])
+        inp = candidate_session.get_inputs()[0]
+        size = inp.shape[2]
+        if (size not in (320, 640) or inp.shape != [1,3,size,size] or
+            candidate_session.get_outputs()[0].shape != [1,6,sum((size//s)**2 for s in (8,16,32))]):
+          raise ValueError('Unexpected brake model interface')
+        load_ms = (time.monotonic()-load_start)*1000
+        outbox.put(('phase', 'warmup'))
+        dummy = np.zeros((1,3,size,size), dtype=np.float32)
+        samples, cpu_samples = [], []
+        for _ in range(2):
+          started, cpu_started = time.monotonic(), time.process_time()
+          candidate_session.run(None, {inp.name: dummy})
+          samples.append(time.monotonic()-started)
+          cpu_samples.append(time.process_time()-cpu_started)
+        benchmarks.append(dict(model=candidate.name, load_ms=round(load_ms,1),
+                               cold_ms=round(samples[0]*1000,1), steady_ms=round(samples[1]*1000,1),
+                               cpu_ms=round(cpu_samples[1]*1000,1)))
+        # Prefer FP32 on a near tie; INT8 is not faster on every CPU.
+        if best is None or samples[1] < best[0]*.95:
+          best = (samples[1], candidate_session, inp, size, candidate.name)
+      except Exception as exc:
+        benchmarks.append(dict(model=candidate.name, error=type(exc).__name__))
+    if best is None:
+      raise RuntimeError('No usable brake model candidate')
+    elapsed, session, inp, size, model_name = best
+    candidate_session = None  # release the non-selected session before live inference
+    outbox.put(('ready', elapsed, dict(model=model_name, input_size=size, benchmarks=benchmarks)))
     while True:
       job = inbox.get()
       if job is None:
@@ -134,10 +167,11 @@ def _worker(inbox, outbox, path):
       if job == ('ping',):
         continue
       epoch, captured, roi, width, height, copied = job
-      start = time.monotonic()
-      output = session.run(None, {inp.name: nv12_input(copied, width, height)})[0]
-      chosen = select_lead_box(decode_predictions(output, width, height), roi)
-      outbox.put(('result', epoch, captured, roi, chosen, time.monotonic()-start))
+      start, cpu_start = time.monotonic(), time.process_time()
+      output = session.run(None, {inp.name: nv12_input(copied, width, height, size)})[0]
+      chosen = select_lead_box(decode_predictions(output, width, height, input_size=size), roi)
+      outbox.put(('result', epoch, captured, roi, chosen, time.monotonic()-start,
+                  dict(cpu_ms=round((time.process_time()-cpu_start)*1000,1))))
   except Exception as exc:
     try:
       outbox.put(('error', type(exc).__name__))
@@ -147,7 +181,10 @@ def _worker(inbox, outbox, path):
 
 class BrakeVehicleModel:
   def __init__(self):
-    self.enabled = (os.environ.get('LEAD_BRAKE_MODEL', '1') != '0' and MODEL.is_file() and
+    variant = os.getenv('LEAD_BRAKE_VARIANT', 'auto')
+    self.model_path = LEGACY_MODEL if variant == 'legacy' else QUANT_MODEL if variant == 'int8' and QUANT_MODEL.is_file() else MODEL
+    self.input_size = 640 if self.model_path == LEGACY_MODEL else 320
+    self.enabled = (os.environ.get('LEAD_BRAKE_MODEL', '1') != '0' and self.model_path.is_file() and
                     (runtime_directory() is not None or importlib.util.find_spec('onnxruntime') is not None))
     self.process = None
     self.launching = False
@@ -214,10 +251,10 @@ class BrakeVehicleModel:
     try:
       _background_priority()
       ctx = mp.get_context('spawn')
-      inbox, outbox = ctx.Queue(maxsize=1), ctx.Queue(maxsize=2)
+      inbox, outbox = ctx.Queue(maxsize=1), ctx.Queue(maxsize=4)
       # Start the serialization feeder from this non-realtime thread.
       inbox.put_nowait(('ping',))
-      process = ctx.Process(target=_worker, args=(inbox,outbox,str(MODEL)), daemon=True)
+      process = ctx.Process(target=_worker, args=(inbox,outbox,str(self.model_path)), daemon=True)
       process.start()
       if not self.enabled or not self.launching or generation != self.launch_generation:
         process.terminate()
@@ -261,7 +298,7 @@ class BrakeVehicleModel:
         elif now-self.started > 20.:
           self._fail('worker_start_timeout', now, now-self.started)
         return None
-      for _ in range(2):
+      for _ in range(4):
         try:
           message = self.outbox.get_nowait()
         except Empty:
@@ -272,17 +309,21 @@ class BrakeVehicleModel:
         elif message[0] == 'ready':
           self.ready = True
           self.phase = self.status = 'ready'
-          self.report = dict(warmup_ms=round(message[1]*1000,1) if len(message)>1 else None,
+          metadata = message[2] if len(message)>2 else {}
+          self.input_size = metadata.get('input_size', self.input_size)
+          self.report = dict(metadata, warmup_ms=round(message[1]*1000,1) if len(message)>1 else None,
                              retry_count=self.retry_count)
         elif message[0] == 'error':
           self._fail('load_or_run_error:'+message[1], now)
           return None
         elif message[0] == 'result':
-          _, generation, captured, found_roi, chosen, elapsed = message
+          _, generation, captured, found_roi, chosen, elapsed = message[:6]
           self.busy = False
           self.interval = max(1., elapsed*5)  # At most ~20% of one CPU core.
           self.report = dict(self.report or {}, duration_ms=round(elapsed*1000,1), state=chosen['state'] if chosen else 'UNKNOWN',
                              confidence=chosen['confidence'] if chosen else 0., matched=chosen is not None)
+          if len(message)>6:
+            self.report.update(message[6])
           if elapsed > 1.:
             self._fail('inference_too_slow', now, elapsed)
             return None
@@ -330,6 +371,7 @@ class BrakeVehicleModel:
     if self.current_box(roi, epoch, now) is None:
       return None
     _, captured, _, chosen = self.result
-    if now-captured > min(1.5, self.interval+.25) or chosen['confidence'] < .8:
+    state_threshold = .9 if self.input_size == 320 else .8
+    if now-captured > min(1.5, self.interval+.25) or chosen['confidence'] < state_threshold:
       return None
     return dict(state=chosen['state'], confidence=chosen['confidence'], age=now-captured)

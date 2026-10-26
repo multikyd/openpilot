@@ -215,13 +215,74 @@ class VehicleModelTest(unittest.TestCase):
       model._worker(inbox,outbox,'dummy')
     self.assertEqual(outbox.get()[0:2],('phase','warmup'))
     self.assertEqual(outbox.get()[0],'ready')
-    self.assertEqual(calls,[(1,3,640,640)])
+    self.assertEqual(calls,[(1,3,640,640),(1,3,640,640)])
 
   def test_priority_is_not_lowered_twice_in_child(self):
     calls=[]
     with patch.object(model.os,'sched_setscheduler',create=True),patch.object(model.os,'sched_setaffinity',create=True),patch.object(model.os,'sched_param',create=True),patch.object(model.os,'SCHED_OTHER',0,create=True),patch.object(model.os,'nice',side_effect=lambda n:10 if n==0 else calls.append(n),create=True):
       model._background_priority()
     self.assertEqual(calls,[])
+
+  def test_320_grid_decodes_back_to_original_camera_coordinates(self):
+    raw=np.zeros((1,6,2100),np.float32)
+    raw[0,:,0]=(75,100,50,40,.1,.95)
+    found=model.decode_predictions(raw,1280,640,input_size=320)
+    np.testing.assert_allclose(found[0]['box'],(200,160,200,80))
+    self.assertEqual(found[0]['state'],'ON')
+    with self.assertRaises(ValueError):model.decode_predictions(raw,1280,640,input_size=640)
+
+  def test_320_nv12_input_keeps_full_frame_and_expected_shape(self):
+    raw=np.full(80*60*3//2,128,np.uint8)
+    frame=NS(data=raw,stride=80,uv_offset=80*60)
+    tensor=model.nv12_input(frame,80,60,input_size=320)
+    self.assertEqual(tensor.shape,(1,3,320,320))
+    np.testing.assert_allclose(tensor,128/255,atol=1e-6)
+
+  def test_lightweight_hint_uses_stricter_threshold_without_hiding_vehicle(self):
+    h=self.helper();h.input_size=320
+    h.result=(0,100.,(100,100,100,100),dict(box=(110,110,80,80),state='ON',confidence=.85))
+    self.assertIsNotNone(h.current_box((100,100,100,100),0,100.1))
+    self.assertIsNone(h.current_state((100,100,100,100),0,100.1))
+    h.result[-1]['confidence']=.95
+    self.assertEqual(h.current_state((100,100,100,100),0,100.1)['state'],'ON')
+
+  def test_legacy_variant_remains_selectable(self):
+    with patch.dict('os.environ',{'LEAD_BRAKE_VARIANT':'legacy'}):
+      h=model.BrakeVehicleModel()
+    self.assertEqual(h.model_path,model.LEGACY_MODEL)
+    self.assertEqual(h.input_size,640)
+
+  def test_device_warmup_selects_faster_candidate_and_survives_int8_error(self):
+    for int8_latency in (.005,.03,None):
+      clock=[100.]
+      class Session:
+        def __init__(self,path):self.quant='int8' in path
+        def get_inputs(self):return [NS(name='images',shape=[1,3,320,320])]
+        def get_outputs(self):return [NS(shape=[1,6,2100])]
+        def run(self,outputs,inputs):
+          if self.quant and int8_latency is None:raise RuntimeError('unsupported quant operator')
+          clock[0] += int8_latency if self.quant else .02
+      ort=NS(SessionOptions=lambda:NS(),ExecutionMode=NS(ORT_SEQUENTIAL=0),InferenceSession=lambda path,*a,**k:Session(path))
+      inbox,outbox=Queue(),Queue();inbox.put(None)
+      with patch.dict('os.environ',{'LEAD_BRAKE_VARIANT':'auto'}),patch.dict('sys.modules',{'onnxruntime':ort}),patch.object(model,'_background_priority'),patch.object(model,'use_runtime'),patch.object(model.Path,'is_file',return_value=True),patch.object(model.time,'monotonic',side_effect=lambda:clock[0]),patch.object(model.time,'process_time',side_effect=lambda:clock[0]):
+        model._worker(inbox,outbox,str(model.LIGHT_MODEL))
+      messages=[]
+      while not outbox.empty():messages.append(outbox.get())
+      ready=next(m for m in messages if m[0]=='ready')
+      self.assertEqual(ready[2]['input_size'],320)
+      self.assertEqual(ready[2]['model'],model.QUANT_MODEL.name if int8_latency==.005 else model.LIGHT_MODEL.name)
+      self.assertEqual(len(ready[2]['benchmarks']),2)
+
+  def test_ready_metadata_and_live_cpu_diagnostics_are_preserved(self):
+    h=self.helper();h.ready=False;h.started=99.
+    h.outbox.put(('ready',.1,dict(input_size=320,model='light',benchmarks=[])))
+    h.tick(NS(),(0,0,80,60),0,100.)
+    self.assertEqual(h.input_size,320)
+    self.assertEqual(h.report['model'],'light')
+    h.outbox.put(('result',0,100.,(0,0,80,60),None,.2,dict(cpu_ms=150.)))
+    h.tick(NS(),(0,0,80,60),0,100.3)
+    self.assertEqual(h.report['cpu_ms'],150.)
+    self.assertEqual(h.report['model'],'light')
 
 
 if __name__ == '__main__':

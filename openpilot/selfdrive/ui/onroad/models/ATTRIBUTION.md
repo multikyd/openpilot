@@ -15,5 +15,26 @@ Weights copied unchanged from the authenticated local download.
 
 Display-only integration: the fast temporal lamp detector retains priority over
 model OFF on a fresh lamp onset; fresh high-confidence model ON/OFF is a fallback.
-Conflicts and uncertainty display gray. Only whole vehicle outlines are drawn;
+Conflicts and uncertainty retain a cyan detected-vehicle outline; cyan does not assert brake-OFF. Only whole vehicle outlines are drawn;
 individual lamp locations remain internal label metadata. No control inputs.
+
+## Lightweight local derivatives
+
+brake_light_v4_320.onnx uses the same weights with a 320x320 input, regenerated
+stride-8/16/32 anchor grids and matching 2100-candidate detection-head shapes.
+brake_light_v4_320_int8.onnx is a calibrated per-channel Conv S8S8 QDQ derivative;
+final detection heads remain floating point. Calibration used 20 existing local
+older-drive images; test40 was held out. Dataset/architecture attribution above
+also applies to both derivatives. Conversion/evaluation scripts are saved in the
+local task output directory; no footage was uploaded for conversion.
+
+Auto mode benchmarks both 320 variants on the device with dummy inputs and
+prefers FP32 on a near tie. Unsupported INT8 falls back to FP32. Setting
+LEAD_BRAKE_VARIANT=legacy selects the unchanged 640 model; fp32 or int8 selects
+a candidate explicitly. No additional vehicle-side package is required beyond
+the existing isolated ONNX Runtime bundle.
+
+Reduced resolution and quantization can miss vehicles or change brake states.
+Lightweight state hints therefore require confidence >=0.9 (vehicle outlines
+retain >=0.65 plus radar/model association). Fast lamp onset/release evidence
+and stale-result/generation protections remain authoritative.
