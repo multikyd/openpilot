@@ -15,7 +15,7 @@ from openpilot.cereal import log
 import openpilot.cereal.messaging as messaging
 from openpilot.selfdrive.carrot.bump_learning import BumpMemory, BumpPassage
 from openpilot.common.swaglog import cloudlog
-from openpilot.selfdrive.carrot.signal_memory import SignalMemory, blank as blank_signal
+from openpilot.selfdrive.carrot.signal_memory import SignalMemory, GREEN, blank as blank_signal
 from openpilot.selfdrive.carrot.manual_stop_line import ManualStopLineMemory
 from openpilot.common.realtime import Ratekeeper
 from openpilot.common.params import Params
@@ -895,7 +895,7 @@ class CarrotServ:
                  0<=now-sm.recv_time['radarState']<.3)
     no_lead=radar_fresh and not (sm['radarState'].leadOne.present or sm['radarState'].leadTwo.present)
     display=self.signal_display
-    movement='left' if CS.leftBlinker and not CS.rightBlinker else display.get('movement','straight')
+    movement='left' if CS.leftBlinker and not CS.rightBlinker else 'straight'
     if CS.rightBlinker:movement='right'
     state=display.get('leftState' if movement=='left' else 'straightState',0)
     red=(state==1 if display.get('source') in ('TMAP','VISION') and state else model_hint==1)
@@ -905,7 +905,8 @@ class CarrotServ:
     saved=self.manual_stop_lines.observe(
       now,time.time(),position,CS.vEgo,heading if heading is not None else gps.bearingDeg,movement,
       red,no_lead,CS.brakePressed,CS.gasPressed,CS.steeringAngleDeg,str(CS.gearShifter)=='drive',
-      bookmark_stamp=mark,enabled=enabled)
+      bookmark_stamp=mark,enabled=enabled,
+      trusted_green=display.get('source') in ('TMAP','VISION') and state==GREEN)
     if saved:
       self.params.put('ManualStopLineData',self.manual_stop_lines.export())
       self.manual_stop_lines.dirty=False

@@ -44,12 +44,26 @@ class ManualStopLineMemory:
     self.bookmark = None
     self.confirm_mark = None
     self.identity = None
+    self.reposition_origin = None
+    self.reposition_active = False
+    self.reposition_brake = False
+    self.red_until = -1.
 
   def export(self):
     return dict(version=1, points=self.points[-64:])
 
   def observe(self, now, wall, gps, speed, heading, movement, red, no_lead,
-              brake, gas, steering, drive, bookmark_stamp=None, enabled=True):
+              brake, gas, steering, drive, bookmark_stamp=None, enabled=True, trusted_green=False):
+    # A pedal adjustment changes the model's speed horizon and may temporarily
+    # remove its red hint. Retain the preceding stop context for collection only.
+    if trusted_green:
+      self.reset()
+      return False
+    if red:
+      self.red_until = now+12.
+    elif (now < self.red_until and self.reposition_origin is not None and
+          (gas or self.reposition_active)):
+      red = True
     try:
       lat, lon = normalized_position(gps['lat'], gps['lon'])
       valid = (enabled and gps['valid'] and 0 <= gps['age'] < .8 and
@@ -68,11 +82,30 @@ class ManualStopLineMemory:
     # Deliberate brake intervention, or pedal-controlled repositioning, is required.
     if brake or gas:
       self.manual_until = now+60.
+    # Automatic learning requires a deliberate forward correction from a
+    # near-stop, followed by braking and a stable final position. A normal
+    # single braking approach (including an overshoot) cannot arm it.
+    if speed < .6 and not gas and self.reposition_origin is None:
+      self.reposition_origin = (lat, lon, now, heading)
+    if self.reposition_origin is not None:
+      origin_lat, origin_lon, origin_time, origin_heading = self.reposition_origin
+      travel, lateral = geometry(origin_lat, origin_lon, origin_heading, dict(lat=lat, lon=lon))
+      if now-origin_time > 45 or speed > 4 or not -1 < travel <= 12 or abs(lateral) > 1.2:
+        self.reposition_origin = None
+        self.reposition_active = self.reposition_brake = False
+      else:
+        if gas:
+          # Preserve deliberate braking through a final small i-pedal creep.
+          self.reposition_active = True
+        if self.reposition_active and brake and travel >= 2:
+          self.reposition_brake = True
     identity = movement
     if self.identity != identity:
       self.samples = []
       self.confirm_mark = None
       self.identity = identity
+      self.reposition_origin = None
+      self.reposition_active = self.reposition_brake = False
     if speed>=.15:
       # Any creep invalidates the old position and an earlier confirmation.
       self.samples = []
@@ -90,10 +123,12 @@ class ManualStopLineMemory:
     fresh_confirmation = (bookmark_stamp is not None and bookmark_stamp != self.bookmark and
                           0<=now-bookmark_stamp<=.8)
     if bookmark_stamp is not None:self.bookmark = bookmark_stamp
-    if not fresh_confirmation or now>self.manual_until or len(self.samples)<8 or now-self.samples[0][0]<1.5:
+    automatic_confirmation = self.reposition_active and self.reposition_brake and not gas
+    if (not (fresh_confirmation or automatic_confirmation) or now>self.manual_until or
+        len(self.samples)<8 or now-self.samples[0][0]<1.5):
       return False
-    # A single swipe remains an ordinary issue bookmark.
-    if self.confirm_mark is None or not 0<bookmark_stamp-self.confirm_mark<=4.:
+    # Single-stop/manual-brake collection still needs explicit confirmation.
+    if not automatic_confirmation and (self.confirm_mark is None or not 0<bookmark_stamp-self.confirm_mark<=4.):
       self.confirm_mark=bookmark_stamp
       return False
     self.confirm_mark=None
@@ -121,6 +156,8 @@ class ManualStopLineMemory:
     point['lon']=statistics.median(s['lon'] for s in point['samples'])
     self.dirty=True
     self.manual_until=-1.
+    self.reposition_origin = None
+    self.reposition_active = self.reposition_brake = False
     return True
 
   def target(self, now, wall, gps, speed, heading, movement, red, no_lead, enabled=True):
@@ -147,9 +184,10 @@ class ManualStopLineMemory:
 
 
 class ManualStopLineCorrection:
-  """Only shorten an existing model stop; never create a stop or extend it."""
+  """Bound an existing stop using a repeatedly driver-confirmed vehicle position."""
   def __init__(self):
     self.offset=0.
+    self.extension_confirm=0.
 
   def update(self, stop, target, now, speed, clearance, traffic_adjust, active, dt):
     try:
@@ -164,10 +202,19 @@ class ManualStopLineCorrection:
     if not valid:
       if not active:
         self.offset=0.
-      # Losing GPS must not lengthen a stop already shortened in this episode.
+      self.extension_confirm=0.
+      if math.isfinite(speed) and (speed < .3 or stop <= 0):
+        self.offset = min(0., self.offset)
+      # Hold the last established correction through a brief GPS loss, but
+      # never use a positive offset to restart a stopped vehicle.
       return max(0.,stop+self.offset) if active and math.isfinite(stop) else stop
     # The MPC obstacle includes standstill clearance and the traffic adjustment.
     obstacle=target['distance']+clearance-traffic_adjust
-    desired=max(-1.,min(self.offset,obstacle-stop))
-    self.offset+=max(-.2*dt,min(.2*dt,desired-self.offset))
+    error = obstacle-stop
+    # Never begin advancing a near-stopped car or move an uncorroborated target.
+    outward = error > 0 and error <= 10 and stop >= 6 and 1 <= speed <= 5
+    self.extension_confirm = self.extension_confirm+dt if outward else 0.
+    upper = 8. if self.extension_confirm >= .6 else max(0., self.offset)
+    desired = max(-1., min(upper, error))
+    self.offset += max(-.2*dt, min(.3*dt, desired-self.offset))
     return max(0.,stop+self.offset)

@@ -222,7 +222,15 @@ class BumpMemory:
       if not direction_matches(heading, r['heading']):
         continue
       d, cross = relative(lat, lon, heading, r)
-      if abs(cross) <= 6 and -12 <= d < nearest_d and now-self.cooldowns.get(id(r), -100) > 60:
+      # A cached navigation point alone is not evidence of a physical bump.
+      # Keep those records for matching/learning, but require live navigation or
+      # independent repeated physical/manual evidence before applying a cap.
+      nav_match = known and abs(d-nav_distance) <= 15 and abs(cross) <= 6
+      independent = (r['confirmed'] and r['passes'] >= 2 and
+                     (r.get('impact_learned', False) or
+                      r.get('manual_cap', 50) < self.base-1))
+      lane_match = abs(cross) <= (6 if nav_match else 2.5)
+      if (nav_match or independent) and lane_match and -12 <= d < nearest_d and now-self.cooldowns.get(id(r), -100) > 60:
         nearest, nearest_d = r, d
     # Unknown impacts are candidates only; two independent passes confirm them.
     recent = [(t, a) for t, a in self.samples if now-.6 <= t <= now]

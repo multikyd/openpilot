@@ -13,6 +13,7 @@ from openpilot.common.realtime import config_realtime_process
 from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.locationd.helpers import rotate_std
+from openpilot.selfdrive.locationd.camera_odometry_validity import CameraOdometryValidity
 from openpilot.selfdrive.locationd.models.pose_kf import PoseKalman, States
 from openpilot.selfdrive.locationd.models.constants import ObservationKind, GENERATED_DIR
 
@@ -278,6 +279,7 @@ def main():
   estimator = LocationEstimator(DEBUG)
 
   filter_initialized = False
+  camera_validity = CameraOdometryValidity()
   critical_services = ["accelerometer", "gyroscope", "cameraOdometry"]
   observation_input_invalid = defaultdict(int)
 
@@ -298,6 +300,7 @@ def main():
 
     acc_msgs, gyro_msgs = (messaging.drain_sock(sock) for sock in sensor_sockets)
 
+    camera_accepted = False
     if filter_initialized:
       msgs = []
       for msg in acc_msgs + gyro_msgs:
@@ -313,6 +316,8 @@ def main():
         if valid:
           t = log_mono_time * 1e-9
           res = estimator.handle_log(t, which, msg)
+          if which == "cameraOdometry":
+            camera_accepted = res == HandleLogResult.SUCCESS
           if which not in critical_services:
             continue
 
@@ -329,7 +334,12 @@ def main():
 
     if sm.updated["cameraOdometry"]:
       critical_service_inputs_valid = all(observation_input_invalid[s] < input_invalid_threshold[s] for s in critical_services)
-      inputs_valid = sm.all_valid() and critical_service_inputs_valid
+      camera = sm["cameraOdometry"]
+      camera_valid = camera_validity.update(sm.valid["cameraOdometry"], camera.frameId,
+                                           camera.timestampEof * 1e-9,
+                                           sm.logMonoTime["cameraOdometry"] * 1e-9, camera_accepted)
+      other_inputs_valid = all(valid for service, valid in sm.valid.items() if service != "cameraOdometry")
+      inputs_valid = other_inputs_valid and camera_valid and critical_service_inputs_valid
       sensors_valid = sensor_all_checks(acc_msgs, gyro_msgs, sensor_valid, sensor_recv_time, sensor_alive, SIMULATION)
 
       msg = estimator.get_msg(sensors_valid, inputs_valid, filter_initialized)

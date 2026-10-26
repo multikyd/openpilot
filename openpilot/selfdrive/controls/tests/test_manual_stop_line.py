@@ -65,9 +65,10 @@ class TestManualStopLine(unittest.TestCase):
     for _ in range(12):self.tick()
     self.tick(speed=1.,brake=False,gas=True)
     self.lat+=2/111194.9266
-    for _ in range(12):self.tick()
-    self.assertFalse(self.tick(mark=True))
-    self.assertTrue(self.tick(mark=True))
+    saved = any([self.tick() for _ in range(12)])
+    if not saved:
+      self.assertFalse(self.tick(mark=True))
+      self.assertTrue(self.tick(mark=True))
     self.assertAlmostEqual(self.memory.points[0]['lat'],self.lat)
 
   def test_bookmark_before_reposition_is_not_reused(self):
@@ -155,6 +156,51 @@ class TestManualStopLine(unittest.TestCase):
     self.assertEqual(ManualStopLineMemory('{broken').points,[])
     self.assertEqual(ManualStopLineMemory(dict(version=999,points=[])).points,[])
 
+  def test_deliberate_forward_correction_learns_without_swipes(self):
+    for _ in range(12):self.tick(brake=False)
+    self.tick(speed=1.,brake=False,gas=True)
+    self.lat += 3/111194.9266
+    saved = any([self.tick(brake=True) for _ in range(15)])
+    self.assertTrue(saved)
+    self.assertEqual(len(self.memory.points[0]['samples']),1)
+
+  def test_forward_creep_without_final_braking_not_learned(self):
+    for _ in range(12):self.tick(brake=False)
+    self.tick(speed=1.,brake=False,gas=True)
+    self.lat += 3/111194.9266
+    for _ in range(20):self.tick(brake=False)
+    self.assertEqual(self.memory.points,[])
+
+  def test_large_or_sideways_reposition_not_learned_automatically(self):
+    for lat_m, lon_m in [(15,0),(3,4)]:
+      self.memory.reset();self.lat,self.lon=37.,127.
+      for _ in range(12):self.tick(brake=False)
+      self.tick(speed=1.,gas=True,brake=False)
+      self.lat += lat_m/111194.9266;self.lon += lon_m/88000
+      for _ in range(20):self.tick()
+      self.assertEqual(self.memory.points,[])
+
+  def test_model_hint_loss_during_reposition_does_not_discard_stop(self):
+    for _ in range(12):self.tick(brake=False)
+    self.tick(speed=1.,gas=True,brake=False,red=False)
+    self.lat += 3/111194.9266
+    self.assertTrue(any([self.tick(red=False) for _ in range(15)]))
+
+  def test_live_green_cancels_reposition_learning(self):
+    for _ in range(12):self.tick(brake=False)
+    self.tick(speed=1.,gas=True,brake=False)
+    self.lat += 3/111194.9266
+    for _ in range(15):self.tick(red=False,trusted_green=True)
+    self.assertEqual(self.memory.points,[])
+
+  def test_long_model_hint_loss_does_not_learn(self):
+    for _ in range(12):self.tick(brake=False)
+    self.tick(speed=1.,gas=True,brake=False,red=False)
+    self.lat += 3/111194.9266
+    for _ in range(70):self.tick(speed=.2,red=False)
+    for _ in range(15):self.tick(red=False)
+    self.assertEqual(self.memory.points,[])
+
 
 class TestManualStopCorrection(unittest.TestCase):
   def setUp(self):
@@ -174,7 +220,7 @@ class TestManualStopCorrection(unittest.TestCase):
       previous=result
     self.assertAlmostEqual(result,19.)
 
-  def test_never_extends_early_model_stop(self):
+  def test_single_update_does_not_extend_early_model_stop(self):
     self.assertEqual(self.apply(stop=10.),10.)
 
   def test_clearance_conversion_matches_mpc_obstacle(self):
@@ -197,6 +243,44 @@ class TestManualStopCorrection(unittest.TestCase):
     for _ in range(20):self.apply()
     self.apply(active=False)
     self.assertEqual(self.helper.offset,0.)
+
+  def test_confirmed_target_slowly_advances_an_early_stop(self):
+    results=[self.apply(stop=10.) for _ in range(100)]
+    self.assertEqual(results[0],10.)
+    self.assertGreater(results[-1],10.5)
+    self.assertTrue(all(abs(b-a)<=.015+1e-9 for a,b in zip(results,results[1:])))
+    self.assertLessEqual(results[-1],18.)
+
+  def test_no_extension_near_standstill_or_large_mismatch(self):
+    for speed, stop in [(0.,10.),(.5,10.),(3.,2.),(3.,1.)]:
+      self.helper=ManualStopLineCorrection()
+      for _ in range(100):result=self.apply(stop=stop,speed=speed)
+      self.assertLessEqual(result,stop)
+
+  def test_positive_offset_does_not_restart_stopped_vehicle(self):
+    for _ in range(100):self.apply(stop=10.)
+    self.assertGreater(self.helper.offset,0.)
+    self.assertEqual(self.apply(stop=0.,speed=0.),0.)
+
+  def test_invalid_target_cannot_begin_extension(self):
+    for change in [dict(samples=1),dict(scatter=2.),dict(accuracy=4.),dict(lateral=2.)]:
+      self.helper=ManualStopLineCorrection()
+      for _ in range(100):result=self.apply(stop=10.,target=dict(self.target,**change))
+      self.assertEqual(result,10.)
+
+  def test_learned_point_also_relaxes_braking_envelope_gradually(self):
+    from openpilot.selfdrive.controls.lib.signal_stop_approach import SignalStopApproach
+    learned, baseline = SignalStopApproach(), SignalStopApproach()
+    for i in range(40):
+      prior=self.helper.offset
+      corrected=self.apply(stop=10.,speed=1.5)
+      if learned.distance is not None:
+        learned.distance += self.helper.offset-prior
+      actual=learned.update(corrected,1.5,-.5,2.,4.6,True,.05)
+      original=baseline.update(10.,1.5,-.5,2.,4.6,True,.05)
+    self.assertGreater(actual,original)
+    self.assertGreater(learned.accel_cap,baseline.accel_cap)
+    self.assertLess(learned.accel_cap,0.)
 
 
 if __name__=='__main__':

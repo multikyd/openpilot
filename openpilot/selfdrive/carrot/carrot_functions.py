@@ -744,10 +744,6 @@ class CarrotPlanner:
       self.signal_stop_approach.ceiling = min(0., self.signal_stop_approach.ceiling or 0.)
       self.signal_stop_approach.confirm = max(.2, self.signal_stop_approach.confirm)
       self._stop_recheck_pending = False
-    approach_input = stop_dist
-    stop_dist = self.signal_stop_approach.update(
-      stop_dist, v_ego, a_ego, self.comfort_brake,
-      max(0., self.stop_distance-self.trafficStopDistanceAdjust+1.), approach_enabled, DT_MDL)
     manual_now=time.monotonic()
     if manual_now-self._manual_stop_read_time>=.2:
       self._manual_stop_read_time=manual_now
@@ -756,14 +752,24 @@ class CarrotPlanner:
         self._manual_stop_target=json.loads(raw) if raw else {}
       except (ValueError,TypeError):
         self._manual_stop_target={}
-    manual_active=(signal_stopping_enabled and stopping_active and mode=='acc' and
-                   not lead_detected and not (carstate.gasPressed or carstate.brakePressed))
+    manual_active = approach_enabled
+    previous_manual_offset = self._manual_stop_correction.offset
     stop_dist=self._manual_stop_correction.update(
       stop_dist,self._manual_stop_target,manual_now,v_ego,self.stop_distance,
       self.trafficStopDistanceAdjust,manual_active,DT_MDL)
+    # The learned point shifts both the stop target and its braking envelope.
+    # Rebase only its bounded incremental correction, independently of model
+    # endpoint drift; otherwise the old envelope still stops the car early.
+    manual_delta = self._manual_stop_correction.offset-previous_manual_offset
+    if self.signal_stop_approach.distance is not None:
+      self.signal_stop_approach.distance = max(0., self.signal_stop_approach.distance+manual_delta)
+    approach_input = stop_dist
+    stop_dist = self.signal_stop_approach.update(
+      stop_dist, v_ego, a_ego, self.comfort_brake,
+      max(0., self.stop_distance-self.trafficStopDistanceAdjust+1.), approach_enabled, DT_MDL)
     if not manual_active:
       self._manual_stop_reported=False
-    elif self._manual_stop_correction.offset<-.001 and not self._manual_stop_reported:
+    elif abs(self._manual_stop_correction.offset)>.001 and not self._manual_stop_reported:
       cloudlog.event('manual_stop_line_correction',offset=self._manual_stop_correction.offset,
                      stop_distance=stop_dist,target=self._manual_stop_target)
       self._manual_stop_reported=True
