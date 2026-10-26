@@ -669,6 +669,31 @@ class CarrotServ:
       self.xSpdType = -1
       self.xSpdDist = 0
 
+  def _ui_bump_notice(self, now, v_ego):
+    # Keep display candidates independent from the selected speed-control target.
+    candidates = []
+    if self.bump_display is not None:
+      target, distance = self.bump_display['target'], self.bump_display['distance']
+      if math.isfinite(target) and target > 0 and math.isfinite(distance):
+        candidates.append((target, max(0., distance)))
+    age = now - self.last_update_gps_time_navi
+    if (self.active_carrot > 1 and self.nSdiPlusType == 22 and
+        0 <= age <= 3. and math.isfinite(self.nSdiPlusDist) and self.nSdiPlusDist > 0):
+      distance = self.nSdiPlusDist - max(0., v_ego) * age
+      target = self.autoNaviSpeedBumpSpeed
+      passed = False
+      if distance > 0 and self.bump_memory.position is not None:
+        from openpilot.selfdrive.carrot.bump_learning import offset
+        stamp, lat, lon, heading = self.bump_memory.position
+        lat, lon = offset(lat, lon, heading, max(0., v_ego)*(now-stamp))
+        passed = self.bump_passage.matches(now, (*offset(lat, lon, heading, distance), heading))
+      if distance > 0 and math.isfinite(target) and target > 0 and not passed:
+        candidates.append((target, distance))
+    if not candidates:
+      return 0, 0
+    target, distance = min(candidates, key=lambda item: item[1])
+    return int(target), max(1, int(distance)) if distance > 0 else 0
+
   def _update_gps(self, v_ego, sm, gps_service):
     gps = sm[gps_service]
     #print(f"location = {sm.valid[llk]}, {sm.updated[llk]}, {sm.recv_frame[llk]}, {sm.recv_time[llk]}")
@@ -1292,8 +1317,9 @@ class CarrotServ:
     coords_str = ";".join([f"{x:.2f},{y:.2f},{d:.2f}" for (x, y), d in zip(coords, distances, strict=False)])
     msg.carrotMan.naviPaths = coords_str
 
-    msg.carrotMan.bumpTarget = int(self.bump_display['target']) if self.bump_display else 0
-    msg.carrotMan.bumpDistance = int(max(0, self.bump_display['distance'])) if self.bump_display else 0
+    ui_bump_target, ui_bump_distance = self._ui_bump_notice(bump_now, v_ego)
+    msg.carrotMan.bumpTarget = ui_bump_target
+    msg.carrotMan.bumpDistance = ui_bump_distance
     msg.carrotMan.bumpLearningText = (self.bump_memory.notice if learning_enabled and
                                     bump_now < self.bump_memory.notice_until else "")
     msg.carrotMan.bumpSoundSequence = self.bump_memory.sound_seq if learning_enabled else 0

@@ -222,7 +222,7 @@ class LanePlanner:
     if enabled:
       # Full preference on straight roads; fade out between radii 500m and 200m.
       curve_factor = np.interp(curvature, [0.002, 0.005], [1.0, 0.0])
-      target = float(np.clip(value, -0.05, 0.05)) * curve_factor
+      target = float(np.clip(value, -0.1, 0.1)) * curve_factor
     filtered = self.lane_center_offset_filtered.update(target)
     if not enabled:
       return 0.0
