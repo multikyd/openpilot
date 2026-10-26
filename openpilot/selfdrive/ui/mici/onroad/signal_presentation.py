@@ -48,3 +48,8 @@ def countdown_rows(display):
     if rows:
       return rows
   return [('', 0, '--')]
+
+
+def signal_source_label(source):
+  """Navigation provider label only; retain original source IDs internally."""
+  return 'NAVI' if source == 'TMAP' else source

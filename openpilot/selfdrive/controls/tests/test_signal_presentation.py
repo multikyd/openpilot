@@ -22,6 +22,14 @@ def display(**updates):
 
 
 class TestSignalPresentation(unittest.TestCase):
+  def test_navigation_label_does_not_change_source_or_lamp_logic(self):
+    value=display(source='TMAP')
+    before=signal_lamps(value)
+    self.assertEqual(presentation.signal_source_label(value.source),'NAVI')
+    self.assertEqual(value.source,'TMAP')
+    self.assertEqual(signal_lamps(value),before)
+    self.assertEqual(presentation.signal_source_label('VISION'),'VISION')
+
   def test_model_and_learning_panels_are_hidden_without_mutating_observations(self):
     for source in ('', 'MODEL', 'LEARN', 'OTHER'):
       value = display(source=source)

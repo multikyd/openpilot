@@ -3,7 +3,7 @@ import math
 import pyray as rl
 from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.selfdrive.ui.mici.onroad.hud_layout import signal_box
-from openpilot.selfdrive.ui.mici.onroad.signal_presentation import signal_lamps, countdown_rows, signal_panel_visible
+from openpilot.selfdrive.ui.mici.onroad.signal_presentation import signal_lamps, countdown_rows, signal_panel_visible, signal_source_label
 
 
 def draw_signal_panel(rect, font, display):
@@ -60,7 +60,7 @@ def draw_signal_panel(rect, font, display):
   value=rows[0][2]
   location=getattr(display,'locationKind','')
   distance='NO RANGE' if location=='unknown' else f'{"QUEUE" if location=="queue" else "PT"} ~{display.distance:.0f}m' if location in ('stop','queue') else f'~{display.distance:.0f}m' if location=='candidate' else f'{display.distance:.0f}m'
-  detail=f'{source} / {direction} / {distance}'
+  detail=f'{signal_source_label(source)} / {direction} / {distance}'
   if mode in ('OFF','FLASH'):
     value=mode;color=amber
   elif source=='EST':

@@ -164,8 +164,9 @@ def red_approach(signal, now, v_ego):
     angle = math.radians(heading)
     ahead = north * math.cos(angle) + east * math.sin(angle)
     lateral = abs(east * math.cos(angle) - north * math.sin(angle))
-    # Leave close-to-stop behavior to normal lead following.
-    if not 20 < distance < min(250.0, max(50.0, v_ego * 12.0)) or ahead <= 0 or lateral > 15:
+    # Begin coasting earlier on a verified route red; final stopping stays with
+    # the existing model/lead controller. Keep position/direction gates intact.
+    if not 20 < distance < min(300.0, max(60.0, v_ego * 16.0)) or ahead <= 0 or lateral > 15:
       return False, 'signal_geometry'
     reported = float(signal['distance'])
     reported_now = max(0.0, reported - max(0.0, gps_speed) * age)
@@ -213,7 +214,7 @@ class SignalFollowAssist:
     valid, self.reason = red_approach(signal, now, v_ego)
     try:
       lead_valid = lead.present and (lead.radar or lead.modelProb > .8) and all(
-        math.isfinite(float(x)) for x in (lead.dRel, lead.vRel, lead.aLeadK, lead.vLead)) and 0 < lead.dRel < max(20.0, v_ego * 3.0)
+        math.isfinite(float(x)) for x in (lead.dRel, lead.vRel, lead.aLeadK, lead.vLead)) and 0 < lead.dRel < min(100.0, max(30.0, v_ego * 4.5))
       if lead_valid and self.last_distance is not None and abs(lead.dRel - self.last_distance) > max(3.0, v_ego * .3):
         lead_valid = False
       self.last_distance = float(lead.dRel) if lead.present else None
@@ -222,13 +223,13 @@ class SignalFollowAssist:
       self.last_distance = None
     self.confirm_time = min(1.0, self.confirm_time + dt) if valid else 0.0
     # A verified red signal can suppress acceleration without a lead.
-    target = 1.0 if self.confirm_time >= .5 else 0.0
-    self.strength += max(-.4 * dt, min(.5 * dt, target - self.strength))
+    target = 1.0 if self.confirm_time >= .3 else 0.0
+    self.strength += max(-.4 * dt, min(.8 * dt, target - self.strength))
     slowing = lead_valid and (lead.aLeadK < -.4 or lead.vRel < -.5 or lead.vLead < 2.0)
     # Extra distance is v_ego * gap_extra, vanishing near standstill.
     fade = max(0.0, min(1.0, (v_ego - 2.0) / 2.0))
     gap_target = .25 * self.strength * fade if valid and slowing else 0.0
-    self.gap_extra += max(-.1 * dt, min(.05 * dt, gap_target - self.gap_extra))
+    self.gap_extra += max(-.1 * dt, min(.075 * dt, gap_target - self.gap_extra))
     self.reason = ('active_follow' if slowing else 'active_coast') if target else self.reason
 
   def cruise_accel(self, normal_max):
