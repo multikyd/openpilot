@@ -669,26 +669,49 @@ class CarrotServ:
       self.xSpdType = -1
       self.xSpdDist = 0
 
+  def _live_plus_bump(self, now, v_ego):
+    # The secondary navigation notice must be independent of the main camera.
+    age = now - self.last_update_gps_time_navi
+    if (self.active_carrot <= 1 or self.nSdiPlusType != 22 or not 0 <= age <= 3. or
+        not math.isfinite(v_ego) or not math.isfinite(self.nSdiPlusDist) or self.nSdiPlusDist <= 0 or
+        not math.isfinite(self.autoNaviSpeedBumpSpeed) or self.autoNaviSpeedBumpSpeed <= 0):
+      return None
+    distance = self.nSdiPlusDist - max(0., v_ego) * age
+    # Keep a short crossing allowance; a sensor-confirmed passage releases sooner.
+    if distance < -8.:
+      return None
+    if self.bump_memory.position is not None:
+      from openpilot.selfdrive.carrot.bump_learning import offset
+      stamp, lat, lon, heading = self.bump_memory.position
+      lat, lon = offset(lat, lon, heading, max(0., v_ego)*(now-stamp))
+      if self.bump_passage.matches(now, (*offset(lat, lon, heading, distance), heading)):
+        return None
+    return dict(target=self.autoNaviSpeedBumpSpeed, distance=distance)
+
+  def _plus_bump_speed(self, now, v_ego):
+    if self.autoNaviSpeedCtrlMode < 2 or self.roadcate <= 1:
+      return 250.
+    bump = self._live_plus_bump(now, v_ego)
+    if bump is None:
+      return 250.
+    target = bump['target']
+    if self.bump_display is not None and abs(bump['distance']-self.bump_display['distance']) < 15:
+      learned = self.bump_display['target']
+      if math.isfinite(learned) and learned > 0:
+        target = learned
+    return self.calculate_current_speed(max(0., bump['distance']), target,
+                                        self.autoNaviSpeedBumpTime, self.autoNaviSpeedDecelRate)
+
   def _ui_bump_notice(self, now, v_ego):
-    # Keep display candidates independent from the selected speed-control target.
+    # Display the nearest notice; speed control separately compares all caps.
     candidates = []
     if self.bump_display is not None:
       target, distance = self.bump_display['target'], self.bump_display['distance']
       if math.isfinite(target) and target > 0 and math.isfinite(distance):
         candidates.append((target, max(0., distance)))
-    age = now - self.last_update_gps_time_navi
-    if (self.active_carrot > 1 and self.nSdiPlusType == 22 and
-        0 <= age <= 3. and math.isfinite(self.nSdiPlusDist) and self.nSdiPlusDist > 0):
-      distance = self.nSdiPlusDist - max(0., v_ego) * age
-      target = self.autoNaviSpeedBumpSpeed
-      passed = False
-      if distance > 0 and self.bump_memory.position is not None:
-        from openpilot.selfdrive.carrot.bump_learning import offset
-        stamp, lat, lon, heading = self.bump_memory.position
-        lat, lon = offset(lat, lon, heading, max(0., v_ego)*(now-stamp))
-        passed = self.bump_passage.matches(now, (*offset(lat, lon, heading, distance), heading))
-      if distance > 0 and math.isfinite(target) and target > 0 and not passed:
-        candidates.append((target, distance))
+    bump = self._live_plus_bump(now, v_ego)
+    if bump is not None and bump['distance'] > 0:
+      candidates.append((bump['target'], bump['distance']))
     if not candidates:
       return 0, 0
     target, distance = min(candidates, key=lambda item: item[1])
@@ -1039,6 +1062,9 @@ class CarrotServ:
         self.bump_memory.position = None
     else:
       self.bump_memory.position = None
+    plus_bump = self._live_plus_bump(bump_now, v_ego)
+    plus_distance = (plus_bump['distance'] if plus_bump is not None and
+                     self.autoNaviSpeedCtrlMode >= 2 and self.roadcate > 1 else None)
     if learning_enabled and CS is not None and sm.valid['carState']:
       self.bump_memory.base = self.autoNaviSpeedBumpSpeed
       self.bump_memory.raise_limit = float(self.params.get("BumpLearningRaise", return_default=True) or 0)
@@ -1050,7 +1076,7 @@ class CarrotServ:
       eligible = (sm.valid['carControl'] and sm.alive['carControl'] and
                   sm.valid['radarState'] and sm.alive['radarState'] and not following and
                   sm['carControl'].longActive and not manual)
-      nav_bump = self.xSpdDist if self.xSpdType == 22 and self.active_carrot > 1 else None
+      nav_bump = self.xSpdDist if self.xSpdType == 22 and self.active_carrot > 1 else plus_distance
       self.bump_display = self.bump_memory.tick(bump_now, v_ego_kph, nav_bump, manual, eligible)
       if self.bump_memory.dirty and bump_now - self.bump_save_time > 5:
         self.params.put("BumpLearningData", self.bump_memory.export())
@@ -1060,7 +1086,10 @@ class CarrotServ:
       self.bump_memory.pending = None
       self.bump_display = None
     nav_distance = self.xSpdDist if self.xSpdType == 22 and self.active_carrot > 1 else None
-    passage_distance = nav_distance if nav_distance is not None else self.bump_display['distance'] if self.bump_display else None
+    # A secondary bump can drive passage detection without replacing the main
+    # camera's nav_distance/nav_bump_passed state.
+    passage_distance = (nav_distance if nav_distance is not None else plus_distance if plus_distance is not None
+                        else self.bump_display['distance'] if self.bump_display else None)
     pitch = None
     control = sm['carControl']
     if (CS is not None and sm.valid['carControl'] and sm.alive['carControl'] and
@@ -1146,6 +1175,10 @@ class CarrotServ:
 
 
     sdi_source = "hda" if hda_active else "bump" if self.xSpdType == 22 else "section" if self.xSpdType == 4 else "police" if self.xSpdType == 100 else "waze" if self.xSpdType == 101 else "cam"
+    # Re-evaluate after passage detection so a just-crossed bump releases in this cycle.
+    plus_bump_speed = self._plus_bump_speed(bump_now, v_ego)
+    if plus_bump_speed < sdi_speed:
+      sdi_speed, sdi_source = plus_bump_speed, "bump"
     if learned_bump_speed < sdi_speed:
       sdi_speed, sdi_source = learned_bump_speed, "bump"
     speed_n_sources = [
