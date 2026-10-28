@@ -18,6 +18,7 @@ class CutInAnticipation:
     self.track_id = None
     self.lane_geometry = None
     self.confirmed_tracks = {}
+    self.release_since = None
 
   def update(self, radar, model, speed, normal_accel, curvature, sample_time, now, enabled, current_accel=None):
     values = (speed, normal_accel, curvature, sample_time, now)
@@ -158,13 +159,23 @@ class CutInAnticipation:
 
     self.stage, self.track_id = stage, chosen
     if target is not None:
+      self.release_since = None
       if self.limit is None:
         self.limit = min(normal_accel, max(0., current_accel)) if current_accel is not None else normal_accel
       # Positive cap and negative cruise goal both change smoothly.
       self.limit += max(-(1.5 if urgent else .7)*dt, min(.35*dt, target-self.limit))
     elif self.limit is not None:
-      self.limit = min(normal_accel, self.limit+.35*dt)
+      # A brief measured-target/confirmation dropout must not start a small
+      # reacceleration pulse before the same merging vehicle returns. This is
+      # only an acceleration-cap hold; stale/manual/invalid input resets above.
+      if self.release_since is None:
+        self.release_since = now
+      self.stage, self.track_id = 'recover', None
+      if now-self.release_since >= .15-1e-6:
+        self.limit = min(normal_accel, self.limit+.35*dt)
       if self.limit >= normal_accel-1e-6:
         self.limit = None
+        self.stage, self.track_id = 'off', None
+        self.release_since = None
     return min(normal_accel, self.limit) if self.limit is not None else None
 

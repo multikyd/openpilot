@@ -129,6 +129,24 @@ class TestCutInAnticipation(unittest.TestCase):
     self.assertGreaterEqual(min(values), -.3)
     self.assertTrue(all(x <= .2 for x in values))
 
+  def test_brief_candidate_loss_does_not_pulse_acceleration_recovery(self):
+    helper,trace=self.simulate(duration=2.)
+    before=trace[-1];model=fixture();empty=NS(leadsLeft=[],leadsRight=[])
+    for t in (2.,2.05,2.1):
+      self.assertAlmostEqual(helper.update(empty,model,20.,1.6,0.,t,t,True),before)
+      self.assertEqual(helper.stage,'recover')
+    recovered=helper.update(empty,model,20.,1.6,0.,2.15,2.15,True)
+    self.assertGreater(recovered,before)
+    self.assertLessEqual(recovered-before,.35*.05+1e-8)
+    self.assertIsNone(helper.update(empty,model,20.,1.6,0.,2.2,2.2,False))
+
+  def test_stale_data_clears_even_during_recovery_confirmation(self):
+    helper,_=self.simulate(duration=2.)
+    empty=NS(leadsLeft=[],leadsRight=[])
+    helper.update(empty,fixture(),20.,1.6,0.,2.,2.,True)
+    self.assertIsNone(helper.update(empty,fixture(),20.,1.6,0.,2.,2.25,True))
+    self.assertIsNone(helper.release_since)
+
   def test_bad_lane_geometry_clears_assistance(self):
     helper, _ = self.simulate()
     model = fixture()

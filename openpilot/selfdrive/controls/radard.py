@@ -9,6 +9,7 @@ import copy
 import capnp
 from openpilot.cereal import messaging, log
 from opendbc.car.structs import car
+from opendbc.car.hyundai.corner_tracks import is_corner_track_id
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.params import Params
 from openpilot.common.realtime import DT_MDL, Priority, config_realtime_process
@@ -523,7 +524,8 @@ def get_RadarState_from_vision(md, lead_msg: capnp._DynamicStructReader, v_ego: 
   }
 
 class RadarD:
-  def __init__(self, delay: float = 0.0):
+  def __init__(self, delay: float = 0.0, brand: str = ""):
+    self.stable_corner_ids = brand == "hyundai"
     self.current_time = 0.0
 
     self.tracks: dict[int, Track] = {}
@@ -677,10 +679,7 @@ class RadarD:
     pm.send("radarState", radar_msg)
 
   def _is_corner_track(self, t: Track) -> bool:
-    return (
-      CORNER_235_TRACK_ID_START <= t.identifier < CORNER_235_TRACK_ID_END or
-      CORNER_180_TRACK_ID_START <= t.identifier < CORNER_180_TRACK_ID_END
-    )
+    return is_corner_track_id(t.identifier, self.stable_corner_ids)
 
   def _matching_front_track(self, corner: Track, front_tracks: dict[int, Track]) -> Track | None:
     matches = []
@@ -963,10 +962,7 @@ class RadarD:
 
   def _lead_is_corner_track(self, lead: dict[str, Any]) -> bool:
     track_id = int(lead.get("radarTrackId", -1))
-    return (
-      CORNER_235_TRACK_ID_START <= track_id < CORNER_235_TRACK_ID_END or
-      CORNER_180_TRACK_ID_START <= track_id < CORNER_180_TRACK_ID_END
-    )
+    return is_corner_track_id(track_id, self.stable_corner_ids)
 
   def _is_center_lead_candidate(self, t: Track) -> bool:
     in_lane_min = CENTER_LEAD_NEAR_IN_LANE_PROB
@@ -1160,7 +1156,7 @@ def main() -> None:
   sm = messaging.SubMaster(['modelV2', 'carState', 'radarTracks'], poll='modelV2')
   pm = messaging.PubMaster(['radarState'])
 
-  RD = RadarD(CP.radarDelay)
+  RD = RadarD(CP.radarDelay, brand=CP.brand)
 
   while 1:
     sm.update()

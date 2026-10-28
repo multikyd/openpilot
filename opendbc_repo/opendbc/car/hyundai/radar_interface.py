@@ -8,6 +8,7 @@ from opendbc.car.interfaces import RadarInterfaceBase
 from opendbc.car.hyundai.values import DBC, HyundaiFlags, HyundaiExtFlags
 from openpilot.common.params import Params
 from opendbc.car.hyundai.hyundaicanfd import CanBus
+from opendbc.car.hyundai.corner_tracks import CornerObjectTrackIdManager, deduplicate_corner_candidates
 
 SCC_TID = 0
 RADAR_START_ADDR = 0x500
@@ -118,6 +119,7 @@ class RadarInterface(RadarInterfaceBase):
     self.updated_corner_objects_180 = set()
     self.corner_object_missed_updates = 0
     self.corner_object_180_missed_updates = 0
+    self.corner_object_ids = CornerObjectTrackIdManager()
     self.rcp_tracks = get_radar_can_parser(CP, self.radar_tracks, self.radar_start_addr, self.radar_msg_count)
     self.rcp_corner_objects = get_corner_object_can_parser(CP, self.corner_object_tracks)
     self.rcp_corner_objects_180 = get_corner_object_180_can_parser(CP, self.corner_object_180_tracks)
@@ -328,38 +330,38 @@ class RadarInterface(RadarInterfaceBase):
   def _update_corner_objects(self, updated_messages):
     if self.rcp_corner_objects is None:
       return
-
     if not updated_messages:
       self._clear_corner_objects()
       return
 
+    parser = self.rcp_corner_objects
+    now = parser._last_update_nanos*1e-9
+    candidates = []
     for slot, addr in enumerate(range(CORNER_OBJECT_235_START_ADDR, CORNER_OBJECT_235_START_ADDR + CORNER_OBJECT_235_MSG_COUNT)):
       t_id = CORNER_OBJECT_235_TRACK_ID_OFFSET + slot
-      msg = self.rcp_corner_objects.vl[f"CORNER_RADAR_235_OBJECTS_{addr:x}"]
-
-      d_rel = msg["OBJ_REL_POS_X"]
-      y_rel = msg["OBJ_REL_POS_Y"]
-      v_rel = msg["OBJ_REL_VEL_X"]
-      yv_rel = msg["OBJ_REL_VEL_Y"]
-      a_rel = msg["OBJ_REL_ACCEL_X"]
-      valid = msg["OBJ_QUAL_LEVEL"] > 0 and 0.2 < d_rel < 180.0 and abs(y_rel) < 40.0 and v_rel > -99.0
-
-      self.pts[t_id].measured = bool(valid)
-      if not valid:
-        self.pts[t_id].dRel = 0
-        self.pts[t_id].yRel = 0
-        self.pts[t_id].vRel = 0
-        self.pts[t_id].vLead = self.v_ego
-        self.pts[t_id].aRel = float('nan')
-        self.pts[t_id].yvRel = 0
+      self._clear_point(t_id)
+      name = f"CORNER_RADAR_235_OBJECTS_{addr:x}"
+      stamp = max(parser.ts_nanos.get(name, {}).values(), default=0)*1e-9
+      # A live bus does not make a cached object slot fresh.
+      if stamp <= 0 or not 0. <= now-stamp <= .10:
         continue
-
-      self.pts[t_id].dRel = d_rel
-      self.pts[t_id].yRel = y_rel
-      self.pts[t_id].vRel = v_rel
-      self.pts[t_id].vLead = v_rel + self.v_ego
-      self.pts[t_id].aRel = a_rel
-      self.pts[t_id].yvRel = yv_rel
+      msg = parser.vl[name]
+      d_rel, y_rel = msg["OBJ_REL_POS_X"], msg["OBJ_REL_POS_Y"]
+      v_rel, yv_rel = msg["OBJ_REL_VEL_X"], msg["OBJ_REL_VEL_Y"]
+      a_rel = msg["OBJ_REL_ACCEL_X"]
+      if (not all(math.isfinite(v) for v in (d_rel,y_rel,v_rel,yv_rel,a_rel)) or
+          not (msg["OBJ_QUAL_LEVEL"] > 0 and .2 < d_rel < 180. and abs(y_rel) < 40. and v_rel > -99.)):
+        continue
+      candidates.append((t_id, int(msg["OBJ_OBJECT_ID"]), int(msg["OBJ_AGE"]), int(msg["OBJ_QUAL_LEVEL"]),
+                         d_rel, y_rel, v_rel, yv_rel, a_rel))
+    candidates = deduplicate_corner_candidates(candidates)
+    assignments = self.corner_object_ids.assign(candidates, now)
+    for t_id, _, _, _, d_rel, y_rel, v_rel, yv_rel, a_rel in candidates:
+      point = self.pts[t_id]
+      point.trackId = assignments[t_id]
+      point.measured = True
+      point.dRel, point.yRel, point.vRel = d_rel, y_rel, v_rel
+      point.vLead, point.aRel, point.yvRel = v_rel+self.v_ego, a_rel, yv_rel
 
   def _update_corner_objects_180(self, updated_messages):
     if self.rcp_corner_objects_180 is None:
@@ -394,6 +396,8 @@ class RadarInterface(RadarInterfaceBase):
         self.pts[t_id].yvRel = yv_rel
 
   def _clear_point(self, t_id):
+    # An inactive CAN slot must not reset a live filter sharing its old ID.
+    self.pts[t_id].trackId = t_id
     self.pts[t_id].measured = False
     self.pts[t_id].dRel = 0
     self.pts[t_id].yRel = 0
@@ -403,6 +407,7 @@ class RadarInterface(RadarInterfaceBase):
     self.pts[t_id].yvRel = 0
 
   def _clear_corner_objects(self):
+    self.corner_object_ids.clear()
     for slot in range(CORNER_OBJECT_235_MSG_COUNT):
       self._clear_point(CORNER_OBJECT_235_TRACK_ID_OFFSET + slot)
 
