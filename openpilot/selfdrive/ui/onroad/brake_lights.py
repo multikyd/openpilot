@@ -147,10 +147,25 @@ def red_components(rgb):
   return sorted(out,key=lambda a:a[2]*a[3],reverse=True)[:24] if len(out) <= 128 else []
 
 
+def connected_lamp_ends(box, shape):
+  """Split only a thin, centred rear light bar; never a broad red surface."""
+  h, w = shape[:2]
+  x, y, bw, bh = box
+  if (.55*w < bw < .9*w and 1 <= bh < .10*h and bw > 6*bh and
+      abs(x+bw/2-w/2) < .12*w and .20*h < y+bh/2 < .80*h):
+    end = max(3, int(bw*.20))
+    return ((x,y,end,bh), (x+bw-end,y,end,bh))
+  return ()
+
+
 def locate_lamps(rgb, previous_geometry=None, components=None):
   """Red-region pair heuristic within lead search ROI; ambiguous pairs are rejected."""
   h, w = rgb.shape[:2]
   components = red_components(rgb) if components is None else components
+  # Keep the original components for centre-lamp observations; virtual ends
+  # only supply left/right geometry for a connected horizontal LED bar.
+  bars = [(box, connected_lamp_ends(box, rgb.shape)) for box in components]
+  components = [box for box, ends in bars if not ends]+[end for _, ends in bars for end in ends]
   center = lambda a: (a[0]+a[2]/2, a[1]+a[3]/2)
   pairs = []
   for a in components:
@@ -304,6 +319,7 @@ class CenterLampTransitions:
     self.candidate_misses = 0
     self.last_seen = None
     self.last_time = None
+    self.release_until = -math.inf
 
   def clear_candidate(self):
     self.geometry = self.reference = None
@@ -318,7 +334,9 @@ class CenterLampTransitions:
     x0, y0 = max(0, int(x*w)), max(0, int(y*h))
     x1 = min(w, max(x0+1, int((x+bw)*w)))
     y1 = min(h, max(y0+1, int((y+bh)*h)))
-    patch = rgb[y0:y1, x0:x1].astype(float)
+    # Include one neighbouring pixel so a thin LED moving across the sampling
+    # grid cannot manufacture an OFF reference or a release.
+    patch = rgb[max(0,y0-1):min(h,y1+1), max(0,x0-1):min(w,x1+1)].astype(float)
     if not patch.size:
       return None
     excess = patch[:, :, 0]-np.maximum(patch[:, :, 1], patch[:, :, 2])
@@ -334,6 +352,17 @@ class CenterLampTransitions:
       self.clear_candidate()
     h, w = rgb.shape[:2]
     background = float(np.median(rgb[:, :, 0]))
+    # A known centre lamp returning to its unlit reference vetoes a side-only
+    # brightness latch. Do not invent OFF from an occlusion or moved crop.
+    if self.count >= self.CONFIRM_FRAMES and self.reference is not None:
+      current = self.stats(rgb, self.geometry, background)
+      exposure = current[2]/self.reference[2]
+      delta = current-self.reference*exposure
+      matched = any(abs((b[0]+b[2]/2)/w-(self.geometry[0]+self.geometry[2]/2)) < .08 and
+                    abs((b[1]+b[3]/2)/h-(self.geometry[1]+self.geometry[3]/2)) < .06 and
+                    .04*w <= b[2] < .35*w and b[3] < .13*h for b in components)
+      if not matched and .5 <= exposure <= 2. and delta[0] < self.RAW_RISE*.25 and delta[1] < self.CHROMA_RISE*.25:
+        self.release_until = max(self.release_until, self.last_seen+.8)
     candidates = []
     for box in components:
       x, y, bw, bh = box
@@ -345,6 +374,8 @@ class CenterLampTransitions:
       lower = [b for b in components if b[2]*b[3] >= 3 and .05*h < b[1]+b[3]/2-cy < .55*h]
       left = any(b[0]+b[2]/2 < cx-.12*w for b in lower)
       right = any(b[0]+b[2]/2 > cx+.12*w for b in lower)
+      connected = any(connected_lamp_ends(b, rgb.shape) and b[0] < cx-.12*w and b[0]+b[2] > cx+.12*w for b in lower)
+      left, right = left or connected, right or connected
       norm = np.array([x/w, y/h, bw/w, bh/h])
       matched = self.geometry is not None and np.max(np.abs(norm[:2]-self.geometry[:2])) < .08
       # A different component cannot replace a still-confirmed lamp during
@@ -405,6 +436,7 @@ class AdaptiveLamps:
 
   def reset(self):
     self.center = CenterLampTransitions()
+    self.release_veto = False
     self._reset_relative()
 
   def _reset_relative(self):
@@ -420,13 +452,24 @@ class AdaptiveLamps:
     self.reference_confirmed = False
 
   def update(self, rgb, now):
+    if self.center.last_time is not None and not 0 < now-self.center.last_time <= .4:
+      self.release_veto = False
     # Reuse the bounded component extraction for both observers.
     components = red_components(rgb)
     relative = self._update_relative(rgb, now, components)
     middle = self.center.update(rgb, now, components)
     if middle is not None:
+      self.release_veto = False
       lamps = relative.lamps[:2]+(middle,) if len(relative.lamps) >= 2 else (middle,)
       return Observation("ON", "CENTER_LAMP_RISE", lamps, relative.gains)
+    if now <= self.center.release_until:
+      self.release_veto = True
+    if relative.state == "OFF":
+      self.release_veto = False
+    if self.release_veto:
+      # Let the existing side observer finish its coordinated fall/reference
+      # confirmation, but never display its old ON over a centre-lamp release.
+      return Observation("UNKNOWN", "CENTER_LAMP_RELEASE", relative.lamps, relative.gains)
     return relative
 
   def _update_relative(self, rgb, now, components):
@@ -443,6 +486,11 @@ class AdaptiveLamps:
       self.confirmed_on = False
       self.count = self.off_count = 0
       return Observation(reason="NO_LAMP_PAIR")
+    if any(tuple(lamps[:2]) == connected_lamp_ends(box, rgb.shape) for box in components):
+      # A connected bar is also a normal tail light. Its endpoints are useful
+      # geometry, but must not create a side-brightness ON/OFF reference.
+      self._reset_relative()
+      return Observation(reason="CONNECTED_LAMP_REFERENCE", lamps=lamps)
     h, w = rgb.shape[:2]
     geometry = np.array([((x+bw/2)/w, (y+bh/2)/h) for x, y, bw, bh in lamps])
     if self.prev_geometry is not None and np.max(np.abs(geometry[:2]-self.prev_geometry[:2])) > .12:

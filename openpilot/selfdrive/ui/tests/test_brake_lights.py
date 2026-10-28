@@ -42,6 +42,41 @@ class CenterTransitionTest(unittest.TestCase):
     self.assertEqual((result.state, result.reason), ('ON', 'CENTER_LAMP_RISE'))
     self.assertEqual(len(result.lamps), 1)
 
+  def test_release_vetoes_side_latch_when_body_darkens_at_departure(self):
+    state = core.AdaptiveLamps()
+    self.run_frames(state, scene(), 0., 8)
+    self.assertEqual(self.run_frames(state, scene(True), .8, 10).state, 'ON')
+    departing = scene(True)
+    departing[20:25,68:92] = (80,25,25)
+    departing[80:115,22:136] = (45,45,45)
+    for i in range(18,33):
+      result = state.update(departing, i*.1)
+      self.assertNotEqual(result.state, 'ON')
+    self.assertEqual(self.run_frames(state, scene(True), 3.3, 5).state, 'ON')
+
+  def test_connected_light_bar_is_geometry_not_a_braking_label(self):
+    def bar(center=False):
+      rgb = np.full((140,160,3),110,np.uint8)
+      rgb[70:77,20:140] = (200,25,25)
+      rgb[30:33,68:92] = (240 if center else 80,25,25)
+      return rgb
+    state = core.AdaptiveLamps()
+    result = self.run_frames(state, bar(), 0., 8)
+    self.assertEqual(result.state, 'UNKNOWN')
+    self.assertGreaterEqual(len(result.lamps), 2)
+    self.assertEqual(self.run_frames(state, bar(True), .8, 4).reason, 'CENTER_LAMP_RISE')
+    fresh = core.AdaptiveLamps()
+    self.assertNotEqual(self.run_frames(fresh, bar(True), 0., 12).state, 'ON')
+    self.assertFalse(core.connected_lamp_ends((10,20,140,60),(140,160,3)))
+
+  def test_already_lit_thin_strip_pixel_jitter_does_not_create_onset(self):
+    state = core.AdaptiveLamps()
+    for i in range(20):
+      rgb = scene()
+      rgb[20:26,68:92] = (80,25,25)
+      rgb[21+i%2:22+i%2,68:92] = (240,70,30)
+      self.assertNotEqual(state.update(rgb,i*.1).state, 'ON')
+
   def test_center_single_flash_is_not_confirmed(self):
     state = core.AdaptiveLamps()
     self.run_frames(state, scene(), 0., 6)

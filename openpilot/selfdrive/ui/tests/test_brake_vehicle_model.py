@@ -209,7 +209,7 @@ class VehicleModelTest(unittest.TestCase):
       def run(self,outputs,inputs):
         calls.append(inputs['images'].shape)
         return [np.zeros((1,6,8400),np.float32)]
-    ort=NS(SessionOptions=lambda:NS(),ExecutionMode=NS(ORT_SEQUENTIAL=0),InferenceSession=lambda *a,**k:Session())
+    ort=NS(SessionOptions=lambda:NS(add_session_config_entry=lambda *a:None),ExecutionMode=NS(ORT_SEQUENTIAL=0),InferenceSession=lambda *a,**k:Session())
     inbox,outbox=Queue(),Queue();inbox.put(None)
     with patch.dict('sys.modules',{'onnxruntime':ort}),patch.object(model,'_background_priority'),patch.object(model,'use_runtime'):
       model._worker(inbox,outbox,'dummy')
@@ -262,7 +262,7 @@ class VehicleModelTest(unittest.TestCase):
         def run(self,outputs,inputs):
           if self.quant and int8_latency is None:raise RuntimeError('unsupported quant operator')
           clock[0] += int8_latency if self.quant else .02
-      ort=NS(SessionOptions=lambda:NS(),ExecutionMode=NS(ORT_SEQUENTIAL=0),InferenceSession=lambda path,*a,**k:Session(path))
+      ort=NS(SessionOptions=lambda:NS(add_session_config_entry=lambda *a:None),ExecutionMode=NS(ORT_SEQUENTIAL=0),InferenceSession=lambda path,*a,**k:Session(path))
       inbox,outbox=Queue(),Queue();inbox.put(None)
       with patch.dict('os.environ',{'LEAD_BRAKE_VARIANT':'auto'}),patch.dict('sys.modules',{'onnxruntime':ort}),patch.object(model,'_background_priority'),patch.object(model,'use_runtime'),patch.object(model.Path,'is_file',return_value=True),patch.object(model.time,'monotonic',side_effect=lambda:clock[0]),patch.object(model.time,'process_time',side_effect=lambda:clock[0]):
         model._worker(inbox,outbox,str(model.LIGHT_MODEL))
@@ -272,6 +272,36 @@ class VehicleModelTest(unittest.TestCase):
       self.assertEqual(ready[2]['input_size'],320)
       self.assertEqual(ready[2]['model'],model.QUANT_MODEL.name if int8_latency==.005 else model.LIGHT_MODEL.name)
       self.assertEqual(len(ready[2]['benchmarks']),2)
+
+  def test_total_cpu_time_limits_parallel_inference_duty(self):
+    h=self.helper()
+    h.outbox.put(('result',0,100.,(0,0,80,60),None,.4,dict(cpu_ms=800.)))
+    h.tick(NS(),(0,0,80,60),0,100.5)
+    self.assertEqual(h.interval,4.)
+    self.assertEqual(model.fuse_observation(model.Observation('UNKNOWN','CENTER_LAMP_RELEASE'),dict(state='ON')).state,'UNKNOWN')
+
+  def test_slow_single_thread_benchmarks_two_without_spinning(self):
+    clock=[100.];configs=[]
+    class Session:
+      def __init__(self, options):self.threads=options.intra_op_num_threads
+      def get_inputs(self):return [NS(name='images',shape=[1,3,320,320])]
+      def get_outputs(self):return [NS(shape=[1,6,2100])]
+      def run(self,outputs,inputs):clock[0] += 1.4 if self.threads==1 else .75
+    def options():
+      entries={};configs.append(entries)
+      return NS(add_session_config_entry=lambda k,v:entries.update({k:v}))
+    ort=NS(SessionOptions=options,ExecutionMode=NS(ORT_SEQUENTIAL=0),InferenceSession=lambda path,opts,**kw:Session(opts))
+    inbox,outbox=Queue(),Queue();inbox.put(None)
+    with patch.dict('sys.modules',{'onnxruntime':ort}),patch.object(model,'_background_priority'),patch.object(model,'use_runtime'),patch.object(model.os,'cpu_count',return_value=4),patch.object(model.time,'monotonic',side_effect=lambda:clock[0]),patch.object(model.time,'process_time',side_effect=lambda:clock[0]):
+      model._worker(inbox,outbox,'dummy')
+    messages=[]
+    while not outbox.empty():messages.append(outbox.get())
+    ready=next(m for m in messages if m[0]=='ready')
+    self.assertEqual(ready[2]['threads'],2)
+    self.assertEqual([b['threads'] for b in ready[2]['benchmarks']],[1,2])
+    for entries in configs:
+      self.assertEqual(entries['session.intra_op.allow_spinning'],'0')
+      self.assertEqual(entries['session.inter_op.allow_spinning'],'0')
 
   def test_ready_metadata_and_live_cpu_diagnostics_are_preserved(self):
     h=self.helper();h.ready=False;h.started=99.

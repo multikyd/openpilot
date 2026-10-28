@@ -75,7 +75,7 @@ def fuse_observation(observation, hint):
   # A fresh centre/brightness rise remains authoritative over slow model OFF.
   if observation.state == 'ON':
     return observation
-  if observation.reason == 'RELEASE_PENDING':
+  if observation.reason in ('RELEASE_PENDING', 'CENTER_LAMP_RELEASE'):
     return observation
   if observation.state == 'OFF' and hint['state'] == 'ON':
     return Observation('UNKNOWN', 'MODEL_LAMP_CONFLICT', observation.lamps, observation.gains)
@@ -120,46 +120,56 @@ def _worker(inbox, outbox, path):
     except Exception:
       mark_broken(runtime)
       raise
-    options = ort.SessionOptions()
-    options.intra_op_num_threads = options.inter_op_num_threads = 1
-    options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
-    options.log_severity_level = 3
     paths = [Path(path)]
     if (paths[0].name == LIGHT_MODEL.name and QUANT_MODEL.is_file() and
         os.getenv('LEAD_BRAKE_VARIANT', 'auto') == 'auto'):
       paths.append(QUANT_MODEL)
     best, benchmarks = None, []
+    # Benchmark two background threads only when single-thread latency cannot
+    # comfortably meet the existing freshness budget. Never use realtime CPUs.
     for candidate in paths:
-      try:
-        load_start = time.monotonic()
-        candidate_session = ort.InferenceSession(str(candidate), options, providers=['CPUExecutionProvider'])
-        inp = candidate_session.get_inputs()[0]
-        size = inp.shape[2]
-        if (size not in (320, 640) or inp.shape != [1,3,size,size] or
-            candidate_session.get_outputs()[0].shape != [1,6,sum((size//s)**2 for s in (8,16,32))]):
-          raise ValueError('Unexpected brake model interface')
-        load_ms = (time.monotonic()-load_start)*1000
-        outbox.put(('phase', 'warmup'))
-        dummy = np.zeros((1,3,size,size), dtype=np.float32)
-        samples, cpu_samples = [], []
-        for _ in range(2):
-          started, cpu_started = time.monotonic(), time.process_time()
-          candidate_session.run(None, {inp.name: dummy})
-          samples.append(time.monotonic()-started)
-          cpu_samples.append(time.process_time()-cpu_started)
-        benchmarks.append(dict(model=candidate.name, load_ms=round(load_ms,1),
-                               cold_ms=round(samples[0]*1000,1), steady_ms=round(samples[1]*1000,1),
-                               cpu_ms=round(cpu_samples[1]*1000,1)))
-        # Prefer FP32 on a near tie; INT8 is not faster on every CPU.
-        if best is None or samples[1] < best[0]*.95:
-          best = (samples[1], candidate_session, inp, size, candidate.name)
-      except Exception as exc:
-        benchmarks.append(dict(model=candidate.name, error=type(exc).__name__))
+      thread_counts = [1]
+      for threads in thread_counts:
+        try:
+          options = ort.SessionOptions()
+          options.intra_op_num_threads = threads
+          options.inter_op_num_threads = 1
+          options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+          options.log_severity_level = 3
+          options.add_session_config_entry('session.intra_op.allow_spinning', '0')
+          options.add_session_config_entry('session.inter_op.allow_spinning', '0')
+          load_start = time.monotonic()
+          candidate_session = ort.InferenceSession(str(candidate), options, providers=['CPUExecutionProvider'])
+          inp = candidate_session.get_inputs()[0]
+          size = inp.shape[2]
+          if (size not in (320, 640) or inp.shape != [1,3,size,size] or
+              candidate_session.get_outputs()[0].shape != [1,6,sum((size//s)**2 for s in (8,16,32))]):
+            raise ValueError('Unexpected brake model interface')
+          load_ms = (time.monotonic()-load_start)*1000
+          outbox.put(('phase', 'warmup'))
+          dummy = np.zeros((1,3,size,size), dtype=np.float32)
+          samples, cpu_samples = [], []
+          for _ in range(2):
+            started, cpu_started = time.monotonic(), time.process_time()
+            candidate_session.run(None, {inp.name: dummy})
+            samples.append(time.monotonic()-started)
+            cpu_samples.append(time.process_time()-cpu_started)
+          benchmarks.append(dict(model=candidate.name, threads=threads, load_ms=round(load_ms,1),
+                                 cold_ms=round(samples[0]*1000,1), steady_ms=round(samples[1]*1000,1),
+                                 cpu_ms=round(cpu_samples[1]*1000,1)))
+          if threads == 1 and size == 320 and samples[1] > .7 and (os.cpu_count() or 1) >= 2:
+            thread_counts.append(2)
+          # Prefer FP32/one thread on a near tie.
+          if best is None or samples[1] < best[0]*.95:
+            best = (samples[1], candidate_session, inp, size, candidate.name, threads)
+          candidate_session = None  # do not retain a rejected session/thread pool
+        except Exception as exc:
+          benchmarks.append(dict(model=candidate.name, threads=threads, error=type(exc).__name__))
     if best is None:
       raise RuntimeError('No usable brake model candidate')
-    elapsed, session, inp, size, model_name = best
+    elapsed, session, inp, size, model_name, threads = best
     candidate_session = None  # release the non-selected session before live inference
-    outbox.put(('ready', elapsed, dict(model=model_name, input_size=size, benchmarks=benchmarks)))
+    outbox.put(('ready', elapsed, dict(model=model_name, input_size=size, threads=threads, benchmarks=benchmarks)))
     while True:
       job = inbox.get()
       if job is None:
@@ -319,11 +329,13 @@ class BrakeVehicleModel:
         elif message[0] == 'result':
           _, generation, captured, found_roi, chosen, elapsed = message[:6]
           self.busy = False
-          self.interval = max(1., elapsed*5)  # At most ~20% of one CPU core.
           self.report = dict(self.report or {}, duration_ms=round(elapsed*1000,1), state=chosen['state'] if chosen else 'UNKNOWN',
                              confidence=chosen['confidence'] if chosen else 0., matched=chosen is not None)
           if len(message)>6:
             self.report.update(message[6])
+          cpu_seconds = float(self.report.get('cpu_ms', elapsed*1000))/1000
+          # Budget total CPU across threads, not only elapsed wall time.
+          self.interval = max(1., elapsed*5, cpu_seconds*5)
           if elapsed > 1.:
             self._fail('inference_too_slow', now, elapsed)
             return None
