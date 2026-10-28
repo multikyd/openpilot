@@ -13,7 +13,6 @@ from openpilot.selfdrive.ui.mici.onroad.model_renderer import ModelRenderer
 from openpilot.selfdrive.ui.onroad.brake_light_overlay import BrakeLightOverlay
 from openpilot.selfdrive.ui.mici.onroad.navigation import NavigationPanel, PANEL_WIDTH
 from openpilot.selfdrive.ui.mici.onroad.lead_brake_panel import LeadBrakePanel
-from openpilot.selfdrive.ui.mici.onroad.brake_label_controls import BrakeLabelControls
 from openpilot.selfdrive.ui.mici.onroad.cameraview import CameraView
 from openpilot.system.ui.lib.application import FontWeight, gui_app, MousePos, MouseEvent, TextAlignment, TextAlignmentVertical
 from openpilot.system.ui.widgets.label import UnifiedLabel
@@ -180,9 +179,8 @@ class AugmentedRoadView(CameraView):
     self._alert_renderer = AlertRenderer()
     self._driver_state_renderer = DriverStateRenderer()
     self._lead_brake_panel = LeadBrakePanel()
-    self._brake_labels = BrakeLabelControls()
-    self._label_press = None
-    self._label_dragged = False
+    self._touch_press = None
+    self._touch_dragged = False
     self._offroad_label = UnifiedLabel("start the car to\nuse openpilot", 54, FontWeight.DISPLAY,
                                        text_color=rl.Color(255, 255, 255, int(255 * 0.9)),
                                        alignment=TextAlignment.CENTER,
@@ -206,23 +204,21 @@ class AugmentedRoadView(CameraView):
       self._offroad_label.set_text("start the car to\nuse openpilot")
 
   def _handle_mouse_press(self, mouse_pos: MousePos):
-    self._label_press = mouse_pos
-    self._label_dragged = False
+    self._touch_press = mouse_pos
+    self._touch_dragged = False
     super()._handle_mouse_press(mouse_pos)
 
   def _handle_mouse_event(self, event: MouseEvent):
-    if self._label_press is not None and (abs(event.pos.x-self._label_press.x) > 10 or
-                                         abs(event.pos.y-self._label_press.y) > 10):
-      self._label_dragged = True
+    if self._touch_press is not None and (abs(event.pos.x-self._touch_press.x) > 10 or
+                                         abs(event.pos.y-self._touch_press.y) > 10):
+      self._touch_dragged = True
     super()._handle_mouse_event(event)
 
   def _handle_mouse_release(self, mouse_pos: MousePos):
-    # A swipe remains a bookmark gesture, never a lamp label or camera click.
+    # A swipe remains a bookmark gesture, never a camera click.
     bookmark = self._bookmark_icon.interacting()
-    press, self._label_press = self._label_press, None
-    if not self._label_dragged and ui_state.started and press is not None and self._brake_labels.tap(mouse_pos, self._brake_light_overlay):
-      return
-    if bookmark or self._label_dragged:
+    self._touch_press = None
+    if bookmark or self._touch_dragged:
       return
     super()._handle_mouse_release(mouse_pos)
 
@@ -230,8 +226,6 @@ class AugmentedRoadView(CameraView):
     # Draw text if not onroad
     if not ui_state.started:
       self._brake_light_overlay.clear()
-      self._brake_labels.dismiss()
-      self._brake_labels.buttons = []
       rl.draw_rectangle_rec(self.rect, rl.BLACK)
       self._offroad_label.render(self._rect)
       return
@@ -304,14 +298,10 @@ class AugmentedRoadView(CameraView):
       self._navigation.render(rl.Rectangle(self._content_rect.x + self._content_rect.width, self.rect.y, PANEL_WIDTH, self.rect.height))
     self._hud_renderer.draw_current_speed_sidebar(self.rect)
     self._lead_brake_panel.render(self.rect, ui_state.sm, self._brake_light_overlay)
-    if alert_to_render is not None:
-      self._brake_labels.dismiss()
-    self._brake_labels.render(self.rect, self._brake_light_overlay)
 
     self._bookmark_icon.render(self.rect)
 
   def close(self):
-    self._brake_labels.close()
     if hasattr(self, "_brake_light_overlay"):
       self._brake_light_overlay.close()
     self._navigation.close()

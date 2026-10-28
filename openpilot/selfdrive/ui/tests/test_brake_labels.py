@@ -123,21 +123,32 @@ class LabelControlsTest(unittest.TestCase):
       self.assertTrue(controls.tap(N(x=1,y=1),self.detector()))
     controls.dismiss();self.assertIsNone(controls.texture)
 
-  def test_small_bookmark_direction_jitter_still_taps_car(self):
+  def test_road_view_has_no_manual_label_ui_and_preserves_swipe_release(self):
     import ast
     tree=ast.parse((UI/'mici/onroad/augmented_road_view.py').read_text(encoding='utf-8'))
     cls=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='AugmentedRoadView')
+    self.assertNotIn('_brake_labels', {n.attr for n in ast.walk(cls) if isinstance(n,ast.Attribute)})
+    self.assertNotIn('BrakeLabelControls', {n.id for n in ast.walk(tree) if isinstance(n,ast.Name)})
     method=next(n for n in cls.body if isinstance(n,ast.FunctionDef) and n.name=='_handle_mouse_release')
-    env=dict(ui_state=N(started=True),MousePos=object)
-    exec(compile(ast.Module(body=[method],type_ignores=[]),'actual_car_tap','exec'),env)
-    tap=MagicMock(return_value=True)
-    view=N(_bookmark_icon=N(interacting=lambda:True),_label_press=N(x=490,y=100),
-           _label_dragged=False,_brake_labels=N(tap=tap),_brake_light_overlay=N())
-    env['_handle_mouse_release'](view,N(x=489,y=100))
-    tap.assert_called_once()
-    tap.reset_mock();view._label_dragged=True;view._label_press=N(x=490,y=100)
-    env['_handle_mouse_release'](view,N(x=300,y=100))
-    tap.assert_not_called()
+    base_release=MagicMock()
+    class Base:
+      def _handle_mouse_release(self,pos):
+        base_release(pos)
+    stub=ast.ClassDef(name='View',bases=[ast.Name(id='Base',ctx=ast.Load())],keywords=[],body=[method],decorator_list=[])
+    module=ast.fix_missing_locations(ast.Module(body=[stub],type_ignores=[]))
+    env=dict(Base=Base,MousePos=object)
+    exec(compile(module,'actual_road_release','exec'),env)
+    view=env['View']();view._bookmark_icon=N(interacting=lambda:False)
+    pos=N(x=490,y=100)
+    for bookmark,dragged in ((True,False),(False,True),(False,False)):
+      view._bookmark_icon=N(interacting=lambda:bookmark)
+      view._touch_dragged=dragged;view._touch_press=pos
+      base_release.reset_mock();view._handle_mouse_release(pos)
+      self.assertIsNone(view._touch_press)
+      if bookmark or dragged:
+        base_release.assert_not_called()
+      else:
+        base_release.assert_called_once_with(pos)
 
 
 if __name__ == '__main__':
