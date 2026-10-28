@@ -58,7 +58,17 @@ def get_corner_object_can_parser(CP, enabled):
 
   CAN = CanBus(CP)
   messages = [(f"CORNER_RADAR_235_OBJECTS_{addr:x}", 33) for addr in range(CORNER_OBJECT_235_START_ADDR, CORNER_OBJECT_235_START_ADDR + CORNER_OBJECT_235_MSG_COUNT)]
-  return CANParser(CORNER_OBJECT_235_DBC, messages, CAN.ACAN)
+  parser = CANParser(CORNER_OBJECT_235_DBC, messages, CAN.ACAN)
+  required = {"OBJ_OBJECT_ID", "OBJ_AGE", "OBJ_QUAL_LEVEL", "OBJ_REL_POS_X", "OBJ_REL_POS_Y",
+              "OBJ_REL_VEL_X", "OBJ_REL_VEL_Y", "OBJ_REL_ACCEL_X"}
+  for name, _ in messages:
+    missing = required.difference(parser.vl[name])
+    if missing:
+      # An incompatible optional radar schema must not stop vehicle CAN/control.
+      # Do not invent object identities or ages using default values.
+      print(f"RadarInterface: {CORNER_OBJECT_235_DBC} {name} missing {sorted(missing)}; 0x235 corner radar disabled")
+      return None
+  return parser
 
 def get_corner_object_180_can_parser(CP, enabled):
   if not enabled or not (CP.flags & HyundaiFlags.CANFD):

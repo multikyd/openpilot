@@ -165,4 +165,34 @@ class TestCornerInterface(unittest.TestCase):
     self.assertAlmostEqual(filters[active.trackId].aLead,0.)
 
 
+
+class TestCornerDbcGenerator(unittest.TestCase):
+  def test_runtime_generator_contains_identity_fields_for_all_slots(self):
+    path=ROOT/'opendbc_repo/opendbc/dbc/generator/hyundai/hyundai_canfd_corner_radar_235.py'
+    spec=importlib.util.spec_from_file_location('corner235_dbc_regression',path)
+    generator=importlib.util.module_from_spec(spec);spec.loader.exec_module(generator)
+    source=generator.generate()['hyundai_canfd_corner_radar_235.dbc']
+    messages=source.split('BO_ ')[1:]
+    self.assertEqual(len(messages),20)
+    for message in messages:
+      self.assertIn('SG_ OBJ_AGE : 32|8@1+',message)
+      self.assertIn('SG_ OBJ_OBJECT_ID : 44|7@1+',message)
+
+  def test_startup_rejects_missing_identity_in_any_slot(self):
+    path=ROOT/'opendbc_repo/opendbc/car/hyundai/radar_interface.py'
+    tree=ast.parse(path.read_text(encoding='utf8'))
+    node=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='get_corner_object_can_parser')
+    function=ast.Module(body=[node],type_ignores=[])
+    names=[f'CORNER_RADAR_235_OBJECTS_{addr:x}' for addr in range(0x235,0x249)]
+    required={'OBJ_OBJECT_ID','OBJ_AGE','OBJ_QUAL_LEVEL','OBJ_REL_POS_X','OBJ_REL_POS_Y','OBJ_REL_VEL_X','OBJ_REL_VEL_Y','OBJ_REL_ACCEL_X'}
+    for missing in (None,'OBJ_OBJECT_ID','OBJ_AGE'):
+      parser=N(vl={name:dict.fromkeys(required,0.) for name in names})
+      if missing:del parser.vl[names[-1]][missing]
+      env=dict(CORNER_OBJECT_235_DBC='test',CORNER_OBJECT_235_START_ADDR=0x235,CORNER_OBJECT_235_MSG_COUNT=20,
+               HyundaiFlags=N(CANFD=1),DBC_PATH='.',os=N(path=N(join=lambda *args:'test',exists=lambda p:True)),
+               CanBus=lambda cp:N(ACAN=1),CANParser=lambda *args:parser,print=lambda *args:None)
+      exec(compile(function,str(path),'exec'),env)
+      result=env['get_corner_object_can_parser'](N(flags=1),True)
+      self.assertIs(result,parser if missing is None else None)
+
 if __name__=='__main__':unittest.main()
