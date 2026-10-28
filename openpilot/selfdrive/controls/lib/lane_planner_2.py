@@ -6,6 +6,7 @@ from openpilot.common.realtime import DT_MDL
 # from openpilot.common.swaglog import cloudlog
 # from openpilot.common.logger import sLogger
 from openpilot.common.params import Params
+from openpilot.selfdrive.controls.lib.narrow_road_bias import NarrowRoadBias
 
 TRAJECTORY_SIZE = 33
 # positive numbers go right
@@ -85,6 +86,11 @@ class LanePlanner:
     self.lane_position_camera_target = .01
     self.effective_camera_offset = CAMERA_OFFSET
     self.lane_position_ready = False
+    self.narrow_right_ready = False
+    self.narrow_road_model = None
+    self.narrow_road_bias = NarrowRoadBias()
+    self.narrow_right_shift = 0.
+    self.narrow_road_curvature = 0.
 
     self.lanefull_mode = False
     self.d_prob_count = 0
@@ -108,6 +114,7 @@ class LanePlanner:
     # Actuator preview belongs in the curvature command, not the lane geometry.
 
   def parse_model(self, md):
+    self.narrow_road_model = md
 
     self.timer += DT_MDL
     if self.timer > 2.0:
@@ -446,8 +453,16 @@ class LanePlanner:
         position_offset = float(np.clip(position_offset, min(0., low-base_point), max(0., high-base_point)))
         self.lane_position_offset = position_offset
         self.effective_camera_offset = self.total_camera_offset+position_offset/(2.+max(0., self.d_prob))
-    path_xyz[:, 1] += base_offset + position_offset
-    self.offset_total = self.lane_offset_filtered.x + lane_center_offset + position_offset
+    base_path = path_xyz.copy()
+    base_path[:,1] += base_offset + position_offset
+    # Only narrow rightmost corridors get this preference, in either path mode.
+    requested_shift = ((.04-self.effective_camera_offset)*(2.+self.lane_path_weight)
+                       - min(0.,lane_center_offset))
+    self.narrow_right_shift = self.narrow_road_bias.update(
+      self.narrow_road_model, CS, base_path, self.narrow_road_curvature, requested_shift,
+      enabled=self.narrow_right_ready and self.lane_position_ready and self.lane_change_multiplier>.5)
+    path_xyz[:, 1] = base_path[:,1] + self.narrow_right_shift
+    self.offset_total = self.lane_offset_filtered.x + lane_center_offset + position_offset + self.narrow_right_shift
 
     return path_xyz, laneline_active
 

@@ -30,9 +30,9 @@ LATERAL_JERK_COST = Params().get("LatMpcJerkCost", return_default=True) * 0.01 i
 STEERING_RATE_COST = Params().get("LatMpcSteeringRateCost", return_default=True) if Params().get("LatMpcSteeringRateCost", return_default=True) is not None else 700
 
 
-def get_lane_center_curvature(measured_curvature, t_idxs, yaw_rate, speeds):
+def get_lane_center_curvature(measured_curvature, t_idxs, yaw_rate, speeds, preview_horizon=1.5):
   predicted = np.abs(np.asarray(yaw_rate) / np.clip(speeds, MIN_SPEED, np.inf))
-  preview = np.interp([0.0, 0.75, 1.5], t_idxs, predicted)
+  preview = np.interp([0.0, min(.75, preview_horizon), preview_horizon], t_idxs, predicted)
   return float(np.max(np.append(preview, abs(measured_curvature))))
 
 
@@ -158,6 +158,10 @@ class LateralPlanner:
     self.LP.lane_center_curvature = get_lane_center_curvature(
       measured_curvature, self.t_idxs, self.plan_yaw_rate, self.v_plan)
     self.LP.lane_position_ready = bool(sm.all_checks(service_list=['carState', 'modelV2']))
+    self.LP.narrow_road_curvature = get_lane_center_curvature(
+      measured_curvature, self.t_idxs, self.plan_yaw_rate, self.v_plan, preview_horizon=.75)
+    self.LP.narrow_right_ready = bool(sm['carControl'].latActive and
+                                      sm.all_checks(service_list=['carState', 'modelV2', 'carControl']))
     self.path_xyz, self.lanelines_active = self.LP.get_d_path(sm['carState'], v_ego_car, self.t_idxs, self.path_xyz, self.curve_speed)
 
     if self.lanelines_active:
@@ -275,6 +279,7 @@ class LateralPlanner:
       f"{self.LP.lane_width_right:.1f}m | " +
       f"{f'offset={self.LP.offset_total * 100.0:.1f}cm turn={np.clip(self.curve_speed, -200, 200):.0f}km/h' if self.lanelines_active else ''}"
       f" | pos={self.LP.lane_position_class} camEq={self.LP.effective_camera_offset:.3f} shift={self.LP.lane_position_offset * 100.:+.1f}cm"
+      f" narrowR={self.LP.narrow_right_shift * 100.:+.1f}cm"
     )
 
     lateralPlan.latDebugText = debugText
