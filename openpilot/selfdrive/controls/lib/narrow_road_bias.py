@@ -27,7 +27,8 @@ class NarrowRoadBias:
         len(model.laneLines)<4 or len(model.laneLineProbs)<4 or len(model.laneLineStds)<4 or
         getattr(model.meta,'laneChangeState',0) != 0 or getattr(model.meta,'desire',0) != 0):
       return self.reset()
-    left,right=model.laneLines[1:3]
+    # Cap'n Proto list readers accept integer indices, not Python slices.
+    left,right=model.laneLines[1],model.laneLines[2]
     x=np.asarray(right.x,dtype=float);rx=np.asarray(right.y,dtype=float)
     lx=np.asarray(left.x,dtype=float);ly=np.asarray(left.y,dtype=float)
     scalars=(model.meta.laneWidthRight,model.laneLineProbs[1],model.laneLineProbs[2],

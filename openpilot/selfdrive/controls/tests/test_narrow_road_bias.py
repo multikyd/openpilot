@@ -27,6 +27,22 @@ class TestNarrowRoadBias(unittest.TestCase):
     args=dict(model=self.md,cs=self.cs,base_path=self.path,curvature=0.,requested_shift=.06,enabled=True)
     args.update(kw)
     return [self.h.update(**args) for _ in range(count)]
+  def test_real_capnp_builder_and_reader_support_narrow_road_preference(self):
+    from openpilot.cereal import log
+    source=model()
+    actual=log.ModelDataV2.new_message()
+    for key in ('laneLines','roadEdges'):
+      setattr(actual,key,[dict(x=line.x.tolist(),y=line.y.tolist()) for line in getattr(source,key)])
+    for key in ('laneLineProbs','laneLineStds','roadEdgeStds'):
+      setattr(actual,key,getattr(source,key))
+    actual.meta.laneWidthRight=source.meta.laneWidthRight
+    for message in (actual,actual.as_reader()):
+      self.h=m.NarrowRoadBias()
+      result=self.tick(160,model=message)
+      self.assertTrue(all(math.isfinite(v) for v in result))
+      self.assertGreater(result[-1],0.)
+      self.assertLessEqual(result[-1],.060001)
+
   def test_single_lane_and_rightmost_both_confirm_and_shift_right(self):
     for left_color in (21,11,2):
       self.setUp();self.cs.leftLaneLine=left_color
