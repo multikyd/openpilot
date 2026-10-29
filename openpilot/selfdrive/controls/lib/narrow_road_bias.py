@@ -53,7 +53,9 @@ class NarrowRoadBias:
     if self.missing>1.:
       return self.reset()
     reliable=(model.laneLineProbs[1]>.3 and model.laneLineProbs[2]>.4 and
-              0.<=model.laneLineStds[1]<.45 and 0.<=model.laneLineStds[2]<.45)
+              0.<=model.laneLineStds[1]<.6 and 0.<=model.laneLineStds[2]<.45 and
+              (model.laneLineStds[1]<.45 or
+               (model.laneLineProbs[2]>.65 and model.laneLineStds[2]<.25)))
     target=0.;room=None
     future=(base_path[:,0]>=0.) & (base_path[:,0]<=min(15.,cs.vEgo+3.))
     if reliable and np.count_nonzero(future)>=3:
@@ -70,9 +72,68 @@ class NarrowRoadBias:
       if self.confirm>=1.:
         curve_factor=float(np.interp(abs(curvature),[.0015,.005],[1.,0.]))
         width_factor=float(np.interp(width,[2.6,2.75,3.1,3.3],[0.,1.,1.,0.]))
-        target=min(.06,max(0.,requested_shift))*curve_factor*width_factor
+        # Aim relative to the corridor centre, rather than stacking a small
+        # right correction on top of the camera/left-preference offsets.
+        close = future & (base_path[:,0] <= 5.)
+        if np.count_nonzero(close) < 3:
+          close = future
+        cx = base_path[close,0]
+        centre = (np.interp(cx,lx,ly)+np.interp(cx,x,rx))*.5
+        preference = min(.04,max(0.,requested_shift))
+        error = float(np.median(centre + preference - base_path[close,1]))
+        target = min(.12,max(0.,error))*curve_factor*width_factor if requested_shift>0. else 0.
+        # Do not add right preference when the vehicle is already right of
+        # the observed corridor centre. Boundary protection remains separate.
+        if float((ly[0]+rx[0])*.5) < -.10:
+          self.shift = 0.
+          target = 0.
         target=min(target,room)
-    rate=.015 if target>self.shift else .03
+    rate=.025 if target>self.shift else .03
     self.shift+=float(np.clip(target-self.shift,-rate*dt,rate*dt))
     if room is not None:self.shift=min(self.shift,room)
+    return self.shift
+
+
+class LaneBoundaryGuard:
+  """Small path translation only when both near lane boundaries are reliable."""
+  def __init__(self):
+    self.shift = 0.
+
+  def update(self, model, cs, path, *, enabled, dt=.05):
+    def reset():
+      self.shift = 0.
+      return 0.
+    if (not enabled or model is None or not math.isfinite(cs.vEgo) or cs.vEgo < 2. or
+        not math.isfinite(dt) or not 0. < dt <= .2 or
+        cs.leftBlinker or cs.rightBlinker or getattr(cs,'steeringPressed',False) or
+        getattr(model.meta,'laneChangeState',0) != 0 or getattr(model.meta,'desire',0) != 0 or
+        len(model.laneLines)<3 or len(model.laneLineProbs)<3 or len(model.laneLineStds)<3):
+      return reset()
+    if not all(math.isfinite(model.laneLineProbs[i]) and model.laneLineProbs[i]>.6 and
+               math.isfinite(model.laneLineStds[i]) and 0.<=model.laneLineStds[i]<.25 for i in (1,2)):
+      return reset()
+    if path.ndim != 2 or path.shape[1]<2 or not np.all(np.isfinite(path)):
+      return reset()
+    future=(path[:,0]>=0.) & (path[:,0]<=min(15.,cs.vEgo+3.))
+    if np.count_nonzero(future)<3:
+      return reset()
+    bounds=[]
+    for i in (1,2):
+      line=model.laneLines[i];x=np.asarray(line.x);y=np.asarray(line.y)
+      if (len(x)<3 or len(x)!=len(y) or not np.all(np.isfinite(x)) or
+          not np.all(np.isfinite(y)) or not np.all(np.diff(x)>0.)):
+        return reset()
+      bounds.append(np.interp(path[future,0],x,y))
+    left,right=bounds
+    width=right-left
+    if not np.all((width>2.5)&(width<3.8)):
+      return reset()
+    low=float(np.max(left+1.10+.3*model.laneLineStds[1]-path[future,1]))
+    high=float(np.min(right-1.10-.3*model.laneLineStds[2]-path[future,1]))
+    if low>high:
+      return reset()
+    target=float(np.clip(np.clip(0.,low,high),-.12,.12))
+    # Never retain a correction toward a newly observed boundary.
+    self.shift=float(np.clip(self.shift,min(0.,low),max(0.,high)))
+    self.shift+=float(np.clip(target-self.shift,-.10*dt,.10*dt))
     return self.shift

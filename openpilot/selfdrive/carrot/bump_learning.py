@@ -40,6 +40,9 @@ class BumpMemory:
           clean['passes'] = max(0, int(r.get('passes', 0)))
           clean['smooth'] = max(0, min(2, int(r.get('smooth', 0))))
           clean['confirmed'] = bool(r.get('confirmed', False))
+          # Old aggregate pass counts cannot prove repeated physical impacts.
+          clean['physical_passes'] = max(0,min(100,int(r.get('physical_passes',0))))
+          clean['clear_passes'] = max(0,min(2,int(r.get('clear_passes',0))))
           # Recover legacy impact provenance when it is supported by the saved peak.
           peak = float(r.get('last_peak', 0))
           clean['impact_learned'] = bool(r.get('impact_learned', False)) or (math.isfinite(peak) and peak >= ROUGH_PEAK)
@@ -113,7 +116,7 @@ class BumpMemory:
     r = self._find(lat, lon, heading)
     if r is None:
       r = dict(lat=lat, lon=lon, heading=heading, target=self.base, confirmed=known,
-               passes=0, smooth=0, manual_cap=50, impact_learned=not known)
+               passes=0, smooth=0, manual_cap=50, impact_learned=not known, physical_passes=0, clear_passes=0)
       self.records.append(r)
       if len(self.records) > MAX_RECORDS:
         self.records.pop(0)
@@ -176,6 +179,14 @@ class BumpMemory:
     if record['passes'] >= 2:
       record['confirmed'] = True
     old = record['target']
+    physical = peak >= ROUGH_PEAK and above >= 2
+    if physical:
+      record['physical_passes'] = min(100,record.get('physical_passes',0)+1)
+      record['clear_passes'] = 0
+    elif peak < SMOOTH_PEAK and speed >= max(20.,old-2.):
+      # A clear pass is evidence even if the driver pressed the accelerator.
+      # Do not count a crawl as proof that a real bump has disappeared.
+      record['clear_passes'] = min(2,record.get('clear_passes',0)+1)
     if manual and speed < old - 1:
       record['manual_cap'] = min(record['manual_cap'], max(10, round(speed)))
       record['target'] = min(old, record['manual_cap'])
@@ -226,9 +237,8 @@ class BumpMemory:
       # Keep those records for matching/learning, but require live navigation or
       # independent repeated physical/manual evidence before applying a cap.
       nav_match = known and abs(d-nav_distance) <= 15 and abs(cross) <= 6
-      independent = (r['confirmed'] and r['passes'] >= 2 and
-                     (r.get('impact_learned', False) or
-                      r.get('manual_cap', 50) < self.base-1))
+      independent = (r['confirmed'] and r.get('physical_passes',0) >= 2 and
+                     r.get('clear_passes',0) < 2)
       lane_match = abs(cross) <= (6 if nav_match else 2.5)
       if (nav_match or independent) and lane_match and -12 <= d < nearest_d and now-self.cooldowns.get(id(r), -100) > 60:
         nearest, nearest_d = r, d
@@ -270,14 +280,24 @@ class BumpMemory:
           self.cooldowns[id(p['record'])] = now
           self.pending = None
     if nearest is not None and nearest['confirmed'] and nearest_d >= -8:
-      target = min(nearest['target'], self.base + self.raise_limit, nearest['manual_cap'])
+      live_match = known and abs(nearest_d-nav_distance)<=15
+      suspended = nearest.get('clear_passes',0)>=2
+      if suspended and not live_match:
+        return None
+      # Live navigation still gets the normal bump target even when a learned
+      # local cap has been retired after repeated clear passes.
+      target = self.base if suspended else min(nearest['target'], self.base + self.raise_limit, nearest['manual_cap'])
       notify = nearest.get('impact_learned', False) or abs(target - self.base) >= 0.5
       if notify and 0 < nearest_d < 120 and now-self.sound_last >= 15 and getattr(self, '_announced', None) != id(nearest):
         self.sound_seq += 1
         self.sound_last = now
         # One sound per encounter, independently of passing/learning success.
         self._announced = id(nearest)
-      return dict(target=target, distance=nearest_d)
+      return dict(target=target, distance=nearest_d,
+                  source='navigation' if live_match else 'physical_memory',
+                  record_lat=nearest['lat'],record_lon=nearest['lon'],
+                  physical_passes=nearest.get('physical_passes',0),
+                  clear_passes=nearest.get('clear_passes',0))
     self._announced = None
     return None
 

@@ -280,6 +280,7 @@ class LateralPlanner:
       f"{f'offset={self.LP.offset_total * 100.0:.1f}cm turn={np.clip(self.curve_speed, -200, 200):.0f}km/h' if self.lanelines_active else ''}"
       f" | pos={self.LP.lane_position_class} camEq={self.LP.effective_camera_offset:.3f} shift={self.LP.lane_position_offset * 100.:+.1f}cm"
       f" narrowR={self.LP.narrow_right_shift * 100.:+.1f}cm"
+      f" bound={self.LP.boundary_shift * 100.:+.1f}cm"
     )
 
     lateralPlan.latDebugText = debugText

@@ -1086,6 +1086,19 @@ class CarrotServ:
       self.bump_memory.pending = None
       self.bump_display = None
     nav_distance = self.xSpdDist if self.xSpdType == 22 and self.active_carrot > 1 else None
+    # Record source changes once per encounter, without logging every frame.
+    memory_key = None
+    if self.bump_display is not None:
+      notice = self.bump_display
+      memory_key = (notice.get('source','unknown'),round(notice.get('record_lat',0.),6),
+                    round(notice.get('record_lon',0.),6),int(notice['target']),
+                    notice.get('physical_passes',0),notice.get('clear_passes',0))
+      if memory_key != getattr(self,'_bump_memory_log_key',None):
+        cloudlog.event('bump_memory_target', **notice)
+    elif getattr(self,'_bump_memory_log_key',None) is not None:
+      cloudlog.event('bump_memory_release', reason='no_eligible_local_target')
+    self._bump_memory_log_key = memory_key
+
     # A secondary bump can drive passage detection without replacing the main
     # camera's nav_distance/nav_bump_passed state.
     passage_distance = (nav_distance if nav_distance is not None else plus_distance if plus_distance is not None

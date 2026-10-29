@@ -41,15 +41,15 @@ class TestNarrowRoadBias(unittest.TestCase):
       result=self.tick(160,model=message)
       self.assertTrue(all(math.isfinite(v) for v in result))
       self.assertGreater(result[-1],0.)
-      self.assertLessEqual(result[-1],.060001)
+      self.assertLessEqual(result[-1],.120001)
 
   def test_single_lane_and_rightmost_both_confirm_and_shift_right(self):
     for left_color in (21,11,2):
       self.setUp();self.cs.leftLaneLine=left_color
       a=self.tick(160)
       self.assertEqual(a[:19],[0.]*19)
-      self.assertAlmostEqual(a[-1],.06)
-      self.assertLessEqual(max(np.diff(a)),.015*.05+1e-9)
+      self.assertAlmostEqual(a[-1],.10)
+      self.assertLessEqual(max(np.diff(a)),.025*.05+1e-9)
   def test_no_shift_in_wide_middle_or_left_lane(self):
     for md in (model(width=3.6),model(right_space=3.2,outer=.8),model(right_space=3.2,outer=.2)):
       self.setUp();self.assertEqual(self.tick(200,model=md),[0.]*200)
@@ -93,7 +93,7 @@ class TestNarrowRoadBias(unittest.TestCase):
   def test_strong_curve_does_not_build_preference(self):
     self.assertEqual(self.tick(160,curvature=.01),[0.]*160)
   def test_request_is_bounded_and_never_left(self):
-    self.assertAlmostEqual(self.tick(160,requested_shift=1.)[-1],.06)
+    self.assertAlmostEqual(self.tick(220,requested_shift=1.)[-1],.10)
     self.setUp();self.assertEqual(self.tick(160,requested_shift=-.1),[0.]*160)
   def test_bad_lane_geometry_cannot_poison_state(self):
     self.tick(160);self.md.laneLines[2].y[0]=math.nan
@@ -160,7 +160,7 @@ class TestNarrowPathIntegration(unittest.TestCase):
       for _ in range(300):before,after=step(md())
       delta=after-before
       self.assertGreater(delta[0],.01)
-      self.assertLessEqual(np.max(delta),.060001)
+      self.assertLessEqual(np.max(delta),.120001)
       np.testing.assert_allclose(delta,np.full(33,delta[0]))
       before,after=step(md(3.6,3.2,.8))
       np.testing.assert_allclose(before,after)

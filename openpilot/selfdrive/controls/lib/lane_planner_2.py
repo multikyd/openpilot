@@ -6,7 +6,7 @@ from openpilot.common.realtime import DT_MDL
 # from openpilot.common.swaglog import cloudlog
 # from openpilot.common.logger import sLogger
 from openpilot.common.params import Params
-from openpilot.selfdrive.controls.lib.narrow_road_bias import NarrowRoadBias
+from openpilot.selfdrive.controls.lib.narrow_road_bias import NarrowRoadBias, LaneBoundaryGuard
 
 TRAJECTORY_SIZE = 33
 # positive numbers go right
@@ -89,6 +89,10 @@ class LanePlanner:
     self.narrow_right_ready = False
     self.narrow_road_model = None
     self.narrow_road_bias = NarrowRoadBias()
+    self.boundary_guard = LaneBoundaryGuard()
+    self.boundary_shift = 0.
+    self.lane_release_delta = np.zeros(TRAJECTORY_SIZE)
+    self.lane_release_remaining = 0.
     self.narrow_right_shift = 0.
     self.narrow_road_curvature = 0.
 
@@ -418,6 +422,7 @@ class LanePlanner:
     #  self.d_prob, self.lanefull_mode,
     #  self.lane_width_left_filtered.x, self.lane_width, self.lane_width_right_filtered.x)
 
+    original_model_y = path_xyz[:,1].copy()
     laneline_active = False
     next_lane_weight = 0.0
     self.d_prob_count = self.d_prob_count + 1 if self.d_prob > 0.3 else 0
@@ -430,6 +435,17 @@ class LanePlanner:
         # Loss of confidence or leaving lane mode still releases it immediately.
         next_lane_weight = min(self.d_prob, self.lane_path_weight + DT_MDL / 0.5)
         path_xyz[:,1] = next_lane_weight * lane_path_y_interp + (1.0 - next_lane_weight) * path_xyz[:,1]
+    release_allowed = (self.lane_position_ready and self.narrow_right_ready and
+                       self.lane_change_multiplier>.5 and not CS.leftBlinker and
+                       not CS.rightBlinker and not getattr(CS,'steeringPressed',False))
+    if laneline_active:
+      self.lane_release_delta = path_xyz[:,1]-original_model_y
+      self.lane_release_remaining = .35
+    elif release_allowed and self.lane_release_remaining>0.:
+      self.lane_release_remaining = max(0.,self.lane_release_remaining-DT_MDL)
+      path_xyz[:,1] += np.clip(self.lane_release_delta,-.15,.15)*(self.lane_release_remaining/.35)
+    else:
+      self.lane_release_remaining = 0.
     self.lane_path_weight = next_lane_weight
 
 
@@ -462,7 +478,11 @@ class LanePlanner:
       self.narrow_road_model, CS, base_path, self.narrow_road_curvature, requested_shift,
       enabled=self.narrow_right_ready and self.lane_position_ready and self.lane_change_multiplier>.5)
     path_xyz[:, 1] = base_path[:,1] + self.narrow_right_shift
-    self.offset_total = self.lane_offset_filtered.x + lane_center_offset + position_offset + self.narrow_right_shift
+    self.boundary_shift = self.boundary_guard.update(
+      self.narrow_road_model, CS, path_xyz,
+      enabled=self.narrow_right_ready and self.lane_position_ready and self.lane_change_multiplier>.5)
+    path_xyz[:,1] += self.boundary_shift
+    self.offset_total = self.lane_offset_filtered.x + lane_center_offset + position_offset + self.narrow_right_shift + self.boundary_shift
 
     return path_xyz, laneline_active
 
