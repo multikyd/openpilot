@@ -7,6 +7,7 @@ and the image input into the neural network is not corrected for roll.
 '''
 
 import os
+import time
 import capnp
 import numpy as np
 from typing import NoReturn
@@ -20,6 +21,7 @@ from openpilot.common.params import Params
 from openpilot.common.realtime import config_realtime_process
 from openpilot.common.transformations.orientation import rot_from_euler, euler_from_rot
 from openpilot.common.swaglog import cloudlog
+from openpilot.selfdrive.locationd.camera_odometry_validity import CalibrationOdometryValidity
 
 MIN_SPEED_FILTER = 15 * CV.MPH_TO_MS
 MAX_VEL_ANGLE_STD = np.radians(0.25)
@@ -270,12 +272,32 @@ def main() -> NoReturn:
 
   calibrator = Calibrator(param_put=True)
   calibrator.not_car = CP.notCar
+  camera_validity = CalibrationOdometryValidity()
+  last_sent_valid = None
 
   while 1:
     timeout = 0 if sm.frame == -1 else 100
     sm.update(timeout)
 
+    # Calibration changes slowly: a dropped pose need not invalidate an already
+    # trusted calibration, but must never be used to update it.
+    camera_service = ['cameraOdometry']
+    other_inputs_ok = sm.all_checks(['carState'])
+    camera_health_ok = sm.all_alive(camera_service) and sm.all_freq_ok(camera_service)
+    calibration_ready = (calibrator.cal_status == log.ExtrinsicsCalibration.Status.calibrated and
+                         calibrator.valid_blocks >= INPUTS_NEEDED and
+                         all(np.all(np.isfinite(v)) for v in
+                             (calibrator.get_smooth_rpy(), calibrator.wide_from_device_euler,
+                              calibrator.height, calibrator.calib_spread)))
+    trusted = bool(other_inputs_ok and camera_health_ok and calibration_ready)
+    now = time.monotonic()
     if sm.updated['cameraOdometry']:
+      camera = sm['cameraOdometry']
+      camera_validity.update(sm.valid['cameraOdometry'], camera.frameId,
+                             camera.timestampEof * 1e-9, sm.logMonoTime['cameraOdometry'] * 1e-9,
+                             trusted=trusted, now=now)
+
+    if sm.updated['cameraOdometry'] and sm.all_checks():
       calibrator.handle_v_ego(sm['carState'].vEgo)
 
       yaw_trim_deg = params_reader.get("CameraYawTrimDeg")
@@ -296,9 +318,12 @@ def main() -> NoReturn:
       if DEBUG and new_rpy is not None:
         print('got new rpy', new_rpy)
 
-    # 4Hz driven by cameraOdometry
-    if sm.frame % 5 == 0:
-      calibrator.send_data(pm, sm.all_checks())
+    inputs_valid = sm.all_checks() or camera_validity.can_hold(time.monotonic(), trusted=trusted)
+    # Keep 4Hz publication, but revoke a hold immediately on a second failure
+    # or timeout rather than leaving a previously valid message latched.
+    if sm.frame % 5 == 0 or (last_sent_valid is True and not inputs_valid):
+      calibrator.send_data(pm, inputs_valid)
+      last_sent_valid = inputs_valid
 
 
 if __name__ == "__main__":

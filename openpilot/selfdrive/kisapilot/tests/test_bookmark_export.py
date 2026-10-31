@@ -1,6 +1,5 @@
 import importlib.util
 import ast
-import json
 import os
 import tempfile
 import time
@@ -222,7 +221,7 @@ class BookmarkArchiveTest(BookmarkFixture, unittest.TestCase):
         with patch.object(b, 'segment_bookmark_offset', return_value=offset):
             return b.export_bookmarks(self.root, ['old--1'], preserved=lambda p: p.name == 'old--1', archive=True)
 
-    def test_zip_contains_original_segment_files_and_manifest(self):
+    def test_zip_contains_only_original_segment_files(self):
         self.segment(number=0)
         segment = self.segment(number=1)
         self.segment(number=2, locked=True)
@@ -237,20 +236,20 @@ class BookmarkArchiveTest(BookmarkFixture, unittest.TestCase):
         with zipfile.ZipFile(archive) as bundle:
             self.assertIsNone(bundle.testzip())
             self.assertEqual(set(bundle.namelist()), {'old--0/rlog.zst', 'old--0/fcamera.hevc',
-                             'old--1/rlog.zst', 'old--1/fcamera.hevc', 'old--1/notes.txt', 'KisaAgent_bookmarks.json'})
+                             'old--1/rlog.zst', 'old--1/fcamera.hevc', 'old--1/notes.txt'})
             self.assertEqual(bundle.read('old--1/rlog.zst'), (segment / 'rlog.zst').read_bytes())
             self.assertEqual(bundle.read('old--1/fcamera.hevc'), (segment / 'fcamera.hevc').read_bytes())
             self.assertEqual(bundle.getinfo('old--1/fcamera.hevc').compress_type, zipfile.ZIP_STORED)
             self.assertEqual(bundle.getinfo('old--1/rlog.zst').compress_type, zipfile.ZIP_STORED)
             self.assertEqual(bundle.getinfo('old--1/notes.txt').compress_type, zipfile.ZIP_DEFLATED)
-            self.assertEqual(json.loads(bundle.read('KisaAgent_bookmarks.json')), result['bookmark_metadata'])
+            self.assertNotIn('KisaAgent_bookmarks.json', bundle.namelist())
 
     def test_after_30_zip_only_has_current_segment(self):
         for number in range(3):
             self.segment(number=number)
         result = self.zipped()
         with zipfile.ZipFile(result['files'][0]['path']) as bundle:
-            self.assertEqual(set(bundle.namelist()), {'old--1/rlog.zst', 'old--1/fcamera.hevc', 'KisaAgent_bookmarks.json'})
+            self.assertEqual(set(bundle.namelist()), {'old--1/rlog.zst', 'old--1/fcamera.hevc'})
 
     def test_cache_reuses_archive_for_resume_and_expires_only_old_copies(self):
         self.segment(number=1)
@@ -259,7 +258,7 @@ class BookmarkArchiveTest(BookmarkFixture, unittest.TestCase):
         old = path.parent / 'KisaAgent_bookmarks_expired.zip'
         old.write_bytes(b'expired')
         os.utime(old, (time.time() - 90000,) * 2)
-        with patch.object(b.zipfile, 'ZipFile', side_effect=AssertionError('cache was not reused')):
+        with patch.object(b.zipfile.ZipFile, 'write', side_effect=AssertionError('cache was not reused')):
             self.assertEqual(self.zipped()['files'], first['files'])
         self.assertFalse(old.exists())
         self.assertEqual((self.root / 'old--1/rlog.zst').read_bytes(), b'partial log')
@@ -270,8 +269,8 @@ class BookmarkArchiveTest(BookmarkFixture, unittest.TestCase):
         path = Path(result['files'][0]['path'])
         original = path.read_bytes()
         path.unlink()
-        self.zipped()
-        self.assertEqual(path.read_bytes(), original)
+        rebuilt = self.zipped()
+        self.assertEqual(Path(rebuilt['files'][0]['path']).read_bytes(), original)
 
     def test_source_change_gets_new_archive_name(self):
         segment = self.segment(number=1)
@@ -302,6 +301,40 @@ class BookmarkArchiveTest(BookmarkFixture, unittest.TestCase):
             self.zipped()
         with self.assertRaises(ValueError):
             b.export_bookmarks(self.root, ['old--1'], archive='true')
+
+    def test_archive_filename_is_kst_date_and_time_only(self):
+        # 2026-10-30 15:05:06 UTC -> next day in Korea, regardless of the C4 timezone.
+        from datetime import datetime, timezone
+        stamp = datetime(2026, 10, 30, 15, 5, 6, tzinfo=timezone.utc).timestamp()
+        self.assertEqual(b.bookmark_archive_name(stamp), '2026-10-31_00-05-06.zip')
+        self.segment(number=1)
+        with patch.object(b.time, 'time', return_value=stamp):
+            result = self.zipped()
+        self.assertEqual(result['archive']['name'], '2026-10-31_00-05-06.zip')
+        self.assertEqual(result['archive']['name_timezone'], 'Asia/Seoul')
+
+    def test_same_second_exports_do_not_overwrite_each_other(self):
+        self.segment(number=0)
+        self.segment(number=1)
+        with patch.object(b.time, 'time', return_value=time.time() + .125):
+            first = self.zipped(40.)
+            first_bytes = Path(first['files'][0]['path']).read_bytes()
+            second = self.zipped(10.)
+        first_path, second_path = (Path(r['files'][0]['path']) for r in (first, second))
+        self.assertNotEqual(first_path, second_path)
+        self.assertEqual(first_path.read_bytes(), first_bytes)
+        self.assertRegex(second_path.name, r'^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.\d{6}\.zip$')
+
+    def test_old_manifest_archive_is_not_reused(self):
+        self.segment(number=1)
+        cache = self.root / 'bookmark_exports'
+        cache.mkdir()
+        with zipfile.ZipFile(cache / ('KisaAgent_bookmarks_' + 'a' * 24 + '.zip'), 'w') as old:
+            old.writestr('KisaAgent_bookmarks.json', '{}')
+        result = self.zipped()
+        with zipfile.ZipFile(result['files'][0]['path']) as bundle:
+            self.assertFalse(any(name.endswith('.json') for name in bundle.namelist()))
+        self.assertEqual(list(cache.glob('*.json')), [])
 
     def test_export_api_defaults_to_zip_and_can_request_original_files(self):
         # Compile the real endpoint independently of device-only imports/startup.

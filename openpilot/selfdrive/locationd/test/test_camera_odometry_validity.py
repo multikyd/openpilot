@@ -39,3 +39,56 @@ class TestCameraOdometryValidity(unittest.TestCase):
 
   def test_startup_validity_preserved(self):
     self.assertTrue(module.CameraOdometryValidity().update(True, 0, 0., 0., False))
+
+
+class TestCalibrationOdometryValidity(unittest.TestCase):
+  def setUp(self):
+    self.guard = module.CalibrationOdometryValidity()
+    self.guard.update(True, 100, 10., 10.01, trusted=True, now=10.02)
+
+  def skip(self, **kw):
+    args = dict(valid=False, frame_id=102, timestamp_eof=10.1, log_time=10.11,
+                trusted=True, now=10.12)
+    args.update(kw)
+    return self.guard.update(**args)
+
+  def test_isolated_skip_uses_recent_trusted_calibration(self):
+    self.assertTrue(self.skip())
+    self.assertTrue(self.guard.can_hold(10.14, trusted=True))
+
+  def test_second_invalid_revokes_hold(self):
+    self.assertTrue(self.skip())
+    self.assertFalse(self.skip(frame_id=104, timestamp_eof=10.2, log_time=10.21, now=10.22))
+    self.assertFalse(self.guard.can_hold(10.23, trusted=True))
+
+  def test_timeout_and_future_or_nonfinite_clock(self):
+    for now in (10.251, 10.09, float('nan')):
+      self.setUp()
+      self.assertTrue(self.skip())
+      self.assertFalse(self.guard.can_hold(now, trusted=True))
+      self.assertFalse(self.guard.can_hold(10.13, trusted=True))
+
+  def test_actual_calibration_or_other_input_failure_revokes_hold(self):
+    self.assertTrue(self.skip())
+    self.assertFalse(self.guard.can_hold(10.13, trusted=False))
+    self.assertFalse(self.guard.can_hold(10.14, trusted=True))
+
+  def test_untrusted_previous_input_cannot_enable_hold(self):
+    self.guard.update(True, 101, 10.05, 10.06, trusted=False, now=10.07)
+    self.assertFalse(self.skip(frame_id=103, timestamp_eof=10.15, log_time=10.16, now=10.17))
+
+  def test_untrusted_current_input_cannot_enable_hold(self):
+    self.assertFalse(self.skip(trusted=False))
+
+  def test_old_pose_or_large_skip_cannot_enable_hold(self):
+    for changes in (dict(now=10.4), dict(frame_id=103), dict(log_time=10.3),
+                    dict(timestamp_eof=float('nan'))):
+      self.setUp()
+      self.assertFalse(self.skip(**changes))
+
+  def test_startup_and_recovery_do_not_hold(self):
+    self.guard = module.CalibrationOdometryValidity()
+    self.assertFalse(self.skip())
+    self.setUp()
+    self.assertTrue(self.skip())
+    self.assertFalse(self.guard.update(True, 103, 10.15, 10.16, trusted=True, now=10.17))
