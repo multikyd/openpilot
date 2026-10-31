@@ -661,10 +661,7 @@ class CarrotServ:
       self.xSpdLimit = self.nSdiSpeedLimit * self.autoNaviSpeedSafetyFactor
       self.xSpdDist = self.nSdiDist
       self.xSpdType = self.nSdiType
-      if self.nSdiBlockType in [2,3]:
-        self.xSpdDist = self.nSdiBlockDist
-        self.xSpdType = 4
-      elif self.nSdiType == 7 and self.autoNaviSpeedCtrlMode < 3: #이동식카메라
+      if self.nSdiType == 7 and self.autoNaviSpeedCtrlMode < 3: #이동식카메라
         self.xSpdLimit = self.xSpdDist = 0
     elif (self.nSdiPlusType == 22 or self.nSdiType == 22) and self.roadcate > 1 and self.autoNaviSpeedCtrlMode >= 2: # speed bump, roadcate:0,1: highway
       self.xSpdLimit = self.autoNaviSpeedBumpSpeed

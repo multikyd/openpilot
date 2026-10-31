@@ -34,9 +34,9 @@ class TestSectionSpeed(unittest.TestCase):
     self.assertEqual((s.xSpdType, s.xSpdLimit), (4, 80))
 
   def test_lower_camera_and_section_cap_are_both_retained(self):
-    s = packet(nSdiType=1, nSdiSpeedLimit=60)
+    s = packet(nSdiType=1, nSdiSpeedLimit=60, nSdiDist=400)
     select(s)
-    self.assertEqual(s.xSpdLimit, 60)
+    self.assertEqual((s.xSpdType, s.xSpdLimit, s.xSpdDist), (1, 60, 400))
     self.assertEqual(s.section_speed_limit, 80)
 
   def test_secondary_section_is_independent(self):
