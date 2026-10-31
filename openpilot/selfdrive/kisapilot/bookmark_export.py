@@ -8,6 +8,7 @@ import threading
 import time
 import zipfile
 from functools import lru_cache
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -227,6 +228,29 @@ def export_bookmarks(root, ids, adjacent=1, preserved=is_preserved, recording=No
 
 
 _archive_lock = threading.Lock()
+_archive_names = re.compile(r"(?:KisaAgent_bookmarks_[^/\\]+|\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}(?:\.\d{6})?)\.zip")
+_archive_marker = b'kisa-bookmark-archive-v2:'
+_kst = timezone(timedelta(hours=9))
+
+
+def bookmark_archive_name(timestamp):
+    """Human-readable creation time in KST; no route ID or content hash."""
+    return datetime.fromtimestamp(timestamp, _kst).strftime('%Y-%m-%d_%H-%M-%S') + '.zip'
+
+
+def _cached_archive(cache, digest):
+    # A ZIP comment preserves cache identity across agent restarts without a JSON
+    # sidecar or a hash in the visible filename. Old manifest ZIPs are not reused.
+    for path in sorted(cache.iterdir()):
+        if path.is_symlink() or not path.is_file() or not _archive_names.fullmatch(path.name):
+            continue
+        try:
+            with zipfile.ZipFile(path) as bundle:
+                if bundle.comment == _archive_marker + digest.encode('ascii'):
+                    return path
+        except (OSError, zipfile.BadZipFile):
+            continue
+    return None
 
 
 def archive_bookmarks(root, export):
@@ -245,25 +269,30 @@ def archive_bookmarks(root, export):
             raise ValueError("원본 파일 크기가 변경되었습니다. 다시 시도해주세요.")
         sources.append((path, relative.as_posix(), stat.st_size, stat.st_mtime_ns))
 
-    manifest = json.dumps(export['bookmark_metadata'], ensure_ascii=False, sort_keys=True, indent=2).encode('utf8')
+    selection = json.dumps(export['bookmark_metadata'], ensure_ascii=False, sort_keys=True).encode('utf8')
     identity = json.dumps([(name, size, stamp) for _, name, size, stamp in sources], sort_keys=True).encode('utf8')
-    digest = hashlib.sha256(manifest + identity).hexdigest()[:24]
+    digest = hashlib.sha256(selection + identity).hexdigest()
     cache = root / 'bookmark_exports'
     if cache.is_symlink():
         raise ValueError("압축 저장 경로가 올바르지 않습니다.")
     cache.mkdir(exist_ok=True)
-    archive = cache / ('KisaAgent_bookmarks_' + digest + '.zip')
     with _archive_lock:
+        archive = _cached_archive(cache, digest)
         # Failed/abandoned transfers must not accumulate archive copies forever.
-        for old in list(cache.glob('KisaAgent_bookmarks_*.zip')) + list(cache.glob('bookmark-*.part')):
+        for old in [p for p in cache.iterdir() if _archive_names.fullmatch(p.name) or (p.name.startswith('bookmark-') and p.suffix == '.part')]:
             try:
                 if old != archive and time.time() - old.stat().st_mtime > 86400:
                     old.unlink()
             except FileNotFoundError:
                 pass
-        if archive.is_symlink():
-            raise ValueError("압축 파일 경로가 올바르지 않습니다.")
-        if not archive.is_file():
+        if archive is None:
+            timestamp = time.time()
+            archive = cache / bookmark_archive_name(timestamp)
+            if archive.exists() or archive.is_symlink():
+                # Rare same-second collisions use fractional seconds (still time only).
+                archive = cache / (datetime.fromtimestamp(timestamp, _kst).strftime('%Y-%m-%d_%H-%M-%S.%f') + '.zip')
+                if archive.exists() or archive.is_symlink():
+                    raise ValueError("같은 시각의 북마크 압축 파일이 있습니다. 잠시 후 다시 시도해주세요.")
             fd, temporary = tempfile.mkstemp(prefix='bookmark-', suffix='.part', dir=cache)
             os.close(fd)
             try:
@@ -276,14 +305,13 @@ def archive_bookmarks(root, export):
                         stat = path.stat()
                         if (stat.st_size, stat.st_mtime_ns) != (size, stamp):
                             raise ValueError("압축 중 원본 파일이 변경되었습니다. 다시 시도해주세요.")
-                    info = zipfile.ZipInfo('KisaAgent_bookmarks.json', date_time=(1980, 1, 1, 0, 0, 0))
-                    bundle.writestr(info, manifest, compress_type=zipfile.ZIP_DEFLATED, compresslevel=1)
+                    bundle.comment = _archive_marker + digest.encode('ascii')
                 os.replace(temporary, archive)
             finally:
                 if os.path.exists(temporary):
                     os.unlink(temporary)
         # Bound the extra disk copies even when many bookmarks are saved in a day.
-        others = sorted((p for p in cache.glob('KisaAgent_bookmarks_*.zip') if p != archive),
+        others = sorted((p for p in cache.iterdir() if p != archive and not p.is_symlink() and p.is_file() and _archive_names.fullmatch(p.name)),
                         key=lambda p: p.stat().st_mtime, reverse=True)
         for old in others[2:]:
             try:
@@ -293,4 +321,4 @@ def archive_bookmarks(root, export):
     size = archive.stat().st_size
     return dict(export, files=[{'path': str(archive), 'size': size, 'is_dir': False}], bytes=size,
                 archive={'format': 'zip', 'name': archive.name, 'original_bytes': export['bytes'],
-                         'file_count': len(sources), 'preserves_segment_directories': True})
+                         'file_count': len(sources), 'preserves_segment_directories': True, 'name_timezone': 'Asia/Seoul'})

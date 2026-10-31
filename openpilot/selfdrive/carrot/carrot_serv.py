@@ -649,6 +649,13 @@ class CarrotServ:
     # 2: inOSEPS: 구간단속중
     # 3: endOSEPS: 구간단속종료
     # 0:감속안함,1:과속카메라,2:+사고방지턱,3:+이동식카메라
+    # Section state is independent of the currently selected camera/sign.
+    # The end camera may have no primary speed while block speed is still valid.
+    sections = [(self.nSdiBlockSpeed, self.nSdiBlockDist, self.nSdiBlockType),
+                (self.nSdiPlusBlockSpeed, self.nSdiPlusBlockDist, self.nSdiPlusBlockType)]
+    sections = [(speed, distance) for speed, distance, kind in sections
+                if kind in (2, 3) and speed > 0 and distance > 0 and self.autoNaviSpeedCtrlMode > 0]
+    self.section_speed_limit, self.section_distance = min(sections, default=(0, 0))
     if self.nSdiType in [0,1,2,3,4,7,8, 75, 76] and self.nSdiSpeedLimit > 0 and self.autoNaviSpeedCtrlMode > 0:
       self.xSpdLimit_org = self.nSdiSpeedLimit
       self.xSpdLimit = self.nSdiSpeedLimit * self.autoNaviSpeedSafetyFactor
@@ -668,6 +675,13 @@ class CarrotServ:
       self.xSpdLimit = 0
       self.xSpdType = -1
       self.xSpdDist = 0
+
+    if self.section_speed_limit > 0 and (self.xSpdLimit <= 0 or
+        self.section_speed_limit * self.autoNaviSpeedSafetyFactor <= self.xSpdLimit):
+      self.xSpdLimit_org = self.section_speed_limit
+      self.xSpdLimit = self.section_speed_limit * self.autoNaviSpeedSafetyFactor
+      self.xSpdDist = self.section_distance
+      self.xSpdType = 4
 
   def _live_plus_bump(self, now, v_ego):
     # The secondary navigation notice must be independent of the main camera.
@@ -1160,6 +1174,11 @@ class CarrotServ:
       hda_active = True
 
     #print(f"sdi_speed: {sdi_speed}, hda_active: {hda_active}, xSpdType: {self.xSpdType}, xSpdDist: {self.xSpdDist}, active_carrot: {self.active_carrot}, v_ego_kph: {v_ego_kph}, nRoadLimitSpeed: {self.nRoadLimitSpeed}")
+    # Keep the section cap while a nearer, lower camera target uses its normal
+    # distance-based braking curve. Do not accelerate above the section target.
+    if self.active_carrot > 1 and getattr(self, "section_speed_limit", 0) > 0:
+      sdi_speed = min(sdi_speed, self.section_speed_limit * self.autoNaviSpeedSafetyFactor)
+
     ### TBT 속도제어
     atc_desired, self.atcType, self.atcSpeed, self.atcDist = self.update_auto_turn(v_ego*3.6, sm, self.xTurnInfo, self.xDistToTurn, True)
     atc_desired_next, _, _, _ = self.update_auto_turn(v_ego*3.6, sm, self.xTurnInfoNext, self.xDistToTurnNext, False)

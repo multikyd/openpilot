@@ -13,7 +13,9 @@ from openpilot.selfdrive.carrot.carrot_functions import CarrotPlanner
 
 
 def main():
-  config_realtime_process(5, Priority.CTRL_LOW)
+  # Keep planning off CPU5, which runs the higher-priority UI and display IRQs.
+  # CPU4 control loops retain CTRL_HIGH priority and preempt this CTRL_LOW task.
+  config_realtime_process(4, Priority.CTRL_LOW)
 
   cloudlog.info("plannerd is waiting for CarParams")
   params = Params()
