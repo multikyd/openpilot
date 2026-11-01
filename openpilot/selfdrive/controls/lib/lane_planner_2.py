@@ -6,7 +6,7 @@ from openpilot.common.realtime import DT_MDL
 # from openpilot.common.swaglog import cloudlog
 # from openpilot.common.logger import sLogger
 from openpilot.common.params import Params
-from openpilot.selfdrive.controls.lib.narrow_road_bias import NarrowRoadBias, LaneBoundaryGuard
+from openpilot.selfdrive.controls.lib.narrow_road_bias import NarrowRoadBias, LaneBoundaryGuard, LaneCenterRecovery
 
 TRAJECTORY_SIZE = 33
 # positive numbers go right
@@ -90,6 +90,7 @@ class LanePlanner:
     self.narrow_road_model = None
     self.narrow_road_bias = NarrowRoadBias()
     self.boundary_guard = LaneBoundaryGuard()
+    self.center_recovery = LaneCenterRecovery()
     self.boundary_shift = 0.
     self.lane_release_delta = np.zeros(TRAJECTORY_SIZE)
     self.lane_release_remaining = 0.
@@ -493,7 +494,17 @@ class LanePlanner:
       self.narrow_road_model, CS, path_xyz,
       enabled=self.narrow_right_ready and self.lane_position_ready and self.lane_change_multiplier>.5)
     path_xyz[:,1] += self.boundary_shift
-    self.offset_total = self.lane_offset_filtered.x + lane_center_offset + position_offset + self.narrow_right_shift + self.boundary_shift
+    center_shift = self.center_recovery.update(
+      self.narrow_road_model, CS, path_xyz, self.lane_center_curvature, lane_center_offset,
+      enabled=(laneline_active and self.lane_position_ready and self.narrow_right_ready and
+               self.lane_change_multiplier>.5 and
+               (self.lane_position_class in ('middle','left_open') or
+                (self.lane_position_class == 'unknown' and self.lane_width_left>2.2 and
+                 self.lane_width_right>2.2 and self.lane_position_geometry is not None and
+                 self.lane_position_geometry[0]>.3 and self.lane_position_geometry[1]>.3)) and
+               self.narrow_right_shift == 0.))
+    path_xyz[:,1] += center_shift
+    self.offset_total = self.lane_offset_filtered.x + lane_center_offset + position_offset + self.narrow_right_shift + self.boundary_shift + center_shift
 
     return path_xyz, laneline_active
 

@@ -158,3 +158,59 @@ class LaneBoundaryGuard:
     rate = .03 if one_sided else .10
     self.shift+=float(np.clip(target-self.shift,-rate*dt,rate*dt))
     return self.shift
+
+
+class LaneCenterRecovery:
+  """Slow, bounded left preference recovery after sustained right displacement."""
+  def __init__(self):
+    self.shift = self.confirm = 0.
+
+  def update(self, model, cs, path, curvature, preference, *, enabled, dt=.05):
+    def reset():
+      self.shift = self.confirm = 0.
+      return 0.
+    if (not enabled or model is None or not all(math.isfinite(v) for v in
+        (cs.vEgo, curvature, preference, dt)) or not 0.<dt<=.2 or
+        not 2.<cs.vEgo<=60./3.6 or preference>=-.005 or abs(curvature)>=.005 or
+        cs.leftBlinker or cs.rightBlinker or cs.steeringPressed or
+        getattr(model.meta,'desire',0)!=0 or getattr(model.meta,'laneChangeState',0)!=0 or
+        len(model.laneLines)<3 or len(model.laneLineProbs)<3 or len(model.laneLineStds)<3):
+      return reset()
+    if not all(math.isfinite(model.laneLineProbs[i]) and model.laneLineProbs[i]>.8 and
+               math.isfinite(model.laneLineStds[i]) and 0.<=model.laneLineStds[i]<.18 for i in (1,2)):
+      return reset()
+    if path.ndim!=2 or path.shape[1]<2 or not np.all(np.isfinite(path)):
+      return reset()
+    near=(path[:,0]>=0.) & (path[:,0]<=min(10.,cs.vEgo))
+    if np.count_nonzero(near)<3:
+      return reset()
+    bounds=[]
+    for i in (1,2):
+      line=model.laneLines[i];x=np.asarray(line.x);y=np.asarray(line.y)
+      if (len(x)<3 or len(x)!=len(y) or not np.all(np.isfinite(x)) or
+          not np.all(np.isfinite(y)) or not np.all(np.diff(x)>0.) or
+          x[0]>0. or x[-1]<np.max(path[near,0])):
+        return reset()
+      bounds.append((float(np.interp(0.,x,y)),np.interp(path[near,0],x,y)))
+    left,right=bounds
+    width=right[1]-left[1]
+    if not np.all((width>2.8)&(width<3.8)):
+      return reset()
+    # Do not invent a preference in a rightmost or single-lane corridor;
+    # those contexts are excluded by the caller as well.
+    error=-(left[0]+right[0])*.5
+    self.confirm = min(1.,self.confirm+dt) if error>.04 else 0.
+    target=0.
+    if self.confirm>=.5:
+      fade=float(np.interp(abs(curvature),[.002,.005],[1.,0.]))
+      target=-min(.06,max(0.,error+abs(preference)-.03))*fade
+    # The complete existing desired path, including all offsets, must have room.
+    low=float(np.max(left[1]+1.25+.3*model.laneLineStds[1]-path[near,1]))
+    high=float(np.min(right[1]-1.25-.3*model.laneLineStds[2]-path[near,1]))
+    if low>high:
+      return reset()
+    target=max(target,min(0.,low))
+    self.shift=max(self.shift,min(0.,low))
+    rate=.01 if target<self.shift else .02
+    self.shift+=float(np.clip(target-self.shift,-rate*dt,rate*dt))
+    return self.shift
