@@ -19,6 +19,7 @@ class CutInAnticipation:
     self.lane_geometry = None
     self.confirmed_tracks = {}
     self.release_since = None
+    self.imminent_until = -math.inf
 
   def update(self, radar, model, speed, normal_accel, curvature, sample_time, now, enabled, current_accel=None):
     values = (speed, normal_accel, curvature, sample_time, now)
@@ -70,7 +71,7 @@ class CutInAnticipation:
     seen = set()
     self.history = {key: h for key, h in self.history.items() if now-h[-1][0] < .3}
     self.confirmed_tracks = {key: t for key, t in self.confirmed_tracks.items() if now-t <= .5}
-    urgent = False
+    urgent = rapid = False
     candidates = list(radar.leadsLeft)[:8]+list(radar.leadsRight)[:8]
     for lead in candidates:
       key = int(lead.radarTrackId)
@@ -147,6 +148,14 @@ class CutInAnticipation:
         candidate_target, candidate_stage = -.15-.15*severity, 'coast'
       # A close car already moving into our lane needs room before the main
       # lead switches. Weak lateral evidence alone still cannot request braking.
+      # Confirmed near overlap needs prompt throttle suppression even when
+      # the main lead still points to the farther car. This adds no braking.
+      imminent = (confirmed and lane_confident and overlap_time <= .8 and
+                  abs(offset) < 2.5 and entry_x < max(8., speed*.95) and
+                  lead.vRel <= 1.)
+      if imminent:
+        candidate_target = min(candidate_target, 0.)
+        self.imminent_until = now+.4
       candidate_urgent = (confirmed and overlap_time <= horizon+.5 and abs(offset) < 3. and
                           lead.vRel < -.5 and entry_x < max(6., speed*.65))
       if candidate_urgent:
@@ -155,7 +164,7 @@ class CutInAnticipation:
         candidate_stage = 'coast'
       if target is None or candidate_target < target:
         target, chosen, stage = candidate_target, key, candidate_stage
-        urgent = candidate_urgent
+        urgent, rapid = candidate_urgent, imminent
 
     self.stage, self.track_id = stage, chosen
     if target is not None:
@@ -163,7 +172,7 @@ class CutInAnticipation:
       if self.limit is None:
         self.limit = min(normal_accel, max(0., current_accel)) if current_accel is not None else normal_accel
       # Positive cap and negative cruise goal both change smoothly.
-      self.limit += max(-(1.5 if urgent else .7)*dt, min(.35*dt, target-self.limit))
+      self.limit += max(-(2. if rapid and self.limit>0. else 1.5 if urgent else .7)*dt, min(.35*dt, target-self.limit))
     elif self.limit is not None:
       # A brief measured-target/confirmation dropout must not start a small
       # reacceleration pulse before the same merging vehicle returns. This is
@@ -171,7 +180,7 @@ class CutInAnticipation:
       if self.release_since is None:
         self.release_since = now
       self.stage, self.track_id = 'recover', None
-      if now-self.release_since >= .15-1e-6:
+      if now >= self.imminent_until and now-self.release_since >= .15-1e-6:
         self.limit = min(normal_accel, self.limit+.35*dt)
       if self.limit >= normal_accel-1e-6:
         self.limit = None

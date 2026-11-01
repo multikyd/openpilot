@@ -78,8 +78,16 @@ class TestCutInAnticipation(unittest.TestCase):
   def test_caps_change_gradually(self):
     _, trace = self.simulate(duration=2.)
     values = [1.6]+[x for x in trace if x is not None]
-    self.assertTrue(all(b-a >= -.7*.05-1e-8 for a, b in zip(values, values[1:])))
+    self.assertTrue(all(b-a >= -(2. if a>0. else .7)*.05-1e-8 for a, b in zip(values, values[1:])))
     self.assertGreaterEqual(min(values), -.3)
+
+  def test_close_confirmed_overlap_suppresses_positive_acceleration_faster(self):
+    helper,trace=self.simulate(speed=10.,start=-2.4,lateral=.6,relative=0.,distance=6.,duration=1.2,normal_accel=1.)
+    values=[v for v in trace if v is not None]
+    self.assertTrue(values)
+    self.assertLessEqual(values[-1],.05)
+    self.assertGreaterEqual(min(values),-.3)
+    self.assertGreater(helper.imminent_until,helper.last_now)
 
   def test_missing_track_releases_smoothly(self):
     helper, trace = self.simulate(duration=2.)
@@ -132,13 +140,13 @@ class TestCutInAnticipation(unittest.TestCase):
   def test_brief_candidate_loss_does_not_pulse_acceleration_recovery(self):
     helper,trace=self.simulate(duration=2.)
     before=trace[-1];model=fixture();empty=NS(leadsLeft=[],leadsRight=[])
-    for t in (2.,2.05,2.1):
+    for t in (2.,2.05,2.1,2.15,2.2,2.25,2.3):
       self.assertAlmostEqual(helper.update(empty,model,20.,1.6,0.,t,t,True),before)
       self.assertEqual(helper.stage,'recover')
-    recovered=helper.update(empty,model,20.,1.6,0.,2.15,2.15,True)
+    recovered=helper.update(empty,model,20.,1.6,0.,2.4,2.4,True)
     self.assertGreater(recovered,before)
-    self.assertLessEqual(recovered-before,.35*.05+1e-8)
-    self.assertIsNone(helper.update(empty,model,20.,1.6,0.,2.2,2.2,False))
+    self.assertLessEqual(recovered-before,.35*.1+1e-8)
+    self.assertIsNone(helper.update(empty,model,20.,1.6,0.,2.45,2.45,False))
 
   def test_stale_data_clears_even_during_recovery_confirmation(self):
     helper,_=self.simulate(duration=2.)
