@@ -240,6 +240,47 @@ class VehicleOutline:
     self.confirm = 0
 
   def update(self, rgb, lamps, now):
+    body = self._detect(rgb, lamps, now)
+    h, w = rgb.shape[:2]
+    ys = np.linspace(0, h-1, 48).astype(int)
+    xs = np.linspace(0, w-1, 48).astype(int)
+    gray = rgb[ys[:, None], xs].astype(np.float32).mean(axis=2)
+    if body is not None:
+      self.track_image = gray
+      self.track_box = np.array(body)/np.array([w,h,w,h])
+      self.track_anchor = self.track_time = now
+      return body
+    # Never bootstrap from a search rectangle or refresh the detection age
+    # using tracking alone. The overlay resets this object on lead changes.
+    if (not hasattr(self, 'track_image') or not 0 < now-self.track_time <= .2 or
+        not 0 <= now-self.track_anchor <= .35):
+      return None
+    x,y,bw,bh = np.round(self.track_box*48).astype(int)
+    if bw < 8 or bh < 8 or x < 0 or y < 0 or x+bw > 48 or y+bh > 48:
+      return None
+    template = self.track_image[y:y+bh,x:x+bw]
+    template = template-template.mean()
+    norm = np.linalg.norm(template)
+    if norm < 5.*np.sqrt(template.size):
+      return None
+    best = (-1.,0,0)
+    for dy in range(-2,3):
+      for dx in range(-2,3):
+        xx, yy = x+dx, y+dy
+        if xx<0 or yy<0 or xx+bw>48 or yy+bh>48:
+          continue
+        patch = gray[yy:yy+bh,xx:xx+bw]
+        patch = patch-patch.mean()
+        score = float(np.sum(template*patch)/(norm*np.linalg.norm(patch)+1e-6))
+        if score > best[0]:
+          best = (score,dx,dy)
+    if best[0] < .92:
+      return None
+    self.track_box[:2] += np.array(best[1:])/48.
+    self.track_image, self.track_time = gray, now
+    return tuple(self.track_box*np.array([w,h,w,h]))
+
+  def _detect(self, rgb, lamps, now):
     if self.time is None or not 0 < now-self.time <= .35:
       self.geometry = None
       self.confirm = 0

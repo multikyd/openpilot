@@ -490,7 +490,10 @@ class CropAndOutlineTest(unittest.TestCase):
     x,y,w,h=g.update(rgb,lamps,.2)
     self.assertAlmostEqual(x,14.);self.assertAlmostEqual(y,14.)
     self.assertAlmostEqual(w,150.);self.assertAlmostEqual(h,125.)
-    self.assertIsNone(g.update(rgb,(),.3))
+    self.assertIsNotNone(g.update(rgb,(),.3))
+    # Tracking alone cannot renew the original detection age.
+    self.assertIsNone(g.update(rgb,(),.7))
+    self.assertIsNone(g.update(np.zeros_like(rgb),(),.8))
 
   def test_textureless_or_ambiguous_outline_is_not_a_vehicle_rectangle(self):
     g=core.VehicleOutline();rgb=np.full((160,180,3),100,np.uint8)

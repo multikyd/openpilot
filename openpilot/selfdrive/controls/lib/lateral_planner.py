@@ -164,7 +164,8 @@ class LateralPlanner:
                                       sm.all_checks(service_list=['carState', 'modelV2', 'carControl']))
     self.path_xyz, self.lanelines_active = self.LP.get_d_path(sm['carState'], v_ego_car, self.t_idxs, self.path_xyz, self.curve_speed)
 
-    if self.lanelines_active:
+    # Keep heading references consistent with the blended path during release.
+    if self.lanelines_active or self.LP.lane_release_remaining > 0.:
       self.plan_yaw, self.plan_yaw_rate = yaw_from_path_no_scipy(
         self.path_xyz, self.v_plan,
         smooth_window=5,

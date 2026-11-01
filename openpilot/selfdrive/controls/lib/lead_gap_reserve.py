@@ -71,11 +71,13 @@ class LeadGapReserve:
     # already relaxed its brakes. Full room is still required before allowing
     # a positive cap: this phase can only return toward MPC's negative/zero
     # command, never manufacture acceleration into a short gap.
+    # Partial handover only relaxes this extra cap toward nonpositive MPC.
+    # The full MPC distance objective remains mandatory for positive recovery.
     opening = (desired_distance is not None and planned_accel is not None and
                math.isfinite(desired_distance) and math.isfinite(planned_accel) and
-               lead.vRel >= .8 and lead.aLeadK >= -.2 and
+               lead.vRel >= .5 and lead.aLeadK >= -.2 and
                lead.dRel >= max(stop_distance+3., .7*speed) and
-               desired_distance <= reserve and planned_accel >= -.8 and
+               planned_accel >= -.8 and
                target == 0.)
     self.handover_confirm = self.handover_confirm+dt if opening else 0.
     handing_over = self.handover_confirm >= .2

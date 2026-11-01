@@ -303,6 +303,14 @@ class VehicleModelTest(unittest.TestCase):
       self.assertEqual(entries['session.intra_op.allow_spinning'],'0')
       self.assertEqual(entries['session.inter_op.allow_spinning'],'0')
 
+  def test_small_fallback_never_supplies_brake_state(self):
+    h=self.helper();h.input_size=160
+    self.assertIsNone(h.current_state((0,0,80,60),0,100.))
+
+  def test_small_decode_and_crop_tensor_shape(self):
+    raw=np.zeros((1,6,525),np.float32)
+    self.assertEqual(model.decode_predictions(raw,100,100,input_size=160),[])
+
   def test_ready_metadata_and_live_cpu_diagnostics_are_preserved(self):
     h=self.helper();h.ready=False;h.started=99.
     h.outbox.put(('ready',.1,dict(input_size=320,model='light',benchmarks=[])))

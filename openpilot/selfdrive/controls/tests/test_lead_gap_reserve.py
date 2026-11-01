@@ -117,11 +117,12 @@ class TestLeadGapReserve(unittest.TestCase):
     self.assertTrue(released_positive)
     self.assertIsNone(cap)
 
-  def test_opening_but_insufficient_mpc_room_keeps_normal_release(self):
+  def test_opening_without_full_mpc_room_never_allows_positive_cap(self):
     self.tick(80);previous = self.helper.cap
     for _ in range(25):
       self.recovery_tick(desired=50.)
-      self.assertLessEqual(self.helper.cap-previous, .35*.05+1e-8)
+      self.assertLessEqual(self.helper.cap-previous, 1.2*.05+1e-8)
+      self.assertLessEqual(self.helper.cap,0.)
       self.assertFalse(self.helper.releasing)
       previous = self.helper.cap
 
@@ -157,6 +158,16 @@ class TestLeadGapReserve(unittest.TestCase):
       self.assertLessEqual(self.helper.cap-before,1.2*.05+1e-8)
       self.assertFalse(self.helper.releasing)
     self.assertGreater(self.helper.cap,initial+.35*.75)
+
+  def test_moderately_opening_gap_hands_back_before_full_reserve(self):
+    self.lead.dRel=10.;self.tick(80)
+    before=self.helper.cap
+    for _ in range(12):
+      self.recovery_tick(desired=30.,planned=-.2,relative=.6)
+      self.assertLessEqual(self.helper.cap,0.)
+      self.assertFalse(self.helper.releasing)
+    self.assertGreater(self.helper.cap,before+.35*.6)
+    self.assertGreater(self.helper.handover_confirm,.2)
 
   def test_partial_handover_requires_physical_room(self):
     self.tick(80)

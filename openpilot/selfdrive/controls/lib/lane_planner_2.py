@@ -251,8 +251,9 @@ class LanePlanner:
               self.total_camera_offset, self.d_prob)
     valid = geometry is not None and np.all(np.isfinite((*geometry, *values)))
     observing = (self.lane_position_ready and self.lane_change_multiplier > .5 and
-               not CS.leftBlinker and not CS.rightBlinker and not getattr(CS, 'steeringPressed', False))
-    enabled = observing and laneline_active
+               not CS.leftBlinker and not CS.rightBlinker)
+    # Observe while the driver steers; application still yields to the driver.
+    enabled = observing and laneline_active and not getattr(CS, 'steeringPressed', False)
     candidate = 'unknown'
     if valid:
       outer_left, outer_right, std_left, std_right, edge_left, edge_right, lane_left, lane_right = geometry

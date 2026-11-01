@@ -15,6 +15,7 @@ from openpilot.selfdrive.ui.onroad.brake_lights import Observation, copy_nv12_ro
 LEGACY_MODEL = Path(__file__).resolve().parent / 'models' / 'brake_light_v4.onnx'
 LIGHT_MODEL = LEGACY_MODEL.with_name('brake_light_v4_320.onnx')
 QUANT_MODEL = LEGACY_MODEL.with_name('brake_light_v4_320_int8.onnx')
+SMALL_MODEL = LEGACY_MODEL.with_name('brake_light_v4_160.onnx')
 MODEL = LIGHT_MODEL if LIGHT_MODEL.is_file() else LEGACY_MODEL
 
 
@@ -24,7 +25,7 @@ def intersection(a, b):
 
 def decode_predictions(output, width, height, confidence=.65, input_size=640):
   raw = np.asarray(output)
-  if input_size not in (320, 640) or raw.shape != (1, 6, sum((input_size//s)**2 for s in (8,16,32))):
+  if input_size not in (160, 320, 640) or raw.shape != (1, 6, sum((input_size//s)**2 for s in (8,16,32))):
     raise ValueError('Unexpected brake model output')
   rows = raw[0].T
   ids = np.argmax(rows[:, 4:], axis=1)
@@ -82,12 +83,13 @@ def fuse_observation(observation, hint):
   return Observation(hint['state'], 'MODEL_'+hint['state'], observation.lamps, observation.gains)
 
 
-def nv12_input(frame, width, height, input_size=640):
+def nv12_input(frame, width, height, input_size=640, crop=None):
   # Keep the original full-frame NV12 conversion; only network input size varies.
-  if input_size not in (320, 640):
+  if input_size not in (160, 320, 640):
     raise ValueError('Unexpected brake model input size')
-  xx = np.clip((np.arange(input_size)+.5)*width/input_size-.5, 0, width-1).astype(int)
-  yy = np.clip((np.arange(input_size)+.5)*height/input_size-.5, 0, height-1).astype(int)
+  x, y, cw, ch = crop if crop is not None else (0,0,width,height)
+  xx = np.clip(x+(np.arange(input_size)+.5)*cw/input_size-.5, 0, width-1).astype(int)
+  yy = np.clip(y+(np.arange(input_size)+.5)*ch/input_size-.5, 0, height-1).astype(int)
   raw = np.frombuffer(frame.data, np.uint8)
   luma = raw[yy[:, None]*frame.stride+xx].astype(np.float32)
   uv = frame.uv_offset+(yy[:, None]//2)*frame.stride+(xx//2)*2
@@ -124,10 +126,16 @@ def _worker(inbox, outbox, path):
     if (paths[0].name == LIGHT_MODEL.name and QUANT_MODEL.is_file() and
         os.getenv('LEAD_BRAKE_VARIANT', 'auto') == 'auto'):
       paths.append(QUANT_MODEL)
+    if (paths[0].name in (LIGHT_MODEL.name, QUANT_MODEL.name) and
+        os.getenv('LEAD_BRAKE_VARIANT', 'auto') == 'auto' and SMALL_MODEL.is_file()):
+      paths.append(SMALL_MODEL)
     best, benchmarks = None, []
     # Benchmark two background threads only when single-thread latency cannot
     # comfortably meet the existing freshness budget. Never use realtime CPUs.
     for candidate in paths:
+      # Preserve the existing model when it meets the latency budget.
+      if candidate == SMALL_MODEL and best is not None and best[0] <= .7:
+        continue
       thread_counts = [1]
       for threads in thread_counts:
         try:
@@ -142,7 +150,7 @@ def _worker(inbox, outbox, path):
           candidate_session = ort.InferenceSession(str(candidate), options, providers=['CPUExecutionProvider'])
           inp = candidate_session.get_inputs()[0]
           size = inp.shape[2]
-          if (size not in (320, 640) or inp.shape != [1,3,size,size] or
+          if (size not in (160, 320, 640) or inp.shape != [1,3,size,size] or
               candidate_session.get_outputs()[0].shape != [1,6,sum((size//s)**2 for s in (8,16,32))]):
             raise ValueError('Unexpected brake model interface')
           load_ms = (time.monotonic()-load_start)*1000
@@ -178,8 +186,18 @@ def _worker(inbox, outbox, path):
         continue
       epoch, captured, roi, width, height, copied = job
       start, cpu_start = time.monotonic(), time.process_time()
-      output = session.run(None, {inp.name: nv12_input(copied, width, height, size)})[0]
-      chosen = select_lead_box(decode_predictions(output, width, height, input_size=size), roi)
+      area = (0,0,width,height)
+      if size == 160:
+        x,y,bw,bh = roi
+        cw, ch = min(width,max(int(bw*2.2),int(width*.35))), min(height,max(int(bh*2.2),int(height*.45)))
+        area = (max(0,min(width-cw,int(x+bw/2-cw/2))), max(0,min(height-ch,int(y+bh/2-ch/2))),cw,ch)
+      output = session.run(None, {inp.name: nv12_input(copied, width, height, size, crop=area)})[0]
+      ox,oy,cw,ch = area
+      candidates = decode_predictions(output, cw, ch, input_size=size)
+      for candidate in candidates:
+        a,b,bw,bh = candidate['box']
+        candidate['box'] = (a+ox,b+oy,bw,bh)
+      chosen = select_lead_box(candidates, roi)
       outbox.put(('result', epoch, captured, roi, chosen, time.monotonic()-start,
                   dict(cpu_ms=round((time.process_time()-cpu_start)*1000,1))))
   except Exception as exc:
@@ -380,6 +398,9 @@ class BrakeVehicleModel:
     return (x+(a-px)*w/pw, y+(b-py)*h/ph, bw*w/pw, bh*h/ph)
 
   def current_state(self, roi, epoch, now):
+    # The emergency small model supplies geometry only, never brake state.
+    if self.input_size == 160:
+      return None
     if self.current_box(roi, epoch, now) is None:
       return None
     _, captured, _, chosen = self.result

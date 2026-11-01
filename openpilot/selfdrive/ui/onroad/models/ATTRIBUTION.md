@@ -38,3 +38,5 @@ Reduced resolution and quantization can miss vehicles or change brake states.
 Lightweight state hints therefore require confidence >=0.9 (vehicle outlines
 retain >=0.65 plus radar/model association). Fast lamp onset/release evidence
 and stale-result/generation protections remain authoritative.
+
+The 160x160 fallback derivative uses the same weights and license as the existing model, with resized detection anchors. It is enabled only when the existing auto candidates exceed the latency budget. It supplies vehicle geometry only, never brake ON/OFF state.

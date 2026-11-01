@@ -206,10 +206,14 @@ class TestModeIndependentObservation(unittest.TestCase):
     self.assertEqual(self.p.lane_position_class,'right')
     self.assertEqual(self.p.lane_position_offset,0.)
     self.assertGreater(self.settle(1)[0],0.)
-  def test_manual_input_still_blocks_classification(self):
+  def test_manual_input_observes_without_applying_profile(self):
     self.geometry('right');self.cs.steeringPressed=True
+    self.p.total_camera_offset=.01
     self.settle(40,active=False)
-    self.assertEqual(self.p.lane_position_class,'unknown')
+    self.assertEqual(self.p.lane_position_class,'right')
+    self.assertEqual(self.p.lane_position_offset,0.)
+    self.cs.steeringPressed=False
+    self.assertGreater(self.settle(1)[0],0.)
 
 
 if __name__ == '__main__':
