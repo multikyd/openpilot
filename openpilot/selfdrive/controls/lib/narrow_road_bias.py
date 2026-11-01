@@ -109,7 +109,17 @@ class LaneBoundaryGuard:
         getattr(model.meta,'laneChangeState',0) != 0 or getattr(model.meta,'desire',0) != 0 or
         len(model.laneLines)<3 or len(model.laneLineProbs)<3 or len(model.laneLineStds)<3):
       return reset()
-    if not all(math.isfinite(model.laneLineProbs[i]) and model.laneLineProbs[i]>.6 and
+    # A strong left boundary can protect a low-speed corridor even when
+    # the opposite lane estimate is moderately uncertain. Never infer room
+    # from that lane alone: a finite right road edge must also support it.
+    one_sided = (cs.vEgo <= 60./3.6 and
+                 all(math.isfinite(v) for v in (model.laneLineProbs[1], model.laneLineProbs[2],
+                     model.laneLineStds[1], model.laneLineStds[2])) and
+                 model.laneLineProbs[1] > .9 and 0. <= model.laneLineStds[1] < .15 and
+                 model.laneLineProbs[2] > .7 and .25 <= model.laneLineStds[2] < .35 and
+                 len(model.roadEdges) >= 2 and len(model.roadEdgeStds) >= 2 and
+                 math.isfinite(model.roadEdgeStds[1]) and 0. <= model.roadEdgeStds[1] < 1.)
+    if not one_sided and not all(math.isfinite(model.laneLineProbs[i]) and model.laneLineProbs[i]>.6 and
                math.isfinite(model.laneLineStds[i]) and 0.<=model.laneLineStds[i]<.25 for i in (1,2)):
       return reset()
     if path.ndim != 2 or path.shape[1]<2 or not np.all(np.isfinite(path)):
@@ -126,14 +136,25 @@ class LaneBoundaryGuard:
       bounds.append(np.interp(path[future,0],x,y))
     left,right=bounds
     width=right-left
-    if not np.all((width>2.5)&(width<3.8)):
+    if not np.all((width>2.5)&(width<(4.8 if one_sided else 3.8))):
       return reset()
     low=float(np.max(left+1.10+.3*model.laneLineStds[1]-path[future,1]))
     high=float(np.min(right-1.10-.3*model.laneLineStds[2]-path[future,1]))
+    if one_sided:
+      edge = model.roadEdges[1]
+      ex, ey = np.asarray(edge.x), np.asarray(edge.y)
+      if (len(ex)<3 or len(ex)!=len(ey) or not np.all(np.isfinite(ex)) or
+          not np.all(np.isfinite(ey)) or not np.all(np.diff(ex)>0.)):
+        return reset()
+      edge_room = np.interp(path[future,0], ex, ey)-1.35-.4*model.roadEdgeStds[1]-path[future,1]
+      high = min(high, float(np.min(edge_room)))
+      # This fallback only moves away from the trusted left boundary.
+      low = max(0., low)
     if low>high:
       return reset()
-    target=float(np.clip(np.clip(0.,low,high),-.12,.12))
+    target=float(np.clip(np.clip(0.,low,high),0. if one_sided else -.12,.08 if one_sided else .12))
     # Never retain a correction toward a newly observed boundary.
     self.shift=float(np.clip(self.shift,min(0.,low),max(0.,high)))
-    self.shift+=float(np.clip(target-self.shift,-.10*dt,.10*dt))
+    rate = .03 if one_sided else .10
+    self.shift+=float(np.clip(target-self.shift,-rate*dt,rate*dt))
     return self.shift
