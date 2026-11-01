@@ -97,6 +97,7 @@ class LanePlanner:
     self.narrow_road_curvature = 0.
 
     self.lanefull_mode = False
+    self.lane_confidence_misses = 0
     self.d_prob_count = 0
     self.lane_path_weight = 0.0
     self.second = 0.0
@@ -425,7 +426,16 @@ class LanePlanner:
     original_model_y = path_xyz[:,1].copy()
     laneline_active = False
     next_lane_weight = 0.0
-    self.d_prob_count = self.d_prob_count + 1 if self.d_prob > 0.3 else 0
+    # Preserve an established lane path through only a brief, mild confidence
+    # dip. Explicit mode/maneuver releases and major confidence loss are immediate.
+    mild_dip = (self.lanefull_mode and self.lane_change_multiplier > .5 and
+                not CS.leftBlinker and not CS.rightBlinker and
+                self.lane_path_weight > 0. and .2 < self.d_prob <= .3)
+    self.lane_confidence_misses = self.lane_confidence_misses + 1 if mild_dip else 0
+    if self.d_prob > .3:
+      self.d_prob_count += 1
+    elif not mild_dip or self.lane_confidence_misses * DT_MDL > .15 + 1e-9:
+      self.d_prob_count = 0
     if self.lanefull_mode and self.d_prob_count > int(1 / DT_MDL):
       laneline_active = True
       safe_idxs = np.isfinite(self.ll_t)
