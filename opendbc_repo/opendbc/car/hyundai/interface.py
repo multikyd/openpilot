@@ -128,6 +128,10 @@ class CarInterface(CarInterfaceBase):
       if CAN.ECAN >= 4:
         cfgs.insert(0, get_safety_config(structs.CarParams.SafetyModel.noOutput))
       ret.safetyConfigs = cfgs
+      # SPAS2-only stationary experiment, restricted to the verified PE platform.
+      if (candidate == CAR.HYUNDAI_IONIQ_5_PE and 0x165 in fingerprint[CAN.ECAN] and
+          0x16A in fingerprint[CAN.ECAN] and not (ret.flags & HyundaiFlags.ENABLE_BLINKERS)):
+        ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.STATIONARY_BLINKER_TEST.value
 
       if ret.flags & HyundaiFlags.CANFD_LKA_STEERING:
         ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.CANFD_LKA_STEERING.value
@@ -242,6 +246,12 @@ class CarInterface(CarInterfaceBase):
     # Dashcam cars are missing a test route, or otherwise need validation
     # TODO: Optima Hybrid 2017 uses a different SCC12 checksum
     #ret.dashcamOnly = candidate in {CAR.KIA_OPTIMA_H, }
+
+    if (ret.flags & HyundaiFlags.CANFD_LKA_STEERING and
+        ret.flags & HyundaiFlags.CANFD_CAMERA_SCC and not ret.openpilotLongitudinalControl):
+      # This existing camera-SCC/LKA stock-longitudinal safety configuration
+      # uses a different RX bus. Keep the optional test disabled on it.
+      ret.safetyConfigs[-1].safetyParam &= ~HyundaiSafetyFlags.STATIONARY_BLINKER_TEST.value
 
     return ret
 

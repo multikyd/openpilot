@@ -8,7 +8,7 @@ from opendbc.can import CANDefine, CANParser
 from opendbc.car import Bus, create_button_events, structs, DT_CTRL
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.hyundai.hyundaicanfd import CanBus
-from opendbc.car.hyundai.values import HyundaiFlags, CAR, DBC, Buttons, CarControllerParams, HyundaiExtFlags
+from opendbc.car.hyundai.values import HyundaiFlags, CAR, DBC, Buttons, CarControllerParams, HyundaiExtFlags, HyundaiSafetyFlags
 from opendbc.car.interfaces import CarStateBase
 
 from opendbc.car.structs import car
@@ -187,6 +187,10 @@ class CarState(CarStateBase):
     cp = can_parsers[Bus.pt]
     cp_cam = can_parsers[Bus.cam]
     cp_alt = can_parsers[Bus.alt] if Bus.alt in can_parsers else None
+    # Preserve only the OEM SPAS mode observation; never replay SPAS1.
+    if any(int(c.safetyParam) & HyundaiSafetyFlags.STATIONARY_BLINKER_TEST for c in self.CP.safetyConfigs):
+      self.stock_spas_mode = cp.vl["SPAS1"]["NEW_SIGNAL_2"]
+      self.stock_spas_time = cp.ts_nanos["SPAS1"]["NEW_SIGNAL_2"] / 1e9
 
     if self.CP.flags & HyundaiFlags.CANFD:
       return self.update_canfd(can_parsers)

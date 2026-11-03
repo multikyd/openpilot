@@ -826,6 +826,151 @@ def get_tmux_log():
 # =========================
 # HTTP API
 # =========================
+# Test requests are short leases consumed by card, the sole sendcan publisher.
+# No parking steering packets or ECU-disable requests are issued here.
+_vehicle_test_lock = threading.RLock()
+_vehicle_test_sm = None
+_vehicle_test_session = None
+_vehicle_test_cooldown = 0.0
+
+
+def vehicle_test_preflight():
+    global _vehicle_test_sm
+    from opendbc.car.hyundai.blinker_test import conditions, read_json, STATUS, SAFETY_FLAG
+    result = {"fresh": False, "supported": False, "conditions_met": False, "reason": "vehicle_data_missing"}
+    try:
+        from openpilot.cereal import messaging
+        from opendbc.car.structs import CarParams
+        from opendbc.car.hyundai.values import CAR, HyundaiFlags
+        with _vehicle_test_lock:
+            if _vehicle_test_sm is None:
+                _vehicle_test_sm = messaging.SubMaster(["carState", "carControl", "selfdriveState", "pandaStates"])
+            sm = _vehicle_test_sm
+            sm.update(0)
+            now = time.monotonic()
+            result["fresh"] = all(sm.valid[name] and 0 <= now - sm.recv_time[name] < 0.5
+                                  for name in ("carState", "carControl", "selfdriveState"))
+            raw = params.get("CarParams") if params is not None else None
+            if raw:
+                with CarParams.from_bytes(raw) as cp:
+                    result["supported"] = (cp.carFingerprint == CAR.HYUNDAI_IONIQ_5_PE and
+                        not (cp.flags & HyundaiFlags.ENABLE_BLINKERS) and
+                        any(int(c.safetyParam) & SAFETY_FLAG for c in cp.safetyConfigs))
+            if result["fresh"]:
+                cs, cc, sd = sm["carState"], sm["carControl"], sm["selfdriveState"]
+                result.update(gear=str(cs.gearShifter), stationary=bool(cs.standstill and abs(cs.vEgo) < .05),
+                    brake_pressed=bool(cs.brakePressed), gas_released=not cs.gasPressed,
+                    automatic_control_off=not (cc.enabled or cc.latActive or cc.longActive or sd.enabled),
+                    left_observed=bool(cs.leftBlinker), right_observed=bool(cs.rightBlinker))
+                reason = conditions(cs, cc)
+                if sd.enabled:
+                    reason = "automatic_control_off"
+                if not result["supported"]:
+                    reason = "unsupported_car_or_configuration"
+                result["reason"] = reason
+                result["conditions_met"] = reason == "ok"
+            status = read_json(STATUS)
+            result["sender"] = status if 0 <= now - float(status.get("time", 0)) < .5 else {}
+            if result["sender"].get("reason") in ("unsupported_car_or_bus", "stock_spas_active_or_unknown"):
+                result["conditions_met"] = False
+                result["reason"] = result["sender"]["reason"]
+            result["panda_tx_blocked"] = sum(int(p.safetyTxBlocked) for p in sm["pandaStates"])
+            result["panda_test_flag"] = bool(sm.valid["pandaStates"] and
+                0 <= now - sm.recv_time["pandaStates"] < 1.5 and
+                any(int(p.safetyParam) & SAFETY_FLAG for p in sm["pandaStates"]))
+    except Exception:
+        result["fresh"] = False
+        result["conditions_met"] = False
+        result["reason"] = "vehicle_data_unavailable"
+    return result
+
+
+def _end_blinker_test(now):
+    global _vehicle_test_session, _vehicle_test_cooldown
+    from opendbc.car.hyundai.blinker_test import write_json, REQUEST
+    if _vehicle_test_session:
+        try:
+            write_json(REQUEST, dict(_vehicle_test_session, action="stop", expires=now))
+        except OSError:
+            pass  # The unrenewed lease still expires independently in card.
+        print("BLINKER_TEST end", flush=True)
+    _vehicle_test_session = None
+    _vehicle_test_cooldown = now + 1.1
+
+
+@app.route("/tests/capabilities", methods=["GET"])
+def vehicle_test_capabilities():
+    preflight = vehicle_test_preflight()
+    preflight.get("sender", {}).pop("id", None)
+    cooldown = max(0.0, _vehicle_test_cooldown - time.monotonic())
+    return jsonify({"protocol": 2, "preflight": preflight, "cooldown_seconds": cooldown, "tests": [{
+        "id": "blinkers", "supported": preflight["supported"], "max_seconds": 3,
+        "transmission_enabled": preflight["conditions_met"] and preflight.get("panda_test_flag", False) and
+                                bool(preflight.get("sender")) and cooldown <= 0
+    }]})
+
+
+@app.route("/tests/blinkers", methods=["POST"])
+def vehicle_test_blinkers():
+    global _vehicle_test_session
+    import secrets
+    from opendbc.car.hyundai.blinker_test import write_json, REQUEST, LEASE_SECONDS, MAX_SECONDS
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict) or payload.get("action") not in ("left", "right", "stop", "renew"):
+        return jsonify({"status": "invalid_request"}), 400
+    with _vehicle_test_lock:
+        now = time.monotonic()
+        session = _vehicle_test_session
+        action = payload["action"]
+        owner = request.remote_addr
+        token = payload.get("token")
+        if session and now >= session["expires"]:
+            _end_blinker_test(now)
+            session = None
+        authenticated = bool(session and isinstance(token, str) and token.isascii() and len(token) < 128 and
+                             secrets.compare_digest(token, session["id"]) and session["owner"] == owner)
+        if action == "stop":
+            if authenticated:
+                _end_blinker_test(now)
+            return jsonify({"status": "stopped" if authenticated else "no_matching_session"})
+        preflight = vehicle_test_preflight()
+        sender = preflight.get("sender", {})
+        if not (preflight["conditions_met"] and preflight.get("panda_test_flag") and sender):
+            if authenticated:
+                _end_blinker_test(now)
+            preflight.get("sender", {}).pop("id", None)
+            return jsonify({"status": "blocked", "preflight": preflight}), 409
+        if action == "renew":
+            if not authenticated:
+                return jsonify({"status": "session_mismatch"}), 409
+            if (now >= session["expires"] or now >= session["deadline"] or
+                (sender.get("id") == session["id"] and sender.get("reason") != "ok")):
+                _end_blinker_test(now)
+                return jsonify({"status": "expired_or_cancelled"}), 409
+            session["expires"] = min(now + LEASE_SECONDS, session["deadline"])
+        else:
+            if session and now < session["expires"]:
+                return jsonify({"status": "busy"}), 409
+            if now < _vehicle_test_cooldown or (sender.get("command") not in (None, 0)):
+                return jsonify({"status": "cooldown"}), 409
+            # Both lamps must be off before beginning; do not override a stalk/hazards.
+            if preflight.get("left_observed") or preflight.get("right_observed"):
+                return jsonify({"status": "existing_blinker_or_hazard"}), 409
+            session = {"id": secrets.token_urlsafe(24), "owner": owner, "start": now,
+                       "expires": now + LEASE_SECONDS, "deadline": now + MAX_SECONDS,
+                       "action": action}
+            _vehicle_test_session = session
+            print(f"BLINKER_TEST start direction={action} max_seconds={MAX_SECONDS}", flush=True)
+        try:
+            write_json(REQUEST, session)
+        except OSError:
+            _vehicle_test_session = None
+            return jsonify({"status": "request_write_failed"}), 503
+        return jsonify({"status": "requested", "token": session["id"],
+                        "seconds_left": max(0, session["deadline"] - now),
+                        "note": "CAN request is not proof of lamp activation."})
+
+
 @app.route("/health", methods=["GET"])
 def health():
     global client_connected, last_seen

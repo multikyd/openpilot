@@ -9,6 +9,7 @@ from opendbc.car.hyundai.hyundaicanfd import CanBus
 from opendbc.car.hyundai.values import HyundaiFlags, Buttons, CarControllerParams, CAR, CAN_GEARS
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.hyundai.steering_diagnostics import SteeringDiagnostics
+from opendbc.car.hyundai.blinker_test import BlinkerTestSender, SAFETY_FLAG
 from openpilot.common.swaglog import cloudlog
 
 VisualAlert = structs.CarControl.HUDControl.VisualAlert
@@ -116,6 +117,8 @@ class CarController(CarControllerBase):
     self.packer = CANPacker(dbc_names[Bus.pt])
     self.angle_limit_counter = 0
     self.steering_diagnostics = SteeringDiagnostics()
+    self.blinker_test = (BlinkerTestSender() if
+      any(int(c.safetyParam) & SAFETY_FLAG for c in CP.safetyConfigs) else None)
 
     self.accel_last = 0
     self.apply_torque_last = 0
@@ -372,6 +375,20 @@ class CarController(CarControllerBase):
       # LFA and HDA icons
       if self.frame % 5 == 0 and camera_scc:
         can_sends.extend(hyundaicanfd.create_lfahda_cluster(self.packer, CS, self.CAN, CC.longActive, CC.latActive))
+
+      # The test shares card's single sendcan publisher; no SPAS1 or ECU-disable.
+      if self.blinker_test is not None and self.frame % 2 == 0:
+        now = now_nanos / 1e9
+        test_supported = (self.CP.carFingerprint == CAR.HYUNDAI_IONIQ_5_PE and
+                          any(int(c.safetyParam) & SAFETY_FLAG for c in self.CP.safetyConfigs) and
+                          not (self.CP.flags & HyundaiFlags.ENABLE_BLINKERS) and
+                          self.CAN.ECAN % 4 == (1 if hda2 and not camera_scc else 0))
+        stock_fresh = 0 <= now - getattr(CS, "stock_spas_time", 0) < .25
+        stock_active = not stock_fresh or getattr(CS, "stock_spas_mode", 7) not in (0, 3)
+        test_command = self.blinker_test.update(now, CS.out, CC, test_supported, stock_active)
+        if test_command is not None and test_supported:
+          can_sends.append(self.packer.make_can_msg("SPAS2", self.CAN.ECAN,
+                                                   {"BLINKER_CONTROL": test_command}))
 
       # blinkers
       if hda2 and self.CP.flags & HyundaiFlags.ENABLE_BLINKERS:
