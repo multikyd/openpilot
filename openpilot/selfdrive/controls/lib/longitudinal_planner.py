@@ -16,7 +16,7 @@ from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.params import Params
 from openpilot.selfdrive.controls.lib.cutin_anticipation import CutInAnticipation
-from openpilot.selfdrive.controls.lib.lead_gap_reserve import LeadGapReserve, apply_lead_gap_cap
+from openpilot.selfdrive.controls.lib.lead_gap_reserve import LeadGapReserve, NormalStopGap, apply_lead_gap_cap
 from openpilot.selfdrive.controls.lib.turn_exit_recovery import TurnExitRecovery
 from openpilot.selfdrive.carrot.carrot_functions import XState
 
@@ -80,6 +80,7 @@ class LongitudinalPlanner:
     self.mpc = LongitudinalMpc(dt=dt)
     self.cutin_anticipation = CutInAnticipation()
     self.lead_gap_reserve = LeadGapReserve()
+    self.normal_stop_gap = NormalStopGap()
     self.turn_exit_recovery = TurnExitRecovery()
     self._turn_exit_active = False
     self._assist_log_state = None
@@ -363,6 +364,18 @@ class LongitudinalPlanner:
       cs.vEgo, action_t, self.output_a_target, self.dt)
     # Keep the command/velocity consistent even while MPC acceleration unwinds.
     self.log_follow_assistance(now, sm['radarState'].leadOne, gap_cap, before_gap_a, output_a_target)
+    stop_cap = self.normal_stop_gap.update(
+      sm['radarState'].leadOne, cs.vEgo, output_a_target,
+      sm.logMonoTime['radarState']*1e-9, now,
+      enabled=(self.CP.openpilotLongitudinalControl and not reset_state and self.mpc.mode == 'acc' and
+               sm['selfdriveState'].enabled and fresh and
+               not (cs.gasPressed or cs.brakePressed or cs.leftBlinker or cs.rightBlinker or cs.steeringPressed) and
+               abs(cs.steeringAngleDeg)<30. and carrot.desireState<=.1 and
+               sm.all_checks(['carState','radarState','modelV2','controlsState','selfdriveState'])))
+    output_a_target, output_v_target_now, output_j_target = apply_lead_gap_cap(
+      output_a_target, output_v_target_now, output_j_target, stop_cap,
+      cs.vEgo, action_t, self.output_a_target, self.dt)
+    self.output_should_stop = self.output_should_stop or self.normal_stop_gap.stopping
     self.output_a_target = output_a_target
     self.output_v_target_now = output_v_target_now
     self.output_j_target_now = output_j_target

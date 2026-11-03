@@ -188,3 +188,31 @@ class TestLeadGapReserve(unittest.TestCase):
 
 if __name__ == '__main__':
   unittest.main()
+
+
+class TestNormalStopGap(unittest.TestCase):
+  def setUp(self):
+    from openpilot.selfdrive.controls.lib.lead_gap_reserve import NormalStopGap
+    self.h=NormalStopGap()
+    self.lead=SimpleNamespace(present=True,radar=True,radarTrackId=7,modelProb=.99,dPath=0.,dRel=15.,vRel=-5.,vLead=0.)
+  def tick(self,speed=5.,enabled=True):
+    t=0. if self.h.stamp is None else self.h.stamp+.05
+    self.lead.vRel=self.lead.vLead-speed
+    return self.h.update(self.lead,speed,-.5,t,t,enabled)
+  def test_normal_approach_arms_and_requests_braking(self):
+    for _ in range(20):self.lead.dRel-=.25;cap=self.tick()
+    self.assertTrue(self.h.armed);self.assertLess(cap,-.5)
+  def test_low_speed_only_does_not_force_more_gap(self):
+    self.lead.dRel=2.
+    for _ in range(20):self.assertIsNone(self.tick(speed=.5))
+    self.assertFalse(self.h.stopping)
+  def test_disabled_clears(self):
+    for _ in range(20):self.tick()
+    self.assertIsNone(self.tick(enabled=False));self.assertFalse(self.h.armed)
+  def test_new_close_track_does_not_inherit_arm(self):
+    for _ in range(20):self.tick()
+    self.lead.radarTrackId=8;self.lead.dRel=4.
+    self.assertIsNone(self.tick(speed=1.));self.assertFalse(self.h.armed)
+  def test_moving_lead_does_not_hold_stop(self):
+    for _ in range(20):self.tick()
+    self.lead.vLead=1.;self.assertIsNone(self.tick());self.assertFalse(self.h.stopping)

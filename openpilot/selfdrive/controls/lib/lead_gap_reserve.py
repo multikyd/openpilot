@@ -110,3 +110,53 @@ def apply_lead_gap_cap(accel, velocity, jerk, cap, speed, action_time, previous_
   # Keep velocity PID/feedforward consistent with the added acceleration ceiling.
   velocity = min(velocity, max(0., speed+max(0., action_time)*cap))
   return cap, velocity, min(jerk, (cap-previous_accel)/dt)
+
+
+class NormalStopGap:
+  """2.5m approach assist only after a continuous ordinary-speed lead approach."""
+  def __init__(self):
+    self.reset()
+
+  def reset(self):
+    self.identity = self.stamp = None
+    self.distance = self.relative = self.confirm = 0.
+    self.armed = self.stopping = False
+    self.cap = None
+
+  def update(self, lead, speed, planned, stamp, now, enabled):
+    self.stopping = False
+    if (not enabled or not all(math.isfinite(x) for x in
+        (speed,planned,stamp,now,lead.dRel,lead.vRel,lead.vLead,lead.modelProb,lead.dPath)) or
+        not 0.<=now-stamp<=.2 or not lead.present or not lead.radar or lead.radarTrackId<0 or
+        lead.modelProb<.9 or abs(lead.dPath)>1. or not 0.<=speed<15. or
+        not 1.<lead.dRel<80. or abs(lead.vLead-speed-lead.vRel)>1.5):
+      self.reset()
+      return None
+    if self.stamp==stamp:
+      self.stopping=bool(self.armed and self.cap is not None and speed<.25 and lead.vLead<.2 and lead.dRel<2.85)
+      return self.cap
+    dt=stamp-self.stamp if self.stamp is not None else 0.
+    continuous=(self.identity==lead.radarTrackId and .01<=dt<=.2 and
+                abs(lead.dRel-self.distance-.5*(lead.vRel+self.relative)*dt)<1.)
+    if not continuous:
+      self.reset()
+    self.stamp,self.identity=stamp,lead.radarTrackId
+    self.distance,self.relative=lead.dRel,lead.vRel
+    if not continuous:
+      return None
+    self.confirm+=dt
+    if self.confirm>=.5 and speed>=3. and lead.dRel>6.:
+      self.armed=True
+    if not self.armed or lead.vLead>.5:
+      self.cap=None
+      return None
+    # Include a short actuator allowance rather than waiting until the last metre.
+    room=max(.3,lead.dRel-2.5-.25*speed)
+    target=-min(2.5,speed*speed/(2.*room))
+    if speed<.25 and lead.dRel<2.85 and lead.vLead<.2:
+      target=min(target,-.5)
+      self.stopping=True
+    if self.cap is None:
+      self.cap=min(0.,planned)
+    self.cap+=max(-.8*dt,min(.8*dt,target-self.cap))
+    return self.cap
