@@ -89,6 +89,57 @@ class VehicleModelTest(unittest.TestCase):
     h.clear()
     self.assertIsNone(h.result)
 
+  def test_outline_bridges_slow_inference_but_brake_state_still_expires(self):
+    h = self.helper()
+    h.interval = 3.25
+    h.result = (2, 100., (100,100,100,100), dict(box=(110,110,80,80),state='ON',confidence=.95))
+    np.testing.assert_allclose(h.current_box((105,105,110,110),2,103.9), (116,116,88,88))
+    self.assertIsNone(h.current_state((105,105,110,110),2,103.9))
+    self.assertIsNone(h.current_box((105,105,110,110),2,104.26))
+
+  def test_outline_has_hard_age_bound_and_does_not_refresh_its_anchor(self):
+    h = self.helper()
+    h.interval = 30.
+    h.result = (2, 100., (100,100,100,100), dict(box=(110,110,80,80),state='ON',confidence=.95))
+    for t in (102.1, 103., 104., 105., 106.):
+      self.assertIsNotNone(h.current_box((100,100,100,100),2,t))
+    self.assertEqual(h.result[1],100.)
+    self.assertIsNone(h.current_box((100,100,100,100),2,106.01))
+    self.assertIsNone(h.current_box((100,100,100,100),2,99.99))
+
+  def test_extended_outline_still_clears_on_target_change_and_projection_jump(self):
+    h = self.helper()
+    h.interval = 3.25
+    h.result = (2, 100., (100,100,100,100), dict(box=(110,110,80,80),state='ON',confidence=.95))
+    self.assertIsNone(h.current_box((100,100,100,100),3,103.))
+    self.assertIsNone(h.current_box((130,100,100,100),2,103.))
+    self.assertIsNone(h.current_box((100,100,150,150),2,103.))
+    h.clear()
+    self.assertIsNone(h.current_box((100,100,100,100),2,103.))
+
+  def test_new_model_miss_removes_extended_outline_immediately(self):
+    h = self.helper()
+    h.interval = 3.25
+    h.last_submit = 100.
+    h.result = (2, 99., (0,0,80,60), dict(box=(0,0,80,60),state='ON',confidence=.95))
+    self.assertIsNotNone(h.current_box((0,0,80,60),2,102.5))
+    h.outbox.put(('result',2,102.1,(0,0,80,60),None,.65))
+    self.assertIsNone(h.tick(NS(),(0,0,80,60),2,102.8))
+    self.assertIsNone(h.current_box((0,0,80,60),2,102.8))
+
+  def test_projected_outline_frames_do_not_copy_images_or_schedule_inference(self):
+    h = self.helper()
+    h.interval = 3.25
+    h.last_submit = 100.
+    h.result = (2, 99.4, (0,0,80,60), dict(box=(0,0,80,60),state='ON',confidence=.95))
+    with patch.object(model,'copy_nv12_roi') as copied:
+      for t in np.arange(102.,103.2,.02):
+        self.assertIsNotNone(h.tick(NS(),(0,0,80,60),2,float(t)))
+      copied.assert_not_called()
+    self.assertTrue(h.inbox.empty())
+    self.assertEqual(h.interval,3.25)
+    self.assertEqual(h.last_submit,100.)
+
   def test_stale_generation_does_not_adopt_model_result(self):
     h = self.helper()
     h.busy = True

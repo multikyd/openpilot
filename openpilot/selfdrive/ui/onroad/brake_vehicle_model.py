@@ -386,7 +386,11 @@ class BrakeVehicleModel:
     if self.result is None:
       return None
     generation, captured, previous, chosen = self.result
-    if chosen is None or generation != epoch or not 0 <= now-captured <= 2.:
+    # Bridge the existing CPU-budgeted inference interval using the live lead
+    # projection only. Overlay freshness/target guards still clear this result;
+    # a new miss clears it too. Never extend brake-state evidence with geometry.
+    max_age = min(6., max(2., self.interval+1.))
+    if chosen is None or generation != epoch or not 0 <= now-captured <= max_age:
       return None
     x,y,w,h = roi
     px,py,pw,ph = previous
