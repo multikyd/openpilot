@@ -83,6 +83,16 @@ class LongControl:
     j_target_now = long_plan.jTargetNow
     should_stop = long_plan.shouldStop
 
+    lead = radarState.leadOne
+    near_stationary_lead = (self.CP.brand == "hyundai" and lead.present and
+                            0.0 < lead.dRel < 4.0 and abs(lead.vLead) < 0.3 and
+                            0.0 <= CS.vEgo < 0.25)
+    if near_stationary_lead:
+      # A stop flag can briefly drop while the plan still asks for zero speed.
+      settling = (self.long_control_state == LongCtrlState.stopping and
+                  v_target_now <= 0.05 and a_target_ff <= 0.0)
+      should_stop = should_stop or settling or lead.dRel <= 2.2
+
     self.readParamCount += 1
     if self.readParamCount >= 100:
       self.readParamCount = 0
@@ -118,7 +128,19 @@ class LongControl:
       stopAccel = self.stopping_accel if self.stopping_accel < 0.0 else self.CP.stopAccel
       if output_accel > stopAccel:
         output_accel = min(output_accel, 0.0)
-        output_accel -= self.CP.stoppingDecelRate * DT_CTRL
+        stopping_rate = self.CP.stoppingDecelRate
+        if near_stationary_lead and not soft_hold_active:
+          # Allow for closing during actuator response and the remaining stop.
+          closing_speed = max(CS.vEgo, -lead.vRel)
+          required_gap = 2.2 + 0.3 * closing_speed + closing_speed ** 2
+          if lead.dRel > required_gap and a_target_ff >= output_accel and output_accel <= -0.5:
+            stopping_rate = min(stopping_rate, 0.4)
+            if CS.vEgo > 0.015:
+              # Taper toward the approach plan before building standstill hold.
+              settle_accel = max(stopAccel, min(-0.5, a_target_ff))
+              output_accel = min(settle_accel, output_accel + stopping_rate * DT_CTRL)
+              stopping_rate = 0.0
+        output_accel -= stopping_rate * DT_CTRL
       self.reset()
 
     elif self.long_control_state == LongCtrlState.starting:
