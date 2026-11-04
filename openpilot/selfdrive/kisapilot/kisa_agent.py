@@ -836,7 +836,7 @@ _vehicle_test_cooldown = 0.0
 
 def vehicle_test_preflight():
     global _vehicle_test_sm
-    from opendbc.car.hyundai.blinker_test import conditions, read_json, STATUS, SAFETY_FLAG
+    from opendbc.car.hyundai.blinker_test import conditions, read_json, STATUS, SAFETY_FLAG, TBT_SAFETY_FLAG
     result = {"fresh": False, "supported": False, "conditions_met": False, "reason": "vehicle_data_missing"}
     try:
         from openpilot.cereal import messaging
@@ -850,19 +850,25 @@ def vehicle_test_preflight():
             now = time.monotonic()
             result["fresh"] = all(sm.valid[name] and 0 <= now - sm.recv_time[name] < 0.5
                                   for name in ("carState", "carControl", "selfdriveState"))
+            panda_fresh = sm.valid["pandaStates"] and 0 <= now - sm.recv_time["pandaStates"] < 1.5
+            moving_flags = SAFETY_FLAG | TBT_SAFETY_FLAG
+            moving_configured = False
             raw = params.get("CarParams") if params is not None else None
             if raw:
                 with CarParams.from_bytes(raw) as cp:
                     result["supported"] = (cp.carFingerprint == CAR.HYUNDAI_IONIQ_5_PE and
                         not (cp.flags & HyundaiFlags.ENABLE_BLINKERS) and
                         any(int(c.safetyParam) & SAFETY_FLAG for c in cp.safetyConfigs))
+                    moving_configured = any((int(c.safetyParam) & moving_flags) == moving_flags for c in cp.safetyConfigs)
+            result["moving_test_enabled"] = bool(result["supported"] and moving_configured and panda_fresh and
+                any((int(p.safetyParam) & moving_flags) == moving_flags for p in sm["pandaStates"]))
             if result["fresh"]:
                 cs, cc, sd = sm["carState"], sm["carControl"], sm["selfdriveState"]
                 result.update(gear=str(cs.gearShifter), stationary=bool(cs.standstill and abs(cs.vEgo) < .05),
                     brake_pressed=bool(cs.brakePressed), gas_released=not cs.gasPressed,
                     automatic_control_off=not (cc.enabled or cc.latActive or cc.longActive or sd.enabled),
                     left_observed=bool(cs.leftBlinker), right_observed=bool(cs.rightBlinker))
-                reason = conditions(cs, cc)
+                reason = conditions(cs, cc, allow_moving=result["moving_test_enabled"])
                 if sd.enabled:
                     reason = "automatic_control_off"
                 if not result["supported"]:
@@ -875,8 +881,7 @@ def vehicle_test_preflight():
                 result["conditions_met"] = False
                 result["reason"] = result["sender"]["reason"]
             result["panda_tx_blocked"] = sum(int(p.safetyTxBlocked) for p in sm["pandaStates"])
-            result["panda_test_flag"] = bool(sm.valid["pandaStates"] and
-                0 <= now - sm.recv_time["pandaStates"] < 1.5 and
+            result["panda_test_flag"] = bool(panda_fresh and
                 any(int(p.safetyParam) & SAFETY_FLAG for p in sm["pandaStates"]))
     except Exception:
         result["fresh"] = False
@@ -902,6 +907,7 @@ def _end_blinker_test(now):
 def vehicle_test_capabilities():
     preflight = vehicle_test_preflight()
     preflight.get("sender", {}).pop("id", None)
+    preflight.get("sender", {}).pop("voice_id", None)
     cooldown = max(0.0, _vehicle_test_cooldown - time.monotonic())
     return jsonify({"protocol": 2, "preflight": preflight, "cooldown_seconds": cooldown, "tests": [{
         "id": "blinkers", "supported": preflight["supported"], "max_seconds": 3,
@@ -939,6 +945,7 @@ def vehicle_test_blinkers():
             if authenticated:
                 _end_blinker_test(now)
             preflight.get("sender", {}).pop("id", None)
+            preflight.get("sender", {}).pop("voice_id", None)
             return jsonify({"status": "blocked", "preflight": preflight}), 409
         if action == "renew":
             if not authenticated:

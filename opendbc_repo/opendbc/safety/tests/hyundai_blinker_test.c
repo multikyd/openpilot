@@ -89,7 +89,14 @@ int main(void) {
     set_timer(0x100U); p=command(bus,3); CHECK(safety_tx_hook(&p)); // timer wrap
     set_relay_malfunction(true); p=command(bus,0); CHECK(!safety_tx_hook(&p));
   }
-  // TBT is independently enabled and requires motion and a fresh neutral stalk.
+  // Enabling TBT must not require a stalk sample for a stationary app test.
+  reset(1024U | 2048U);
+  feed(0U, 0U, true, false, 0U);
+  set_controls_allowed(false);
+  CANPacket_t stationary = command(0U, 3U);
+  CHECK(safety_tx_hook(&stationary));
+
+  // Moving TBT requires a fresh neutral stalk.
   reset(1024U | 2048U);
   feed(0U, 500U, false, false, 0U);
   CANPacket_t tbt = command(0U, 4U);

@@ -9,7 +9,7 @@ from opendbc.car.hyundai.hyundaicanfd import CanBus
 from opendbc.car.hyundai.values import HyundaiFlags, Buttons, CarControllerParams, CAR, CAN_GEARS
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.hyundai.steering_diagnostics import SteeringDiagnostics
-from opendbc.car.hyundai.blinker_test import BlinkerTestSender, REQUEST, SAFETY_FLAG, TBT_REQUEST, TBT_SAFETY_FLAG
+from opendbc.car.hyundai.blinker_test import BlinkerTestSender, SAFETY_FLAG, TBT_REQUEST, TBT_SAFETY_FLAG
 from openpilot.common.swaglog import cloudlog
 
 VisualAlert = structs.CarControl.HUDControl.VisualAlert
@@ -118,8 +118,10 @@ class CarController(CarControllerBase):
     self.angle_limit_counter = 0
     self.steering_diagnostics = SteeringDiagnostics()
     tbt_blinker = any(int(c.safetyParam) & TBT_SAFETY_FLAG for c in CP.safetyConfigs)
-    self.blinker_test = (BlinkerTestSender(request=TBT_REQUEST if tbt_blinker else REQUEST, tbt=tbt_blinker) if
-      any(int(c.safetyParam) & SAFETY_FLAG for c in CP.safetyConfigs) else None)
+    stationary_blinker = any(int(c.safetyParam) & SAFETY_FLAG for c in CP.safetyConfigs)
+    self.blinker_test = BlinkerTestSender(allow_moving=tbt_blinker) if stationary_blinker else None
+    self.tbt_blinker = BlinkerTestSender(request=TBT_REQUEST, tbt=True) if tbt_blinker and stationary_blinker else None
+    self.spas_sender = self.blinker_test
 
     self.last_spas_poll_nanos = -20_000_000
     self.accel_last = 0
@@ -389,7 +391,16 @@ class CarController(CarControllerBase):
                           self.CAN.ECAN % 4 == (1 if hda2 and not camera_scc else 0))
         stock_fresh = 0 <= now - getattr(CS, "stock_spas_time", 0) < .25
         stock_active = not stock_fresh or getattr(CS, "stock_spas_mode", 7) not in (0, 3)
-        test_command = self.blinker_test.update(now, CS.out, CC, test_supported, stock_active)
+        # Keep one owner until its neutral release frames finish. Give an
+        # eligible app request priority when choosing the next owner.
+        if not self.spas_sender.clear_frames:
+          sender = self.blinker_test
+          if self.tbt_blinker is not None and not sender.has_request(now):
+            sender = self.tbt_blinker
+          if sender is not self.spas_sender:
+            sender.last_status = -1.0
+            self.spas_sender = sender
+        test_command = self.spas_sender.update(now, CS.out, CC, test_supported, stock_active)
         if test_command is not None and test_supported:
           can_sends.append(self.packer.make_can_msg("SPAS2", self.CAN.ECAN,
                                                    {"BLINKER_CONTROL": test_command}))

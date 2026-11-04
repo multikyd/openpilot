@@ -251,7 +251,7 @@ static bool hyundai_canfd_tx_hook(const CANPacket_t *msg) {
                         (safety_get_ts_elapsed(now, hyundai_canfd_tbt_stalk_ts) < 350000U);
     const bool stationary_ok = hyundai_canfd_test_stopped && brake_pressed && !gas_pressed && !controls_allowed;
     tx = format_ok && fresh && interval_ok && !hyundai_canfd_test_timeout &&
-         (hyundai_canfd_tbt_blinker ? tbt_ok : stationary_ok);
+         (stationary_ok || (hyundai_canfd_tbt_blinker && tbt_ok));
     if (tx) {
       if (!hyundai_canfd_test_burst) hyundai_canfd_test_start = now;
       hyundai_canfd_tbt_wait_seen |= hyundai_canfd_tbt_blinker && tbt_wait;

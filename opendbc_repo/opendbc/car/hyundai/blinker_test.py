@@ -1,4 +1,4 @@
-"""Stationary SPAS2-only experiment. No steering, ECU takeover, or driving use."""
+"""Short-lived SPAS2 requests for app tests and TBT."""
 import json
 import math
 import os
@@ -34,7 +34,19 @@ def read_json(path):
     return {}
 
 
-def conditions(cs, cc):
+def moving_speed_ok(cs):
+  return not cs.standstill and .3 <= cs.vEgo <= 40 / 3.6
+
+
+def conditions(cs, cc, *, allow_moving=False):
+  if allow_moving and not cs.standstill:
+    checks = {"can_valid": cs.canValid, "gear": str(cs.gearShifter) == "drive",
+              "moving_speed": moving_speed_ok(cs), "doors_closed": not cs.doorOpen,
+              "seatbelt": not cs.seatbeltUnlatched,
+              "automatic_control_off": not (cc.enabled or cc.latActive or cc.longActive),
+              "stalk_unavailable": cs.blinkerStalkSupported and cs.blinkerStalkValid,
+              "driver_stalk": not (cs.leftBlinkerStalk or cs.rightBlinkerStalk)}
+    return next((key for key, value in checks.items() if not value), "ok")
   checks = {"can_valid": bool(cs.canValid), "gear": str(cs.gearShifter) in ("park", "drive"),
             "stationary": bool(cs.standstill and math.isfinite(cs.vEgo) and abs(cs.vEgo) < 0.05),
             "brake": bool(cs.brakePressed), "gas_released": not cs.gasPressed,
@@ -66,8 +78,9 @@ def cancel_active(now):
 
 
 class BlinkerTestSender:
-  def __init__(self, request=REQUEST, status=STATUS, cancel=CANCEL, *, tbt=False):
+  def __init__(self, request=REQUEST, status=STATUS, cancel=CANCEL, *, tbt=False, allow_moving=False):
     self.tbt = tbt
+    self.allow_moving = allow_moving
     self.max_seconds = TBT_WAIT_MAX_SECONDS if tbt else MAX_SECONDS
     self.request_path, self.status_path, self.cancel_path = request, status, cancel
     self.lamp_was_off = False
@@ -80,6 +93,12 @@ class BlinkerTestSender:
     self.reason = "idle"
     self.last_status = -1.0
 
+  def has_request(self, now):
+    request = read_json(self.request_path)
+    expires = request.get("expires")
+    return (request.get("action") in ("left", "right") and
+            type(expires) in (int, float) and 0 < expires - now <= LEASE_SECONDS + .05)
+
   def update(self, now, cs, cc, supported, stock_spas_active=False):
     """Called at 50Hz. Return 0/3/4 to pack, or None for no test message."""
     req = read_json(self.request_path)
@@ -87,13 +106,13 @@ class BlinkerTestSender:
     if self.tbt:
       waiting = (req.get("stationary") is True and cs.standstill and abs(cs.vEgo) < .05 and
                  not cs.gasPressed and (cs.brakePressed or cc.longActive))
-      moving = not cs.standstill and .3 <= cs.vEgo <= 40 / 3.6
+      moving = moving_speed_ok(cs)
       permitted = (cs.canValid and cs.blinkerStalkSupported and cs.blinkerStalkValid and
                    str(cs.gearShifter) == "drive" and not cs.doorOpen and not cs.seatbeltUnlatched and
                    math.isfinite(cs.vEgo) and (waiting or moving))
       reason = "ok" if permitted else "tbt_vehicle_guard"
     else:
-      reason = conditions(cs, cc)
+      reason = conditions(cs, cc, allow_moving=self.allow_moving)
     action = req.get("action")
     if not supported:
       reason = "unsupported_car_or_bus"
