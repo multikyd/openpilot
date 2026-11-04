@@ -922,6 +922,29 @@ def vehicle_test_capabilities():
     }]})
 
 
+@app.route("/tests/steering/preview", methods=["POST"])
+def vehicle_test_steering_preview():
+    payload = request.get_json(silent=True)
+    target = payload.get("target_angle_deg") if isinstance(payload, dict) else None
+    if type(target) is not int or not -30 <= target <= 30:
+        return jsonify({"status": "invalid_target_angle", "transmitted": False}), 400
+    from opendbc.can import CANPacker
+
+    # Build a diagnostic sample only. No sendcan publication or steering session.
+    packer = CANPacker("hyundai_canfd_generated")
+    address, data, _ = packer.make_can_msg("SPAS1", 0, {
+        "NEW_SIGNAL_1": target,
+        "NEW_SIGNAL_2": 3,
+    })
+    if address != 0x165 or len(data) != 24:
+        return jsonify({"status": "preview_pack_failed", "transmitted": False}), 503
+    preflight = vehicle_test_preflight()
+    angle = preflight.get("steering_angle_deg") if preflight["fresh"] else None
+    return jsonify({"status": "preview", "target_angle_deg": target,
+                    "steering_angle_deg": angle, "transmitted": False,
+                    "can_preview": {"address": address, "length": len(data), "data_hex": data.hex()}})
+
+
 @app.route("/tests/blinkers", methods=["POST"])
 def vehicle_test_blinkers():
     global _vehicle_test_session

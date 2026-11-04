@@ -5,6 +5,7 @@ from uuid import uuid4
 from opendbc.car.hyundai.blinker_test import CANCEL, TBT_REQUEST, TBT_MAX_SECONDS, TBT_WAIT_MAX_SECONDS, moving_speed_ok, read_json, write_json
 
 TURN_MAX_START_DISTANCE = 30.0
+UNKNOWN_WIDTH_MAX_START_DISTANCE = 35.0
 
 
 class TbtBlinker:
@@ -62,7 +63,9 @@ class TbtBlinker:
     # Navigation reports the next road width, a proxy for junction size.
     width_extra = min(10., max(0., 2. * (next_road_width - 5.)))
     if cs.leftBlinkerStalk or cs.rightBlinkerStalk or (cs.leftBlinker and cs.rightBlinker):
-      if self.request_id is not None or 0 <= distance <= TURN_MAX_START_DISTANCE + width_extra:
+      manual_window = (UNKNOWN_WIDTH_MAX_START_DISTANCE if next_road_width <= 0
+                       else TURN_MAX_START_DISTANCE + width_extra)
+      if self.request_id is not None or 0 <= distance <= manual_window:
         self.cancelled = True
       self.stop(now)
       return
@@ -78,7 +81,7 @@ class TbtBlinker:
     threshold = (20. if waiting else max(15., min(TURN_MAX_START_DISTANCE, 3. * speed))) + width_extra
     if moving and next_road_width <= 0:
       # Some navigation sources omit road width entirely.
-      threshold = min(TURN_MAX_START_DISTANCE, threshold + 5.)
+      threshold = min(UNKNOWN_WIDTH_MAX_START_DISTANCE, threshold + 10.)
     if self.request_id is None:
       if not 0 <= distance <= threshold or cs.leftBlinker or cs.rightBlinker:
         return
