@@ -252,6 +252,8 @@ class MiciOffroadAlerts(Scroller):
 
     # Add regular alerts sorted by severity
     for key, config in sorted(OFFROAD_ALERTS.items(), key=lambda x: x[1].get("severity", 0), reverse=True):
+      if key == "Offroad_Pairing":
+        continue
       severity = config.get("severity", 0)
       alert_data = AlertData(key=key, text="", severity=severity, icon=config.get("icon"))
       self.sorted_alerts.append(alert_data)
