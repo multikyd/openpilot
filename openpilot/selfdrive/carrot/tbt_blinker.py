@@ -2,7 +2,9 @@
 import math
 from uuid import uuid4
 
-from opendbc.car.hyundai.blinker_test import CANCEL, TBT_REQUEST, TBT_MAX_SECONDS, TBT_WAIT_MAX_SECONDS, read_json, write_json
+from opendbc.car.hyundai.blinker_test import CANCEL, TBT_REQUEST, TBT_MAX_SECONDS, TBT_WAIT_MAX_SECONDS, moving_speed_ok, read_json, write_json
+
+TURN_MAX_START_DISTANCE = 30.0
 
 
 class TbtBlinker:
@@ -30,12 +32,14 @@ class TbtBlinker:
       self.centered_since = None
       self.last_center_sample = None
 
-  def update(self, now, code, distance, age, cs, enabled, *, held=False):
+  def update(self, now, code, distance, age, cs, enabled, *, held=False, next_road_width=0):
     valid_turn = (code in (12, 13, 16, 19) and math.isfinite(distance) and 0 <= age <= 2.)
     direction = "left" if code in (12, 16) else "right"
     if valid_turn:
       next_turn = (direction != self.turn_direction or
-                   (self.previous_distance is not None and self.previous_distance <= 15 and distance >= 45))
+                   (self.previous_distance is not None and
+                    (distance - self.previous_distance >= 45 or
+                     (self.previous_distance <= 15 and distance >= 45))))
       if next_turn:
         self.stop(now)
         self.turn_direction = direction
@@ -55,20 +59,23 @@ class TbtBlinker:
       self.stop(now)
       return
 
+    # Navigation reports the next road width, a proxy for junction size.
+    width_extra = min(10., max(0., 2. * (next_road_width - 5.)))
     if cs.leftBlinkerStalk or cs.rightBlinkerStalk or (cs.leftBlinker and cs.rightBlinker):
-      self.cancelled = True
+      if self.request_id is not None or 0 <= distance <= TURN_MAX_START_DISTANCE + width_extra:
+        self.cancelled = True
       self.stop(now)
       return
 
     speed = cs.vEgo
     waiting = cs.standstill and abs(speed) < .05 and held and not cs.gasPressed
-    moving = not cs.standstill and .3 <= speed <= 40 / 3.6
+    moving = moving_speed_ok(cs)
     if not math.isfinite(speed) or not (waiting or moving):
       self.stop(now)
       return
     self.stationary_wait = self.stationary_wait or waiting
 
-    threshold = 20. if waiting else max(15., min(30., 3. * speed))
+    threshold = (20. if waiting else max(15., min(TURN_MAX_START_DISTANCE, 3. * speed))) + width_extra
     if self.request_id is None:
       if not 0 <= distance <= threshold or cs.leftBlinker or cs.rightBlinker:
         return

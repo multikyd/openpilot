@@ -71,11 +71,11 @@ int main(void) {
     p=command(bus,3); p.data[0]^=1U; CHECK(!safety_tx_hook(&p));
     p=command(bus,3); p.data_len_code=12; CHECK(!safety_tx_hook(&p));
     p=command(bus,3); p.data_len_code=14; CHECK(!safety_tx_hook(&p));
-    reset(f|1024U); feed(bus,2,true,false,3); set_controls_allowed(false);
+    reset(f|1024U); feed(bus,13,true,false,3); set_controls_allowed(false);
     p=command(bus,3); CHECK(!safety_tx_hook(&p)); // even tiny wheel motion
-    reset(f|1024U); feed(bus,0,false,false,3); p=command(bus,3); CHECK(!safety_tx_hook(&p));
-    reset(f|1024U); feed(bus,0,true,true,3); set_controls_allowed(false); p=command(bus,3); CHECK(!safety_tx_hook(&p));
-    reset(f|1024U); feed(bus,0,true,false,3); set_controls_allowed(true); p=command(bus,3); CHECK(!safety_tx_hook(&p));
+    reset(f|1024U); feed(bus,0,false,false,3); p=command(bus,3); CHECK(safety_tx_hook(&p));
+    reset(f|1024U); feed(bus,0,true,true,3); set_controls_allowed(false); p=command(bus,3); CHECK(safety_tx_hook(&p));
+    reset(f|1024U); feed(bus,0,true,false,3); set_controls_allowed(true); p=command(bus,3); CHECK(safety_tx_hook(&p));
     reset(f|1024U); feed(bus,0,true,false,3); set_controls_allowed(false); set_timer(timer_cnt+100000U);
     p=command(bus,3); CHECK(!safety_tx_hook(&p)); // stale sensors
     p=command(bus,0); CHECK(safety_tx_hook(&p)); // release always possible
@@ -98,7 +98,7 @@ int main(void) {
 
   // Moving TBT requires a fresh neutral stalk.
   reset(1024U | 2048U);
-  feed(0U, 500U, false, false, 0U);
+  feed(0U, 13U, false, false, 0U);
   CANPacket_t tbt = command(0U, 4U);
   CHECK(!safety_tx_hook(&tbt));
   CANPacket_t lamp = pkt(0x413U, 0U, 8U);
@@ -123,10 +123,11 @@ int main(void) {
   stalk.data[4] = 0U;
   stalk_crc(&stalk);
   safety_rx_hook(&stalk);
+  feed(0U, 0U, false, true, 0U);
+  set_controls_allowed(true);
+  CHECK(safety_tx_hook(&tbt));
+  set_timer(timer_cnt + 20000U);
   feed(0U, 0U, false, false, 0U);
-  set_controls_allowed(false);
-  CHECK(!safety_tx_hook(&tbt));
-  feed(0U, 0U, true, false, 0U);
   CHECK(safety_tx_hook(&tbt));
   set_timer(timer_cnt + 20000U);
   feed(0U, 1281U, false, false, 0U);

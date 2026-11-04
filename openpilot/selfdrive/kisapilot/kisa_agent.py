@@ -860,17 +860,23 @@ def vehicle_test_preflight():
                         not (cp.flags & HyundaiFlags.ENABLE_BLINKERS) and
                         any(int(c.safetyParam) & SAFETY_FLAG for c in cp.safetyConfigs))
                     moving_configured = any((int(c.safetyParam) & moving_flags) == moving_flags for c in cp.safetyConfigs)
-            result["moving_test_enabled"] = bool(result["supported"] and moving_configured and panda_fresh and
-                any((int(p.safetyParam) & moving_flags) == moving_flags for p in sm["pandaStates"]))
+            panda_moving_configured = panda_fresh and any(
+                (int(p.safetyParam) & moving_flags) == moving_flags for p in sm["pandaStates"])
+            result["moving_configured_in_car_params"] = moving_configured
+            result["moving_configured_in_panda"] = bool(panda_moving_configured)
+            result["moving_test_enabled"] = bool(result["supported"] and moving_configured and panda_moving_configured)
             if result["fresh"]:
                 cs, cc, sd = sm["carState"], sm["carControl"], sm["selfdriveState"]
-                result.update(gear=str(cs.gearShifter), stationary=bool(cs.standstill and abs(cs.vEgo) < .05),
+                result.update(gear=str(cs.gearShifter), stationary=bool(cs.standstill),
                     brake_pressed=bool(cs.brakePressed), gas_released=not cs.gasPressed,
                     automatic_control_off=not (cc.enabled or cc.latActive or cc.longActive or sd.enabled),
                     left_observed=bool(cs.leftBlinker), right_observed=bool(cs.rightBlinker))
-                reason = conditions(cs, cc, allow_moving=result["moving_test_enabled"])
-                if sd.enabled:
-                    reason = "automatic_control_off"
+                steering_angle = float(cs.steeringAngleDeg)
+                if float("-inf") < steering_angle < float("inf"):
+                    result["steering_angle_deg"] = steering_angle
+                reason = conditions(cs, allow_moving=result["moving_test_enabled"])
+                if not cs.standstill and not result["moving_test_enabled"]:
+                    reason = "moving_not_configured" if not moving_configured else "moving_panda_not_ready"
                 if not result["supported"]:
                     reason = "unsupported_car_or_configuration"
                 result["reason"] = reason

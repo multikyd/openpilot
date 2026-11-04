@@ -1345,15 +1345,18 @@ class CarrotServ:
 
 
     tbt_now = time.monotonic()
+    # This subscriber polls at 10 Hz; check sample validity and age directly.
+    def tbt_fresh(service):
+      return sm.valid[service] and 0 <= tbt_now - sm.recv_time[service] < .25
+
     try:
       self.tbt_blinker.update(tbt_now, self.nTBTTurnType, self.xDistToTurn,
                               tbt_now-self.tbt_blinker_stamp, CS,
                               self.params.get_bool("TbtBlinkerExperiment") and
-                              sm.all_checks(['carState', 'selfdriveState']) and
-                              0 <= tbt_now-sm.recv_time['carState'] < .25,
+                              tbt_fresh('carState') and tbt_fresh('selfdriveState'),
                               held=bool(CS is not None and (CS.brakePressed or
-                                        (sm.all_checks(['carControl']) and sm['carControl'].longActive and
-                                         0 <= tbt_now-sm.recv_time['carControl'] < .25))))
+                                        (tbt_fresh('carControl') and sm['carControl'].longActive))),
+                              next_road_width=self.nTBTNextRoadWidth)
     except OSError:
       # Existing requests expire if IPC cannot be refreshed.
       pass

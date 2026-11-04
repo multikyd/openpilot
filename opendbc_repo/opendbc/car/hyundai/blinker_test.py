@@ -35,23 +35,20 @@ def read_json(path):
 
 
 def moving_speed_ok(cs):
-  return not cs.standstill and .3 <= cs.vEgo <= 40 / 3.6
+  return not cs.standstill and abs(cs.vEgo) <= 40 / 3.6
 
 
-def conditions(cs, cc, *, allow_moving=False):
+def conditions(cs, *, allow_moving=False):
   if allow_moving and not cs.standstill:
     checks = {"can_valid": cs.canValid, "gear": str(cs.gearShifter) == "drive",
               "moving_speed": moving_speed_ok(cs), "doors_closed": not cs.doorOpen,
               "seatbelt": not cs.seatbeltUnlatched,
-              "automatic_control_off": not (cc.enabled or cc.latActive or cc.longActive),
               "stalk_unavailable": cs.blinkerStalkSupported and cs.blinkerStalkValid,
               "driver_stalk": not (cs.leftBlinkerStalk or cs.rightBlinkerStalk)}
     return next((key for key, value in checks.items() if not value), "ok")
   checks = {"can_valid": bool(cs.canValid), "gear": str(cs.gearShifter) in ("park", "drive"),
-            "stationary": bool(cs.standstill and math.isfinite(cs.vEgo) and abs(cs.vEgo) < 0.05),
-            "brake": bool(cs.brakePressed), "gas_released": not cs.gasPressed,
-            "doors_closed": not cs.doorOpen, "seatbelt": not cs.seatbeltUnlatched,
-            "automatic_control_off": not (cc.enabled or cc.latActive or cc.longActive)}
+            "stationary": bool(cs.standstill), "moving_speed": abs(cs.vEgo) <= 40 / 3.6,
+            "doors_closed": not cs.doorOpen, "seatbelt": not cs.seatbeltUnlatched}
   return next((key for key, value in checks.items() if not value), "ok")
 
 
@@ -112,7 +109,7 @@ class BlinkerTestSender:
                    math.isfinite(cs.vEgo) and (waiting or moving))
       reason = "ok" if permitted else "tbt_vehicle_guard"
     else:
-      reason = conditions(cs, cc, allow_moving=self.allow_moving)
+      reason = conditions(cs, allow_moving=self.allow_moving)
     action = req.get("action")
     if not supported:
       reason = "unsupported_car_or_bus"

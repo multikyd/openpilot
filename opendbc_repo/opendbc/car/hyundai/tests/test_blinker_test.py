@@ -34,6 +34,11 @@ class SenderTest(unittest.TestCase):
  def test_no_request_no_unsolicited_zero(self):
   self.sender=m.BlinkerTestSender(self.path,self.status)
   self.path.unlink();self.assertIsNone(self.update())
+ def test_ipedal_stop_without_brake(self):
+  self.cs.brakePressed = False
+  self.cs.gasPressed = True
+  self.assertEqual(self.update(),3)
+
  def test_release_ten_neutral_packets(self):
   self.assertEqual(self.update(),3)
   self.req['action']='stop';self.write()
@@ -50,19 +55,19 @@ class SenderTest(unittest.TestCase):
  def test_three_second_cutoff(self):
   self.update();self.now=103.;self.req['expires']=103.;self.write();self.assertEqual(self.update(),0)
  def test_all_vehicle_conditions_interrupt(self):
-  changes={'canValid':False,'gearShifter':'reverse','standstill':False,'vEgo':.05,
-           'brakePressed':False,'gasPressed':True,'doorOpen':True,'seatbeltUnlatched':True}
+  changes={'canValid':False,'gearShifter':'reverse','standstill':False,'vEgo':40 / 3.6 + .01,
+           'doorOpen':True,'seatbeltUnlatched':True}
   for field,value in changes.items():
    self.sender=m.BlinkerTestSender(self.path,self.status);self.cs=vehicle();self.assertEqual(self.update(),0);self.assertEqual(self.update(),3)
    setattr(self.cs,field,value);self.assertEqual(self.update(),0,field)
- def test_controls_interrupt(self):
+ def test_automation_does_not_interrupt_app_test(self):
   for field in ('enabled','latActive','longActive'):
    self.sender=m.BlinkerTestSender(self.path,self.status);self.cc=control();self.assertEqual(self.update(),0);self.assertEqual(self.update(),3)
-   setattr(self.cc,field,True);self.assertEqual(self.update(),0)
+   setattr(self.cc,field,True);self.assertEqual(self.update(),3)
  def test_unknown_gears_and_nan(self):
   for gear in ('reverse','neutral','unknown'):
-   self.cs.gearShifter=gear;self.assertNotEqual(m.conditions(self.cs,self.cc),'ok')
-  self.cs.gearShifter='drive';self.cs.vEgo=float('nan');self.assertNotEqual(m.conditions(self.cs,self.cc),'ok')
+   self.cs.gearShifter=gear;self.assertNotEqual(m.conditions(self.cs),'ok')
+  self.cs.gearShifter='drive';self.cs.vEgo=float('nan');self.assertNotEqual(m.conditions(self.cs),'ok')
  def test_no_other_vehicle_or_bus(self):
   self.sender=m.BlinkerTestSender(self.path,self.status)
   self.assertIsNone(self.sender.update(self.now,self.cs,self.cc,False))

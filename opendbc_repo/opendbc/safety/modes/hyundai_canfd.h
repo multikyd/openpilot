@@ -117,9 +117,10 @@ static void hyundai_canfd_rx_hook(const CANPacket_t *msg) {
       hyundai_canfd_tbt_moving = true;
       for (int i = 8; i < 16; i += 2) {
         const unsigned wheel_speed = GET_BYTES_LE(msg, i, 2) & 0x3FFFU;
-        hyundai_canfd_test_stopped &= wheel_speed <= 1U;
-        hyundai_canfd_tbt_moving &= (wheel_speed >= 35U) && (wheel_speed <= 1280U);
+        hyundai_canfd_test_stopped &= wheel_speed <= HYUNDAI_STANDSTILL_THRSLD;
+        hyundai_canfd_tbt_moving &= wheel_speed <= 1280U;
       }
+      hyundai_canfd_tbt_moving &= !hyundai_canfd_test_stopped;
       hyundai_canfd_test_wheel_ts = now;
       hyundai_canfd_test_seen |= 1U;
     }
@@ -249,9 +250,8 @@ static bool hyundai_canfd_tx_hook(const CANPacket_t *msg) {
     const bool tbt_ok = (hyundai_canfd_tbt_moving || tbt_wait) && hyundai_canfd_tbt_stalk_neutral &&
                         hyundai_canfd_tbt_stalk_seen &&
                         (safety_get_ts_elapsed(now, hyundai_canfd_tbt_stalk_ts) < 350000U);
-    const bool stationary_ok = hyundai_canfd_test_stopped && brake_pressed && !gas_pressed && !controls_allowed;
     tx = format_ok && fresh && interval_ok && !hyundai_canfd_test_timeout &&
-         (stationary_ok || (hyundai_canfd_tbt_blinker && tbt_ok));
+         (hyundai_canfd_test_stopped || (hyundai_canfd_tbt_blinker && tbt_ok));
     if (tx) {
       if (!hyundai_canfd_test_burst) hyundai_canfd_test_start = now;
       hyundai_canfd_tbt_wait_seen |= hyundai_canfd_tbt_blinker && tbt_wait;
