@@ -243,7 +243,21 @@ class Controls:
         enabled=(self.sm.all_checks(['modelV2', 'carState']) and
                  0. <= guard_now-self.sm.logMonoTime['carState'] * 1e-9 <= .1),
         camera_offset=self.camera_offset, actuator_delay=steer_actuator_delay)
-      new_desired_curvature = smooth_value(guarded_curvature, self.desired_curvature, 0.1)
+      # Reduce filter lag only once the model has started the requested maneuver.
+      meta = model_v2.meta
+      right_entry = (meta.laneChangeDirection == LaneChangeDirection.right and
+                     CS.rightBlinker and not CS.leftBlinker and not CS.rightBlindspot and
+                     guarded_curvature > max(0.0, self.desired_curvature))
+      left_entry = (meta.laneChangeDirection == LaneChangeDirection.left and
+                    CS.leftBlinker and not CS.rightBlinker and not CS.leftBlindspot and
+                    guarded_curvature < min(0.0, self.desired_curvature))
+      lane_change_entry = (meta.laneChangeState == LaneChangeState.laneChangeStarting and
+                           not CS.steeringPressed and (right_entry or left_entry) and
+                           self.sm.all_checks(['modelV2', 'carState']) and
+                           0. <= guard_now-self.sm.logMonoTime['carState'] * 1e-9 <= .1 and
+                           0. <= guard_now-self.sm.logMonoTime['modelV2'] * 1e-9 <= .15)
+      new_desired_curvature = smooth_value(guarded_curvature, self.desired_curvature,
+                                            0.06 if lane_change_entry else 0.1)
 
     if not model_lane_guard_used:
       self.model_lane_guard.reset()
