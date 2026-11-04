@@ -1,5 +1,6 @@
 from opendbc.car import Bus, get_safety_config, structs
 from opendbc.car.hyundai.hyundaicanfd import CanBus
+from opendbc.car.hyundai.blinker_stalk import BlinkerStalk, STALK_ADDR
 from opendbc.car.hyundai.values import HyundaiFlags, CAR, DBC, HyundaiSafetyFlags, HyundaiExtFlags
 from opendbc.car.hyundai.radar_interface import RADAR_START_ADDR
 from opendbc.car.interfaces import CarInterfaceBase
@@ -23,6 +24,20 @@ class CarInterface(CarInterfaceBase):
   CarState = CarState
   CarController = CarController
   RadarInterface = RadarInterface
+
+  def __init__(self, CP):
+    super().__init__(CP)
+    self.blinker_stalk = BlinkerStalk(CanBus(CP).ECAN) if CP.carFingerprint == CAR.HYUNDAI_IONIQ_5_PE else None
+
+  def update(self, can_packets):
+    ret = super().update(can_packets)
+    if self.blinker_stalk is not None:
+      ret.blinkerStalkSupported = True
+      valid, left, right = self.blinker_stalk.update(can_packets)
+      ret.blinkerStalkValid = valid
+      ret.leftBlinkerStalk = left
+      ret.rightBlinkerStalk = right
+    return ret
 
   DRIVABLE_GEARS = (structs.CarState.GearShifter.sport, structs.CarState.GearShifter.manumatic)
   @staticmethod
@@ -132,7 +147,7 @@ class CarInterface(CarInterfaceBase):
       if (candidate == CAR.HYUNDAI_IONIQ_5_PE and 0x165 in fingerprint[CAN.ECAN] and
           0x16A in fingerprint[CAN.ECAN] and not (ret.flags & HyundaiFlags.ENABLE_BLINKERS)):
         ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.STATIONARY_BLINKER_TEST.value
-        if 0x413 in fingerprint[CAN.ECAN] and Params().get_bool("TbtBlinkerExperiment"):
+        if fingerprint[CAN.ECAN].get(STALK_ADDR) == 8 and Params().get_bool("TbtBlinkerExperiment"):
           ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.TBT_BLINKER_TEST.value
 
       if ret.flags & HyundaiFlags.CANFD_LKA_STEERING:

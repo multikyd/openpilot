@@ -10,6 +10,16 @@ static CANPacket_t pkt(unsigned addr, unsigned bus, unsigned dlc) {
 static void crc(CANPacket_t *p) {
   unsigned c = hyundai_common_canfd_compute_checksum(p); p->data[0] = c & 255U; p->data[1] = c >> 8U;
 }
+static void stalk_crc(CANPacket_t *p) {
+  uint8_t value = 0U;
+  for (int i = 1; i < 8; i++) {
+    value ^= p->data[i];
+    for (int bit = 0; bit < 8; bit++) {
+      value = (uint8_t)((value << 1U) ^ (((value & 0x80U) != 0U) ? 0x1dU : 0U));
+    }
+  }
+  p->data[0] = value ^ 0x65U;
+}
 static CANPacket_t command(unsigned bus, unsigned value) {
   CANPacket_t p = pkt(0x16a, bus, 13); p.data[16] = value << 5U; crc(&p); return p;
 }
@@ -84,14 +94,27 @@ int main(void) {
   feed(0U, 500U, false, false, 0U);
   CANPacket_t tbt = command(0U, 4U);
   CHECK(!safety_tx_hook(&tbt));
-  CANPacket_t stalk = pkt(0x413U, 0U, 8U);
+  CANPacket_t lamp = pkt(0x413U, 0U, 8U);
+  safety_rx_hook(&lamp);
+  CHECK(!safety_tx_hook(&tbt));
+  CANPacket_t stalk = pkt(0x3c1U, 1U, 8U);
+  stalk_crc(&stalk);
+  safety_rx_hook(&stalk);
+  CHECK(!safety_tx_hook(&tbt));
+  stalk.bus = 0U;
+  stalk.data[0] ^= 1U;
+  safety_rx_hook(&stalk);
+  CHECK(!safety_tx_hook(&tbt));
+  stalk_crc(&stalk);
   safety_rx_hook(&stalk);
   CHECK(safety_tx_hook(&tbt));
   set_timer(timer_cnt + 20000U);
-  stalk.data[1] = 4U;
+  stalk.data[4] = 0x40U;
+  stalk_crc(&stalk);
   safety_rx_hook(&stalk);
   CHECK(!safety_tx_hook(&tbt));
-  stalk.data[1] = 0U;
+  stalk.data[4] = 0U;
+  stalk_crc(&stalk);
   safety_rx_hook(&stalk);
   feed(0U, 0U, false, false, 0U);
   set_controls_allowed(false);
@@ -101,7 +124,7 @@ int main(void) {
   set_timer(timer_cnt + 20000U);
   feed(0U, 1281U, false, false, 0U);
   CHECK(!safety_tx_hook(&tbt));
-  set_timer(timer_cnt + 250000U);
+  set_timer(timer_cnt + 350000U);
   feed(0U, 500U, false, false, 0U);
   CHECK(!safety_tx_hook(&tbt));
   CANPacket_t release = command(0U, 0U);

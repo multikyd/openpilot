@@ -478,13 +478,6 @@ class CarState(CarStateBase):
     left_blinker_lamp = blinkers_info["LEFT_LAMP"] or blinkers_info["LEFT_LAMP_ALT"]
     right_blinker_lamp = blinkers_info["RIGHT_LAMP"] or blinkers_info["RIGHT_LAMP_ALT"]
     ret.leftBlinker, ret.rightBlinker = self.update_blinker_from_lamp(50, left_blinker_lamp, right_blinker_lamp)
-    if self.CP.carFingerprint == CAR.HYUNDAI_IONIQ_5_PE:
-      ret.blinkerStalkSupported = True
-      stalk_stamp = cp.ts_nanos["BLINKERS"]["LEFT_STALK"]
-      ret.blinkerStalkValid = stalk_stamp > 0 and 0 <= cp.last_nonempty_nanos - stalk_stamp <= 250_000_000
-      if ret.blinkerStalkValid:
-        ret.leftBlinkerStalk = bool(blinkers_info["LEFT_STALK"])
-        ret.rightBlinkerStalk = bool(blinkers_info["RIGHT_STALK"])
 
     if self.CP.enableBsm:
       cp_bsm = cp_cam if self.CP.flags & HyundaiFlags.CAMERA_SCC.value else cp

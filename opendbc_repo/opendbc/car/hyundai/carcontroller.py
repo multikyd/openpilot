@@ -121,6 +121,7 @@ class CarController(CarControllerBase):
     self.blinker_test = (BlinkerTestSender(request=TBT_REQUEST if tbt_blinker else REQUEST, tbt=tbt_blinker) if
       any(int(c.safetyParam) & SAFETY_FLAG for c in CP.safetyConfigs) else None)
 
+    self.last_spas_poll_nanos = -20_000_000
     self.accel_last = 0
     self.apply_torque_last = 0
     self.car_fingerprint = CP.carFingerprint
@@ -378,7 +379,9 @@ class CarController(CarControllerBase):
         can_sends.extend(hyundaicanfd.create_lfahda_cluster(self.packer, CS, self.CAN, CC.longActive, CC.latActive))
 
       # The test shares card's single sendcan publisher; no SPAS1 or ECU-disable.
-      if self.blinker_test is not None and self.frame % 2 == 0:
+      if self.blinker_test is not None and now_nanos - self.last_spas_poll_nanos >= 20_000_000:
+        # Controller ticks can bunch after a scheduling delay. Pace by time.
+        self.last_spas_poll_nanos = now_nanos
         now = now_nanos / 1e9
         test_supported = (self.CP.carFingerprint == CAR.HYUNDAI_IONIQ_5_PE and
                           any(int(c.safetyParam) & SAFETY_FLAG for c in self.CP.safetyConfigs) and

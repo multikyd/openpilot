@@ -1489,6 +1489,19 @@
   },
   {
     "group": "Curv/Safety/Nav",
+    "title": {
+      "ko": "TBT 자동 방향지시등 (실험)",
+      "en": "TBT Auto Turn Signals (Experimental)"
+    },
+    "param": "TbtBlinkerExperiment",
+    "value_type": "BOOL",
+    "description": {
+      "ko": "아이오닉 5 PE에서 내비 좌·우회전 안내에 맞춰 방향지시등을 켭니다. 처음 켠 뒤에는 C4를 재시작하세요. 끄기는 즉시 반영됩니다.",
+      "en": "Signals for navigation turns on Ioniq 5 PE. Restart C4 after enabling for the first time. Turning it off takes effect immediately."
+    }
+  },
+  {
+    "group": "Curv/Safety/Nav",
     "title": { "ko": "자동 회전 제어 모드", "en": "Auto Turn Control Mode" },
     "param": "AutoTurnControl",
     "min_value": 0,

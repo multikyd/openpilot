@@ -92,11 +92,17 @@ static uint32_t hyundai_canfd_get_checksum(const CANPacket_t *msg) {
 // vehicle's required CAN checks or disengaging longitudinal/lateral control.
 static void hyundai_canfd_tbt_stalk_rx(const CANPacket_t *msg) {
   const unsigned pt_bus = hyundai_canfd_lka_steering && !hyundai_camera_scc ? 1U : 0U;
-  if (hyundai_canfd_tbt_blinker && msg_matches(msg, 0x413U, pt_bus) && (GET_LEN(msg) == 8U)) {
-    const bool hazards = ((msg->data[2] & 0x50U) == 0x50U) || ((msg->data[7] & 0x28U) == 0x28U);
-    hyundai_canfd_tbt_stalk_neutral = ((msg->data[1] & 5U) == 0U) && !hazards;
+  if (hyundai_canfd_tbt_blinker && msg_matches(msg, 0x3c1U, pt_bus) && (GET_LEN(msg) == 8U)) {
+    uint8_t crc = 0U;
+    for (int i = 1; i < 8; i++) {
+      crc ^= msg->data[i];
+      for (int bit = 0; bit < 8; bit++) {
+        crc = (uint8_t)((crc << 1U) ^ (((crc & 0x80U) != 0U) ? 0x1dU : 0U));
+      }
+    }
+    hyundai_canfd_tbt_stalk_seen = (crc ^ 0x65U) == msg->data[0];
+    hyundai_canfd_tbt_stalk_neutral = ((msg->data[3] & 0x40U) == 0U) && ((msg->data[4] & 0x51U) == 0U);
     hyundai_canfd_tbt_stalk_ts = microsecond_timer_get();
-    hyundai_canfd_tbt_stalk_seen = true;
   }
 }
 
@@ -242,7 +248,7 @@ static bool hyundai_canfd_tx_hook(const CANPacket_t *msg) {
     const bool tbt_wait = hyundai_canfd_test_stopped && !gas_pressed && (brake_pressed || controls_allowed);
     const bool tbt_ok = (hyundai_canfd_tbt_moving || tbt_wait) && hyundai_canfd_tbt_stalk_neutral &&
                         hyundai_canfd_tbt_stalk_seen &&
-                        (safety_get_ts_elapsed(now, hyundai_canfd_tbt_stalk_ts) < 250000U);
+                        (safety_get_ts_elapsed(now, hyundai_canfd_tbt_stalk_ts) < 350000U);
     const bool stationary_ok = hyundai_canfd_test_stopped && brake_pressed && !gas_pressed && !controls_allowed;
     tx = format_ok && fresh && interval_ok && !hyundai_canfd_test_timeout &&
          (hyundai_canfd_tbt_blinker ? tbt_ok : stationary_ok);

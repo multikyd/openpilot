@@ -205,7 +205,7 @@ bool safety_rx_hook(const CANPacket_t *msg) {
   if (valid && whitelisted) {
     current_hooks->rx(msg);
   }
-  if (valid && (current_safety_mode == SAFETY_HYUNDAI_CANFD) && (msg->addr == 0x413U)) {
+  if (valid && (current_safety_mode == SAFETY_HYUNDAI_CANFD) && (msg->addr == 0x3c1U)) {
     hyundai_canfd_tbt_stalk_rx(msg);
   }
 
