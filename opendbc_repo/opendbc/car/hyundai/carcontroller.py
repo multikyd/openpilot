@@ -9,7 +9,7 @@ from opendbc.car.hyundai.hyundaicanfd import CanBus
 from opendbc.car.hyundai.values import HyundaiFlags, Buttons, CarControllerParams, CAR, CAN_GEARS
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.hyundai.steering_diagnostics import SteeringDiagnostics
-from opendbc.car.hyundai.blinker_test import BlinkerTestSender, SAFETY_FLAG
+from opendbc.car.hyundai.blinker_test import BlinkerTestSender, REQUEST, SAFETY_FLAG, TBT_REQUEST, TBT_SAFETY_FLAG
 from openpilot.common.swaglog import cloudlog
 
 VisualAlert = structs.CarControl.HUDControl.VisualAlert
@@ -117,7 +117,8 @@ class CarController(CarControllerBase):
     self.packer = CANPacker(dbc_names[Bus.pt])
     self.angle_limit_counter = 0
     self.steering_diagnostics = SteeringDiagnostics()
-    self.blinker_test = (BlinkerTestSender() if
+    tbt_blinker = any(int(c.safetyParam) & TBT_SAFETY_FLAG for c in CP.safetyConfigs)
+    self.blinker_test = (BlinkerTestSender(request=TBT_REQUEST if tbt_blinker else REQUEST, tbt=tbt_blinker) if
       any(int(c.safetyParam) & SAFETY_FLAG for c in CP.safetyConfigs) else None)
 
     self.accel_last = 0

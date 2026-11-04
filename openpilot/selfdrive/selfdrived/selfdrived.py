@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import os
 import time
+
+from opendbc.car.hyundai.blinker_test import active_status
 import threading
 
 import openpilot.cereal.messaging as messaging
@@ -134,6 +136,7 @@ class SelfdriveD:
     self.dm_uncertain_alerted = False
     self.state_machine = StateMachine()
     self.bump_sound_sequence = None
+    self.last_blinker_voice_id = None
     self.signal_voice_armed = True
     self.signal_voice_last = -100.0
     self.signal_voice_active_since = None
@@ -521,6 +524,13 @@ class SelfdriveD:
     if not self.initialized:
       return
     now = time.monotonic()
+    blinker = active_status(now)
+    voice_id = blinker.get("voice_id")
+    direction = blinker.get("action")
+    if (blinker.get("lamp_confirmed") is True and isinstance(voice_id, str) and
+        direction in ("left", "right") and voice_id != self.last_blinker_voice_id):
+      self.last_blinker_voice_id = voice_id
+      self.events.add(EventName.tbtBlinkerLeft if direction == "left" else EventName.tbtBlinkerRight)
     cm = self.sm['carrotMan']
     sequence = cm.bumpSoundSequence
     changed = self.bump_sound_sequence is not None and sequence > self.bump_sound_sequence

@@ -1048,6 +1048,12 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
     ET.PERMANENT: Alert("", "", AlertStatus.normal, AlertSize.none,
                         Priority.LOWEST, VisualAlert.none, AudibleAlert.bumpChime, .2),
   },
+  EventName.tbtBlinkerLeft: {
+    ET.PERMANENT: EngagementAlert(AudibleAlert.tbtBlinkerLeft),
+  },
+  EventName.tbtBlinkerRight: {
+    ET.PERMANENT: EngagementAlert(AudibleAlert.tbtBlinkerRight),
+  },
   EventName.signalCoast: {
     ET.WARNING: EngagementAlert(AudibleAlert.signalCoast),
   },

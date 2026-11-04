@@ -156,6 +156,8 @@ struct OnroadEvent @0xc4fa6047f024e718 {
     softHold @117;
     bumpApproaching @118;
     signalCoast @119;
+    tbtBlinkerLeft @120;
+    tbtBlinkerRight @121;
   }
 }
 
@@ -888,6 +890,8 @@ struct SelfdriveState {
     dingdong @20;
     bumpChime @21;
     signalCoast @22;
+    tbtBlinkerLeft @23;
+    tbtBlinkerRight @24;
   }
 
   enum OpenpilotState @0xdbe58b96d2d1ac61 {

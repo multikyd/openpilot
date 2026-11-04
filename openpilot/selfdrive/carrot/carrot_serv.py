@@ -14,6 +14,7 @@ from ftplib import FTP
 from openpilot.cereal import log
 import openpilot.cereal.messaging as messaging
 from openpilot.selfdrive.carrot.bump_learning import BumpMemory, BumpPassage
+from openpilot.selfdrive.carrot.tbt_blinker import TbtBlinker
 from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.carrot.signal_memory import SignalMemory, GREEN, blank as blank_signal
 from openpilot.selfdrive.carrot.manual_stop_line import ManualStopLineMemory
@@ -83,6 +84,8 @@ import collections
 class CarrotServ:
   def __init__(self):
     self.params = Params()
+    self.tbt_blinker = TbtBlinker()
+    self.tbt_blinker_stamp = 0.
     self.signal_params = Params('/dev/shm/params')
     self.signal_memory = SignalMemory(self.params.get('SignalLearningData'), learn=not PC and 'REPLAY' not in os.environ)
     self.manual_stop_lines = ManualStopLineMemory(self.params.get("ManualStopLineData"))
@@ -1341,6 +1344,19 @@ class CarrotServ:
       self.left_sec = left_sec
 
 
+    tbt_now = time.monotonic()
+    try:
+      self.tbt_blinker.update(tbt_now, self.nTBTTurnType, self.xDistToTurn,
+                              tbt_now-self.tbt_blinker_stamp, CS,
+                              self.params.get_bool("TbtBlinkerExperiment") and
+                              sm.all_checks(['carState', 'selfdriveState']) and
+                              0 <= tbt_now-sm.recv_time['carState'] < .25,
+                              held=bool(CS is not None and (CS.brakePressed or
+                                        (sm.all_checks(['carControl']) and sm['carControl'].longActive and
+                                         0 <= tbt_now-sm.recv_time['carControl'] < .25))))
+    except OSError:
+      # Existing requests expire if IPC cannot be refreshed.
+      pass
     self._update_cmd()
     msg = messaging.new_message('carrotMan')
     msg.valid = True
@@ -1550,6 +1566,7 @@ class CarrotServ:
 
       self.nPosSpeed = float(json.get("nPosSpeed", self.nPosSpeed))
       self._update_tbt()
+      self.tbt_blinker_stamp = now if "nTBTTurnType" in json and "nTBTDist" in json else 0.
       self._update_sdi()
       # print(
       #   f"sdi = {self.nSdiType}, {self.nSdiSpeedLimit}, {self.nSdiPlusType}, " +

@@ -79,5 +79,32 @@ int main(void) {
     set_timer(0x100U); p=command(bus,3); CHECK(safety_tx_hook(&p)); // timer wrap
     set_relay_malfunction(true); p=command(bus,0); CHECK(!safety_tx_hook(&p));
   }
+  // TBT is independently enabled and requires motion and a fresh neutral stalk.
+  reset(1024U | 2048U);
+  feed(0U, 500U, false, false, 0U);
+  CANPacket_t tbt = command(0U, 4U);
+  CHECK(!safety_tx_hook(&tbt));
+  CANPacket_t stalk = pkt(0x413U, 0U, 8U);
+  safety_rx_hook(&stalk);
+  CHECK(safety_tx_hook(&tbt));
+  set_timer(timer_cnt + 20000U);
+  stalk.data[1] = 4U;
+  safety_rx_hook(&stalk);
+  CHECK(!safety_tx_hook(&tbt));
+  stalk.data[1] = 0U;
+  safety_rx_hook(&stalk);
+  feed(0U, 0U, false, false, 0U);
+  set_controls_allowed(false);
+  CHECK(!safety_tx_hook(&tbt));
+  feed(0U, 0U, true, false, 0U);
+  CHECK(safety_tx_hook(&tbt));
+  set_timer(timer_cnt + 20000U);
+  feed(0U, 1281U, false, false, 0U);
+  CHECK(!safety_tx_hook(&tbt));
+  set_timer(timer_cnt + 250000U);
+  feed(0U, 500U, false, false, 0U);
+  CHECK(!safety_tx_hook(&tbt));
+  CANPacket_t release = command(0U, 0U);
+  CHECK(safety_tx_hook(&release));
   printf("PASS %u native safety checks\n",tests); return 0;
 }

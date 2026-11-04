@@ -1,7 +1,10 @@
+import time
+
 import numpy as np
 import pyray as rl
 from openpilot.cereal import log
 from opendbc.car.structs import car
+from opendbc.car.hyundai.blinker_test import cancel_active
 from openpilot.cereal.visionipc import VisionStreamType
 from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus
 from openpilot.selfdrive.ui.mici.onroad import SIDE_PANEL_WIDTH
@@ -219,6 +222,8 @@ class AugmentedRoadView(CameraView):
     bookmark = self._bookmark_icon.interacting()
     self._touch_press = None
     if bookmark or self._touch_dragged:
+      return
+    if ui_state.started and cancel_active(time.monotonic()):
       return
     super()._handle_mouse_release(mouse_pos)
 

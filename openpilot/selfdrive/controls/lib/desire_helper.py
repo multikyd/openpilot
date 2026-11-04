@@ -279,7 +279,15 @@ class DesireHelper:
   # ─────────────────────────────────────────────
 
   def _update_driver_blinker(self, carstate):
-    driver_blinker_state = carstate.leftBlinker * 1 + carstate.rightBlinker * 2
+    if getattr(carstate, "blinkerStalkSupported", False):
+      stalk_valid = carstate.blinkerStalkValid and carstate.canValid
+      left = stalk_valid and carstate.leftBlinkerStalk
+      right = stalk_valid and carstate.rightBlinkerStalk
+      # Both lamps may mean hazards even when a stalk is being held.
+      driver_blinker_state = (BLINKER_LEFT * left + BLINKER_RIGHT * right
+                              if not (carstate.leftBlinker and carstate.rightBlinker) else 0)
+    else:
+      driver_blinker_state = BLINKER_LEFT * carstate.leftBlinker + BLINKER_RIGHT * carstate.rightBlinker
     driver_blinker_changed = driver_blinker_state != self.driver_blinker_state
     self.driver_blinker_state = driver_blinker_state
 

@@ -132,6 +132,8 @@ class CarInterface(CarInterfaceBase):
       if (candidate == CAR.HYUNDAI_IONIQ_5_PE and 0x165 in fingerprint[CAN.ECAN] and
           0x16A in fingerprint[CAN.ECAN] and not (ret.flags & HyundaiFlags.ENABLE_BLINKERS)):
         ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.STATIONARY_BLINKER_TEST.value
+        if 0x413 in fingerprint[CAN.ECAN] and Params().get_bool("TbtBlinkerExperiment"):
+          ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.TBT_BLINKER_TEST.value
 
       if ret.flags & HyundaiFlags.CANFD_LKA_STEERING:
         ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.CANFD_LKA_STEERING.value
@@ -251,7 +253,8 @@ class CarInterface(CarInterfaceBase):
         ret.flags & HyundaiFlags.CANFD_CAMERA_SCC and not ret.openpilotLongitudinalControl):
       # This existing camera-SCC/LKA stock-longitudinal safety configuration
       # uses a different RX bus. Keep the optional test disabled on it.
-      ret.safetyConfigs[-1].safetyParam &= ~HyundaiSafetyFlags.STATIONARY_BLINKER_TEST.value
+      ret.safetyConfigs[-1].safetyParam &= ~(HyundaiSafetyFlags.STATIONARY_BLINKER_TEST |
+                                            HyundaiSafetyFlags.TBT_BLINKER_TEST).value
 
     return ret
 

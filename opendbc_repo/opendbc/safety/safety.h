@@ -205,6 +205,9 @@ bool safety_rx_hook(const CANPacket_t *msg) {
   if (valid && whitelisted) {
     current_hooks->rx(msg);
   }
+  if (valid && (current_safety_mode == SAFETY_HYUNDAI_CANFD) && (msg->addr == 0x413U)) {
+    hyundai_canfd_tbt_stalk_rx(msg);
+  }
 
   // Handles gas, brake, and regen paddle
   generic_rx_checks();

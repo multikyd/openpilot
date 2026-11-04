@@ -165,6 +165,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"AutoRoadSpeedAdjust", {PERSISTENT, INT, "-1"}},
     {"AutoCurveSpeedLowerLimit", {PERSISTENT, INT, "40"}},
     {"AutoCurveSpeedFactor", {PERSISTENT, INT, "80"}},
+    {"TbtBlinkerExperiment", {PERSISTENT, BOOL, "0"}},
     {"AutoTurnControl", {PERSISTENT, INT, "0"}},
     {"AutoTurnControlSpeedTurn", {PERSISTENT, INT, "20"}},
     {"AutoTurnControlTurnEnd", {PERSISTENT, INT, "6"}},

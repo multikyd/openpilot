@@ -86,6 +86,7 @@ class HyundaiSafetyFlags(IntFlag):
   FCEV_GAS = 256
   ALT_LIMITS_2 = 512
   STATIONARY_BLINKER_TEST = 1024
+  TBT_BLINKER_TEST = 2048
 
 
 class HyundaiFlags(IntFlag):

@@ -50,6 +50,12 @@
 
 // SPAS2-only blinker test. Never whitelist SPAS1 (parking steering request).
 static bool hyundai_canfd_blinker_test = false;
+static bool hyundai_canfd_tbt_blinker = false;
+static bool hyundai_canfd_tbt_moving = false;
+static bool hyundai_canfd_tbt_wait_seen = false;
+static bool hyundai_canfd_tbt_stalk_neutral = false;
+static bool hyundai_canfd_tbt_stalk_seen = false;
+static uint32_t hyundai_canfd_tbt_stalk_ts = 0U;
 static uint8_t hyundai_canfd_test_seen = 0U;
 static uint32_t hyundai_canfd_test_wheel_ts = 0U;
 static uint32_t hyundai_canfd_test_brake_ts = 0U;
@@ -82,16 +88,31 @@ static uint32_t hyundai_canfd_get_checksum(const CANPacket_t *msg) {
   return chksum;
 }
 
+// Optional observation: missing stalk data blocks SPAS2 without changing the
+// vehicle's required CAN checks or disengaging longitudinal/lateral control.
+static void hyundai_canfd_tbt_stalk_rx(const CANPacket_t *msg) {
+  const unsigned pt_bus = hyundai_canfd_lka_steering && !hyundai_camera_scc ? 1U : 0U;
+  if (hyundai_canfd_tbt_blinker && msg_matches(msg, 0x413U, pt_bus) && (GET_LEN(msg) == 8U)) {
+    const bool hazards = ((msg->data[2] & 0x50U) == 0x50U) || ((msg->data[7] & 0x28U) == 0x28U);
+    hyundai_canfd_tbt_stalk_neutral = ((msg->data[1] & 5U) == 0U) && !hazards;
+    hyundai_canfd_tbt_stalk_ts = microsecond_timer_get();
+    hyundai_canfd_tbt_stalk_seen = true;
+  }
+}
+
 static void hyundai_canfd_rx_hook(const CANPacket_t *msg) {
   const unsigned pt_bus = hyundai_canfd_lka_steering && !hyundai_camera_scc ? 1U : 0U;
   const unsigned int scc_bus = hyundai_camera_scc ? 2U : pt_bus;
 
   if (hyundai_canfd_blinker_test && (msg->bus == pt_bus)) {
     const uint32_t now = microsecond_timer_get();
-    if (msg->addr == 0xa0U) {
+    if ((msg->addr == 0xa0U) && (GET_LEN(msg) == 24U)) {
       hyundai_canfd_test_stopped = true;
+      hyundai_canfd_tbt_moving = true;
       for (int i = 8; i < 16; i += 2) {
-        hyundai_canfd_test_stopped &= (GET_BYTES_LE(msg, i, 2) & 0x3FFFU) <= 1U;
+        const unsigned wheel_speed = GET_BYTES_LE(msg, i, 2) & 0x3FFFU;
+        hyundai_canfd_test_stopped &= wheel_speed <= 1U;
+        hyundai_canfd_tbt_moving &= (wheel_speed >= 35U) && (wheel_speed <= 1280U);
       }
       hyundai_canfd_test_wheel_ts = now;
       hyundai_canfd_test_seen |= 1U;
@@ -204,6 +225,7 @@ static bool hyundai_canfd_tx_hook(const CANPacket_t *msg) {
     if (format_ok && (command == 0U)) {
       if (safety_get_ts_elapsed(now, hyundai_canfd_test_last) >= 1000000U) {
         hyundai_canfd_test_burst = false;
+        hyundai_canfd_tbt_wait_seen = false;
         hyundai_canfd_test_timeout = false;
       }
       return true;
@@ -212,16 +234,21 @@ static bool hyundai_canfd_tx_hook(const CANPacket_t *msg) {
                        (safety_get_ts_elapsed(now, hyundai_canfd_test_wheel_ts) < 100000U) &&
                        (safety_get_ts_elapsed(now, hyundai_canfd_test_brake_ts) < 100000U) &&
                        (safety_get_ts_elapsed(now, hyundai_canfd_test_gas_ts) < 100000U);
-    if (hyundai_canfd_test_burst && (safety_get_ts_elapsed(now, hyundai_canfd_test_start) >= 3200000U)) {
+    if (hyundai_canfd_test_burst && (safety_get_ts_elapsed(now, hyundai_canfd_test_start) >= (hyundai_canfd_tbt_wait_seen ? 120200000U : (hyundai_canfd_tbt_blinker ? 10200000U : 3200000U)))) {
       hyundai_canfd_test_timeout = true;
     }
     const bool interval_ok = !hyundai_canfd_test_burst ||
                              (safety_get_ts_elapsed(now, hyundai_canfd_test_last) >= 15000U);
+    const bool tbt_wait = hyundai_canfd_test_stopped && !gas_pressed && (brake_pressed || controls_allowed);
+    const bool tbt_ok = (hyundai_canfd_tbt_moving || tbt_wait) && hyundai_canfd_tbt_stalk_neutral &&
+                        hyundai_canfd_tbt_stalk_seen &&
+                        (safety_get_ts_elapsed(now, hyundai_canfd_tbt_stalk_ts) < 250000U);
+    const bool stationary_ok = hyundai_canfd_test_stopped && brake_pressed && !gas_pressed && !controls_allowed;
     tx = format_ok && fresh && interval_ok && !hyundai_canfd_test_timeout &&
-         hyundai_canfd_test_stopped && brake_pressed &&
-         !gas_pressed && !controls_allowed;
+         (hyundai_canfd_tbt_blinker ? tbt_ok : stationary_ok);
     if (tx) {
       if (!hyundai_canfd_test_burst) hyundai_canfd_test_start = now;
+      hyundai_canfd_tbt_wait_seen |= hyundai_canfd_tbt_blinker && tbt_wait;
       hyundai_canfd_test_burst = true;
       hyundai_canfd_test_last = now;
     }
@@ -404,6 +431,12 @@ static safety_config hyundai_canfd_init(uint16_t param) {
   hyundai_common_init(param);
   hyundai_canfd_blinker_test = GET_FLAG(param, 1024U) &&
     !(hyundai_canfd_lka_steering && hyundai_camera_scc && !hyundai_longitudinal);
+  hyundai_canfd_tbt_blinker = hyundai_canfd_blinker_test && GET_FLAG(param, 2048U);
+  hyundai_canfd_tbt_moving = false;
+  hyundai_canfd_tbt_wait_seen = false;
+  hyundai_canfd_tbt_stalk_neutral = false;
+  hyundai_canfd_tbt_stalk_seen = false;
+  hyundai_canfd_tbt_stalk_ts = 0U;
   hyundai_canfd_test_seen = 0U;
   hyundai_canfd_test_stopped = false;
   hyundai_canfd_test_burst = false;

@@ -257,6 +257,10 @@ struct CarState {
   cruiseGap @86 :Int8;
   cruiseButtons @87 :Float32;
   gasTok @88 :Bool;
+  blinkerStalkSupported @89 :Bool;
+  blinkerStalkValid @90 :Bool;
+  leftBlinkerStalk @91 :Bool;
+  rightBlinkerStalk @92 :Bool;
 
   struct TPMS {
     unit @0 :Int8;
