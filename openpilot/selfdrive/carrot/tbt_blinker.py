@@ -76,6 +76,9 @@ class TbtBlinker:
     self.stationary_wait = self.stationary_wait or waiting
 
     threshold = (20. if waiting else max(15., min(TURN_MAX_START_DISTANCE, 3. * speed))) + width_extra
+    if moving and next_road_width <= 0:
+      # Some navigation sources omit road width entirely.
+      threshold = min(TURN_MAX_START_DISTANCE, threshold + 5.)
     if self.request_id is None:
       if not 0 <= distance <= threshold or cs.leftBlinker or cs.rightBlinker:
         return
