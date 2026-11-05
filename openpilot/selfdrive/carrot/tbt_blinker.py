@@ -4,8 +4,9 @@ from uuid import uuid4
 
 from opendbc.car.hyundai.blinker_test import CANCEL, TBT_REQUEST, TBT_MAX_SECONDS, TBT_WAIT_MAX_SECONDS, moving_speed_ok, read_json, write_json
 
-TURN_START_DISTANCE = 60.0
-TURN_MAX_START_DISTANCE = 70.0
+TURN_START_DISTANCE = 70.0
+TURN_MAX_START_DISTANCE = 90.0
+TURN_FALLBACK_START_DISTANCE = TURN_START_DISTANCE
 
 
 class TbtBlinker:
@@ -17,6 +18,7 @@ class TbtBlinker:
     self.request_id = None
     self.last_request_id = None
     self.start = 0.
+    self.request_distance_limit = 0.
     self.stationary_wait = False
     self.steered_into_turn = False
     self.centered_since = None
@@ -33,7 +35,7 @@ class TbtBlinker:
       self.centered_since = None
       self.last_center_sample = None
 
-  def update(self, now, code, distance, age, cs, enabled, *, held=False, next_road_width=0):
+  def update(self, now, code, distance, age, cs, enabled, *, held=False, next_road_width=0, lane_width=0.):
     valid_turn = (code in (12, 13, 16, 19) and math.isfinite(distance) and 0 <= age <= 2.)
     direction = "left" if code in (12, 16) else "right"
     if valid_turn:
@@ -60,9 +62,10 @@ class TbtBlinker:
       self.stop(now)
       return
 
-    # Navigation reports the next road width, a proxy for junction size.
-    width_extra = min(10., max(0., 2. * (next_road_width - 5.)))
-    moving_threshold = TURN_MAX_START_DISTANCE if next_road_width <= 0 else TURN_START_DISTANCE + width_extra
+    moving_threshold = TURN_FALLBACK_START_DISTANCE
+    if math.isfinite(lane_width) and 2. <= lane_width <= 5.:
+      width_fraction = min(1., max(0., (lane_width - 2.8) / (3.5 - 2.8)))
+      moving_threshold = TURN_START_DISTANCE + width_fraction * (TURN_MAX_START_DISTANCE - TURN_START_DISTANCE)
     if cs.leftBlinkerStalk or cs.rightBlinkerStalk or (cs.leftBlinker and cs.rightBlinker):
       if self.request_id is not None or 0 <= distance <= moving_threshold:
         self.cancelled = True
@@ -77,13 +80,16 @@ class TbtBlinker:
       return
     self.stationary_wait = self.stationary_wait or waiting
 
-    threshold = 20. + width_extra if waiting else moving_threshold
+    stopped_threshold = 20. + min(10., max(0., 2. * (next_road_width - 5.)))
+    threshold = stopped_threshold if waiting else moving_threshold
     if self.request_id is None:
       if not 0 <= distance <= threshold or cs.leftBlinker or cs.rightBlinker:
         return
       self.request_id = self.last_request_id = uuid4().hex
       self.start = now
-    elif distance > moving_threshold + 3:
+      # Keep the initial window when lane lines fade near the junction.
+      self.request_distance_limit = moving_threshold + 3.
+    elif distance > self.request_distance_limit:
       self.stop(now)
       return
 

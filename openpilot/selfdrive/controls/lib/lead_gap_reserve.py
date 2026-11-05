@@ -133,7 +133,7 @@ class NormalStopGap:
       self.reset()
       return None
     if self.stamp==stamp:
-      self.stopping=bool(self.armed and self.cap is not None and speed<.25 and lead.vLead<.2 and lead.dRel<2.85)
+      self.stopping=bool(self.armed and self.cap is not None and speed<.1 and lead.vLead<.2 and lead.dRel<=2.2)
       return self.cap
     dt=stamp-self.stamp if self.stamp is not None else 0.
     continuous=(self.identity==lead.radarTrackId and .01<=dt<=.2 and
@@ -153,7 +153,7 @@ class NormalStopGap:
     # Include a short actuator allowance rather than waiting until the last metre.
     room=max(.3,lead.dRel-2.5-.25*speed)
     target=-min(2.5,speed*speed/(2.*room))
-    if speed<.25 and lead.dRel<2.85 and lead.vLead<.2:
+    if speed<.1 and lead.dRel<=2.2 and lead.vLead<.2:
       target=min(target,-.5)
       self.stopping=True
     if self.cap is None:

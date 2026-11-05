@@ -1349,6 +1349,12 @@ class CarrotServ:
     def tbt_fresh(service):
       return sm.valid[service] and 0 <= tbt_now - sm.recv_time[service] < .25
 
+    lane_width = 0.
+    if tbt_fresh('lateralPlan'):
+      lateral_plan = sm['lateralPlan']
+      if min(lateral_plan.lProb, lateral_plan.rProb) >= .5:
+        lane_width = lateral_plan.laneWidth
+
     try:
       self.tbt_blinker.update(tbt_now, self.nTBTTurnType, self.xDistToTurn,
                               tbt_now-self.tbt_blinker_stamp, CS,
@@ -1356,7 +1362,7 @@ class CarrotServ:
                               tbt_fresh('carState') and tbt_fresh('selfdriveState'),
                               held=bool(CS is not None and (CS.brakePressed or
                                         (tbt_fresh('carControl') and sm['carControl'].longActive))),
-                              next_road_width=self.nTBTNextRoadWidth)
+                              next_road_width=self.nTBTNextRoadWidth, lane_width=lane_width)
     except OSError:
       # Existing requests expire if IPC cannot be refreshed.
       pass

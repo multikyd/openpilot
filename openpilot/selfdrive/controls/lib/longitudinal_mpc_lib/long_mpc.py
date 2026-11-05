@@ -759,7 +759,7 @@ class LongitudinalMpc:
                carrot.signal_follow.strength <= 0. and
                self.turn_loss_limit is None and cutin_accel_limit is None and jam_accel >= self.max_a-1e-6))
     self.yref[:,0] = 0.
-    if approach_bias > 0.:
+    if approach_bias != 0.:
       self.yref[:,0] = stop_approach_reference(
         approach_bias, self.v_solution, lead_xv_0[:,1], lead_0_obstacle,
         np.full(N+1, 1e6) if self.stop_approach.same_lead(radarstate.leadOne, radarstate.leadTwo) else lead_1_obstacle,
@@ -767,7 +767,7 @@ class LongitudinalMpc:
     approach_active = bool(np.any(self.yref[:,0] < 0.))
     if approach_active != self._stop_approach_active:
       cloudlog.event('low_speed_stop_approach', active=approach_active,
-                     bias_m=float(approach_bias), v_ego=float(v_ego),
+                     bias_m=float(abs(approach_bias)), v_ego=float(v_ego),
                      distance=float(radarstate.leadOne.dRel), lead_id=int(radarstate.leadOne.radarTrackId))
       self._stop_approach_active = approach_active
 
