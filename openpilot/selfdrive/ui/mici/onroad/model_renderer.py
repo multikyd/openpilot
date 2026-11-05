@@ -48,10 +48,12 @@ LL_NO_THROTTLE_COLORS = [
 # modelV2 provides geometry/probability, not painted-line color classification.
 UNKNOWN_LANE_RGB = (160, 160, 160)
 ROAD_EDGE_RGB = (255, 55, 55)
-DETECTED_LANE_RGB = {1: (255, 255, 255), 2: (255, 255, 0), 3: (60, 155, 255)}
+WHITE_LANE_RGB = (255, 255, 255)
+YELLOW_LANE_RGB = (255, 255, 0)
+READY_LANE_RGB = (0, 255, 100)
 
 
-def lane_line_rgb(index, left_lane, right_lane, valid=True):
+def lane_line_rgb(index, left_lane, right_lane, valid=True, *, left_ready=False, right_ready=False):
   # Only the two ego-lane boundaries have corresponding camera color signals.
   if not valid or index not in (1, 2):
     return UNKNOWN_LANE_RGB
@@ -59,11 +61,16 @@ def lane_line_rgb(index, left_lane, right_lane, valid=True):
     packed = int(left_lane if index == 1 else right_lane)
   except (TypeError, ValueError, OverflowError):
     return UNKNOWN_LANE_RGB
-  if packed < 0 or packed % 10 > 8:
-    return UNKNOWN_LANE_RGB
-  if packed % 10 in (3, 8):  # Camera identifies a road edge or barrier.
+  if packed >= 0 and packed % 10 in (3, 8):
     return ROAD_EDGE_RGB
-  return DETECTED_LANE_RGB.get(packed // 10, UNKNOWN_LANE_RGB)
+  if packed >= 0 and packed % 10 <= 8 and packed // 10 == 2:
+    return YELLOW_LANE_RGB
+  ready = left_ready if index == 1 else right_ready
+  if ready:
+    return READY_LANE_RGB
+  if packed >= 0 and packed % 10 <= 8 and packed // 10 in (1, 3):
+    return WHITE_LANE_RGB
+  return UNKNOWN_LANE_RGB
 
 
 @dataclass
@@ -332,10 +339,11 @@ class ModelRenderer(Widget):
                    sm.logMonoTime['carState'] > 0 and
                    abs(sm.logMonoTime['carState']-sm.logMonoTime['modelV2']) <= 500_000_000)
     left_lane, right_lane = cs.leftLaneLine, cs.rightLaneLine
+    left_ready, right_ready = cs.leftOemLaneChangeReady, cs.rightOemLaneChangeReady
     for i, lane_line in enumerate(self._lane_lines):
       if lane_line.projected_points.size == 0:
         continue
-      rgb = lane_line_rgb(i, left_lane, right_lane, color_valid)
+      rgb = lane_line_rgb(i, left_lane, right_lane, color_valid, left_ready=left_ready, right_ready=right_ready)
       color = self._get_ll_color(float(self._lane_line_probs[i]), rgb)
       draw_polygon(self._rect, lane_line.projected_points + offset, color)
 

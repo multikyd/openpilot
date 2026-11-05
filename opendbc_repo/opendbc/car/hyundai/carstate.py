@@ -556,6 +556,19 @@ class CarState(CarStateBase):
         if right_block:
           ret.rightBlindspot = True
 
+      lane_colors = self.adrv_info_161
+      lane_change = self.adrv_info_1ea
+      color_stamp = cp_cam.ts_nanos.get("ADRV_0x161", {}).get("COUNTER", 0)
+      state_stamp = cp_cam.ts_nanos.get("ADRV_0x1ea", {}).get("COUNTER", 0)
+      now = cp_cam._last_update_nanos
+      if (lane_colors is not None and lane_change is not None and
+          color_stamp > 0 and state_stamp > 0 and
+          0 <= now - color_stamp <= 200_000_000 and 0 <= now - state_stamp <= 200_000_000 and
+          lane_change["HDA_MODE2"] == 2 and lane_change["LANE_CHANGING"] == 0 and
+          lane_colors["LCA_LEFT_ARROW"] == 0 and lane_colors["LCA_RIGHT_ARROW"] == 0):
+        ret.leftOemLaneChangeReady = lane_colors["LANELINE_LEFT"] == 6
+        ret.rightOemLaneChangeReady = lane_colors["LANELINE_RIGHT"] == 6
+
       self.adrv_info_160 = cp_cam.vl["ADRV_0x160"] if self.ADRV_0x160 else None
       self.adrv_info_345 = cp_cam.vl["ADRV_0x345"] if self.ADRV_0x345 else None
       self.adrv_info_1da = cp_cam.vl["ADRV_0x1da"] if self.ADRV_0x1DA else None
