@@ -836,7 +836,7 @@ _vehicle_test_cooldown = 0.0
 
 def vehicle_test_preflight():
     global _vehicle_test_sm
-    from opendbc.car.hyundai.blinker_test import conditions, read_json, STATUS, SAFETY_FLAG, TBT_SAFETY_FLAG
+    from opendbc.car.hyundai.blinker_test import conditions, read_json, STATUS, SAFETY_FLAG, TBT_SAFETY_FLAG, MOVING_ROAD_SAFETY_FLAG
     result = {"fresh": False, "supported": False, "conditions_met": False, "reason": "vehicle_data_missing"}
     try:
         from openpilot.cereal import messaging
@@ -852,7 +852,7 @@ def vehicle_test_preflight():
                                   for name in ("carState", "carControl", "selfdriveState"))
             panda_fresh = sm.valid["pandaStates"] and 0 <= now - sm.recv_time["pandaStates"] < 1.5
             moving_flags = SAFETY_FLAG | TBT_SAFETY_FLAG
-            moving_configured = False
+            moving_configured = moving_road_configured = False
             raw = params.get("CarParams") if params is not None else None
             if raw:
                 with CarParams.from_bytes(raw) as cp:
@@ -860,11 +860,15 @@ def vehicle_test_preflight():
                         not (cp.flags & HyundaiFlags.ENABLE_BLINKERS) and
                         any(int(c.safetyParam) & SAFETY_FLAG for c in cp.safetyConfigs))
                     moving_configured = any((int(c.safetyParam) & moving_flags) == moving_flags for c in cp.safetyConfigs)
+                    moving_road_configured = any(int(c.safetyParam) & MOVING_ROAD_SAFETY_FLAG for c in cp.safetyConfigs)
             panda_moving_configured = panda_fresh and any(
                 (int(p.safetyParam) & moving_flags) == moving_flags for p in sm["pandaStates"])
             result["moving_configured_in_car_params"] = moving_configured
             result["moving_configured_in_panda"] = bool(panda_moving_configured)
             result["moving_test_enabled"] = bool(result["supported"] and moving_configured and panda_moving_configured)
+            result["moving_road_test_enabled"] = bool(result["moving_test_enabled"] and moving_road_configured and
+                params is not None and params.get_bool("MovingBlinkerRoadTest") and
+                any(int(p.safetyParam) & MOVING_ROAD_SAFETY_FLAG for p in sm["pandaStates"]))
             if result["fresh"]:
                 cs, cc, sd = sm["carState"], sm["carControl"], sm["selfdriveState"]
                 result.update(gear=str(cs.gearShifter), stationary=bool(cs.standstill),
@@ -874,7 +878,8 @@ def vehicle_test_preflight():
                 steering_angle = float(cs.steeringAngleDeg)
                 if float("-inf") < steering_angle < float("inf"):
                     result["steering_angle_deg"] = steering_angle
-                reason = conditions(cs, allow_moving=result["moving_test_enabled"])
+                reason = conditions(cs, allow_moving=result["moving_test_enabled"],
+                                    moving_road_test=result["moving_road_test_enabled"])
                 if not cs.standstill and not result["moving_test_enabled"]:
                     reason = "moving_not_configured" if not moving_configured else "moving_panda_not_ready"
                 if not result["supported"]:

@@ -52,6 +52,7 @@
 static bool hyundai_canfd_blinker_test = false;
 static bool hyundai_canfd_tbt_blinker = false;
 static bool hyundai_canfd_tbt_moving = false;
+static bool hyundai_canfd_moving_road_test = false;
 static bool hyundai_canfd_tbt_wait_seen = false;
 static bool hyundai_canfd_tbt_stalk_neutral = false;
 static bool hyundai_canfd_tbt_stalk_seen = false;
@@ -241,13 +242,17 @@ static bool hyundai_canfd_tx_hook(const CANPacket_t *msg) {
                        (safety_get_ts_elapsed(now, hyundai_canfd_test_wheel_ts) < 100000U) &&
                        (safety_get_ts_elapsed(now, hyundai_canfd_test_brake_ts) < 100000U) &&
                        (safety_get_ts_elapsed(now, hyundai_canfd_test_gas_ts) < 100000U);
-    if (hyundai_canfd_test_burst && (safety_get_ts_elapsed(now, hyundai_canfd_test_start) >= (hyundai_canfd_tbt_wait_seen ? 120200000U : (hyundai_canfd_tbt_blinker ? 10200000U : 3200000U)))) {
+    const bool moving_road = hyundai_canfd_moving_road_test &&
+                           !hyundai_canfd_tbt_moving && !hyundai_canfd_test_stopped;
+    const uint32_t max_duration = moving_road ? 3200000U :
+                                 (hyundai_canfd_tbt_wait_seen ? 120200000U : (hyundai_canfd_tbt_blinker ? 10200000U : 3200000U));
+    if (hyundai_canfd_test_burst && (safety_get_ts_elapsed(now, hyundai_canfd_test_start) >= max_duration)) {
       hyundai_canfd_test_timeout = true;
     }
     const bool interval_ok = !hyundai_canfd_test_burst ||
                              (safety_get_ts_elapsed(now, hyundai_canfd_test_last) >= 15000U);
     const bool tbt_wait = hyundai_canfd_test_stopped && !gas_pressed && (brake_pressed || controls_allowed);
-    const bool tbt_ok = (hyundai_canfd_tbt_moving || tbt_wait) && hyundai_canfd_tbt_stalk_neutral &&
+    const bool tbt_ok = (hyundai_canfd_tbt_moving || tbt_wait || moving_road) && hyundai_canfd_tbt_stalk_neutral &&
                         hyundai_canfd_tbt_stalk_seen &&
                         (safety_get_ts_elapsed(now, hyundai_canfd_tbt_stalk_ts) < 350000U);
     tx = format_ok && fresh && interval_ok && !hyundai_canfd_test_timeout &&
@@ -439,6 +444,7 @@ static safety_config hyundai_canfd_init(uint16_t param) {
     !(hyundai_canfd_lka_steering && hyundai_camera_scc && !hyundai_longitudinal);
   hyundai_canfd_tbt_blinker = hyundai_canfd_blinker_test && GET_FLAG(param, 2048U);
   hyundai_canfd_tbt_moving = false;
+  hyundai_canfd_moving_road_test = hyundai_canfd_tbt_blinker && GET_FLAG(param, 4096U);
   hyundai_canfd_tbt_wait_seen = false;
   hyundai_canfd_tbt_stalk_neutral = false;
   hyundai_canfd_tbt_stalk_seen = false;

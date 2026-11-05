@@ -1455,7 +1455,7 @@ class CarrotMan:
     merged = dict(rgdata)
     # Preserve route-local lane guidance omitted by the phone's flattened payload.
     if isinstance(raw_rgdata, dict):
-      for key in ('aheadLaneInfoData', 'nLaneDist', 'nLaneTurnCode', 'vpLanePointLat', 'vpLanePointLon'):
+      for key in ('aheadLaneInfoData', 'nLaneDist', 'nLaneTurnCode', 'vpLanePointLat', 'vpLanePointLon', 'roadCate'):
         if key in raw_rgdata:
           merged.setdefault(key, raw_rgdata[key])
     for group_key in ("guidance", "sdi", "lane"):
@@ -1565,6 +1565,7 @@ class CarrotMan:
     self.params_memory.remove("TrafficLight")
     self.params_memory.remove("TrafficLightContext")
     serv = self.carrot_serv
+    serv.navi_highway_stamp = None
     serv.active_count = serv.active_sdi_count = 0
     serv.nSdiType = serv.nSdiPlusType = serv.nSdiBlockType = serv.nSdiPlusBlockType = -1
     serv.nSdiDist = serv.nSdiPlusDist = serv.nSdiBlockDist = serv.nSdiPlusBlockDist = 0

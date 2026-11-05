@@ -87,6 +87,7 @@ class HyundaiSafetyFlags(IntFlag):
   ALT_LIMITS_2 = 512
   STATIONARY_BLINKER_TEST = 1024
   TBT_BLINKER_TEST = 2048
+  MOVING_BLINKER_ROAD_TEST = 4096
 
 
 class HyundaiFlags(IntFlag):

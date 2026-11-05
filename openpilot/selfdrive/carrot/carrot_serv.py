@@ -150,6 +150,7 @@ class CarrotServ:
     self.vpPosPointLat = 0.0
     self.vpPosPointLon = 0.0
     self.roadcate = 8
+    self.navi_highway_stamp = None
 
     self.nPosSpeed = 0.0
     self.nPosAngle = 0.0
@@ -1371,6 +1372,8 @@ class CarrotServ:
     msg.valid = True
     msg.carrotMan.activeCarrot = self.active_carrot
     msg.carrotMan.nRoadLimitSpeed = int(self.nRoadLimitSpeed)
+    highway_stamp = self.navi_highway_stamp
+    msg.carrotMan.naviHighway = highway_stamp is not None and 0 <= tbt_now - highway_stamp < 2.5
     msg.carrotMan.remote = remote_ip
     msg.carrotMan.xSpdType = -1 if nav_bump_passed else int(self.xSpdType)
     msg.carrotMan.xSpdLimit = 0 if nav_bump_passed else int(self.xSpdLimit)
@@ -1544,6 +1547,10 @@ class CarrotServ:
       self.nSdiPlusBlockType = _i(json.get("nSdiPlusBlockType"), -1)
       self.nSdiPlusBlockSpeed = _i(json.get("nSdiPlusBlockSpeed"), 0)
       self.nSdiPlusBlockDist = _i(json.get("nSdiPlusBlockDist"), 0)
+      # The legacy speed path defaults missing road categories to 0. Display requires explicit data.
+      road_category = json.get("roadcate", json.get("roadCate"))
+      highway = type(road_category) in (int, str) and road_category in (0, 1, "0", "1")
+      self.navi_highway_stamp = now if highway else None
       self.roadcate = _i(json.get("roadcate"), 0)
 
       ## GuidePoint

@@ -42,6 +42,16 @@ class TestLaneChangeCancel(unittest.TestCase):
     self.model.roadEdges[0].y = [-7.2+center]*33
     self.model.roadEdges[1].y = [7.2+center]*33
 
+  def test_left_yellow_boundary_blocks_edge_trigger(self):
+    self.cs.leftLaneLine = 11
+    self.cs.leftBlinker = True
+    self.tick()
+    self.assertEqual(self.helper.lane_change_state, log.LaneChangeState.preLaneChange)
+
+    self.cs.leftLaneLine = 25  # Yellow boundary with the edge transition type.
+    self.tick()
+    self.assertEqual(self.helper.lane_change_state, log.LaneChangeState.preLaneChange)
+
   def test_one_blinker_does_not_start_a_second_change(self):
     self.begin()
     self.tick(50, probability=0.)

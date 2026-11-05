@@ -9,7 +9,7 @@ from opendbc.car.hyundai.hyundaicanfd import CanBus
 from opendbc.car.hyundai.values import HyundaiFlags, Buttons, CarControllerParams, CAR, CAN_GEARS
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.hyundai.steering_diagnostics import SteeringDiagnostics
-from opendbc.car.hyundai.blinker_test import BlinkerTestSender, SAFETY_FLAG, TBT_REQUEST, TBT_SAFETY_FLAG
+from opendbc.car.hyundai.blinker_test import BlinkerTestSender, MOVING_ROAD_SAFETY_FLAG, SAFETY_FLAG, TBT_REQUEST, TBT_SAFETY_FLAG
 from openpilot.common.swaglog import cloudlog
 
 VisualAlert = structs.CarControl.HUDControl.VisualAlert
@@ -119,7 +119,8 @@ class CarController(CarControllerBase):
     self.steering_diagnostics = SteeringDiagnostics()
     tbt_blinker = any(int(c.safetyParam) & TBT_SAFETY_FLAG for c in CP.safetyConfigs)
     stationary_blinker = any(int(c.safetyParam) & SAFETY_FLAG for c in CP.safetyConfigs)
-    self.blinker_test = BlinkerTestSender(allow_moving=tbt_blinker) if stationary_blinker else None
+    moving_road_test = any(int(c.safetyParam) & MOVING_ROAD_SAFETY_FLAG for c in CP.safetyConfigs)
+    self.blinker_test = BlinkerTestSender(allow_moving=tbt_blinker, moving_road_test=moving_road_test) if stationary_blinker else None
     self.tbt_blinker = BlinkerTestSender(request=TBT_REQUEST, tbt=True) if tbt_blinker and stationary_blinker else None
     self.spas_sender = self.blinker_test
 

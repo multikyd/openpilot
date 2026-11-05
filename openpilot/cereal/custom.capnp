@@ -49,6 +49,7 @@ struct CarrotMan @0x81c2f05a394cf4af {
   bumpImpact @35 :Float32;
   bumpPassSpeed @36 :Float32;
   signalDisplay @37 :SignalDisplay;
+  naviHighway @38 :Bool;
 }
 
 struct SignalDisplay {

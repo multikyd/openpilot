@@ -6,6 +6,7 @@ from pathlib import Path
 
 SAFETY_FLAG = 1024
 TBT_SAFETY_FLAG = 2048
+MOVING_ROAD_SAFETY_FLAG = 4096
 TBT_REQUEST = Path("/dev/shm/kisa_tbt_blinker_request.json")
 TBT_MAX_SECONDS = 10.0
 TBT_WAIT_MAX_SECONDS = 120.0
@@ -38,10 +39,12 @@ def moving_speed_ok(cs):
   return not cs.standstill and abs(cs.vEgo) <= 40 / 3.6
 
 
-def conditions(cs, *, allow_moving=False):
+def conditions(cs, *, allow_moving=False, moving_road_test=False):
   if allow_moving and not cs.standstill:
+    valid_road_test_speed = moving_road_test and math.isfinite(cs.vEgo)
     checks = {"can_valid": cs.canValid, "gear": str(cs.gearShifter) == "drive",
-              "moving_speed": moving_speed_ok(cs), "doors_closed": not cs.doorOpen,
+              "moving_speed": moving_speed_ok(cs) or valid_road_test_speed,
+              "doors_closed": not cs.doorOpen,
               "seatbelt": not cs.seatbeltUnlatched,
               "stalk_unavailable": cs.blinkerStalkSupported and cs.blinkerStalkValid,
               "driver_stalk": not (cs.leftBlinkerStalk or cs.rightBlinkerStalk)}
@@ -75,9 +78,10 @@ def cancel_active(now):
 
 
 class BlinkerTestSender:
-  def __init__(self, request=REQUEST, status=STATUS, cancel=CANCEL, *, tbt=False, allow_moving=False):
+  def __init__(self, request=REQUEST, status=STATUS, cancel=CANCEL, *, tbt=False, allow_moving=False, moving_road_test=False):
     self.tbt = tbt
     self.allow_moving = allow_moving
+    self.moving_road_test = moving_road_test
     self.max_seconds = TBT_WAIT_MAX_SECONDS if tbt else MAX_SECONDS
     self.request_path, self.status_path, self.cancel_path = request, status, cancel
     self.lamp_was_off = False
@@ -109,7 +113,7 @@ class BlinkerTestSender:
                    math.isfinite(cs.vEgo) and (waiting or moving))
       reason = "ok" if permitted else "tbt_vehicle_guard"
     else:
-      reason = conditions(cs, allow_moving=self.allow_moving)
+      reason = conditions(cs, allow_moving=self.allow_moving, moving_road_test=self.moving_road_test)
     action = req.get("action")
     if not supported:
       reason = "unsupported_car_or_bus"

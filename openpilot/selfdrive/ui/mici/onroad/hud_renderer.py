@@ -259,13 +259,18 @@ class HudRenderer(Widget):
   def _draw_camera_offset(self, rect: rl.Rectangle) -> None:
     if not self._can_draw_top_icons or not ui_state.started or rect.width < 440:
       return
-    text = self._camera_offset_text
+    sm = ui_state.sm
+    highway = (sm.valid['carrotMan'] and sm.alive['carrotMan'] and
+               sm.recv_frame['carrotMan'] >= ui_state.started_frame and
+               0 <= time.monotonic()-sm.recv_time['carrotMan'] < 1 and sm['carrotMan'].naviHighway)
+    text = "Highway" if highway else self._camera_offset_text
+    badge_width = 120 if highway else 80
     size = 32
     measured = measure_text_cached(self._font_bold, text, size)
-    size *= min(1., 72 / max(1., measured.x))
+    size *= min(1., (badge_width - 8) / max(1., measured.x))
     width = measure_text_cached(self._font_bold, text, size).x
     center = rect.x + rect.width / 2
-    rl.draw_rectangle_rounded(rl.Rectangle(center-40, rect.y+HEADER_TOP, 80, 40), .2, 8, rl.Color(0, 0, 0, 190))
+    rl.draw_rectangle_rounded(rl.Rectangle(center-badge_width/2, rect.y+HEADER_TOP, badge_width, 40), .2, 8, rl.Color(0, 0, 0, 190))
     rl.draw_text_ex(self._font_bold, text, rl.Vector2(center-width/2, rect.y+7), size, 0, rl.WHITE)
 
   def _draw_model_source(self, rect: rl.Rectangle) -> None:

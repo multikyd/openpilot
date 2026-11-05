@@ -1502,6 +1502,16 @@
   },
   {
     "group": "Curv/Safety/Nav",
+    "title": { "ko": "주행 중 방향지시등 시험", "en": "Moving Turn Signal Road Test" },
+    "param": "MovingBlinkerRoadTest",
+    "value_type": "BOOL",
+    "description": {
+      "ko": "폐쇄 코스에서 아이오닉 5 PE 앱 버튼 시험에만 적용됩니다. TBT 실험 설정과 함께 켜고 C4를 재시작하세요.",
+      "en": "Closed-course Ioniq 5 PE app button test only. Enable with the TBT experiment and restart C4."
+    }
+  },
+  {
+    "group": "Curv/Safety/Nav",
     "title": { "ko": "자동 회전 제어 모드", "en": "Auto Turn Control Mode" },
     "param": "AutoTurnControl",
     "min_value": 0,

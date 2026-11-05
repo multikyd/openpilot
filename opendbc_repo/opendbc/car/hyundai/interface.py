@@ -149,6 +149,8 @@ class CarInterface(CarInterfaceBase):
         ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.STATIONARY_BLINKER_TEST.value
         if fingerprint[CAN.ECAN].get(STALK_ADDR) == 8 and Params().get_bool("TbtBlinkerExperiment"):
           ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.TBT_BLINKER_TEST.value
+          if Params().get_bool("MovingBlinkerRoadTest"):
+            ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.MOVING_BLINKER_ROAD_TEST.value
 
       if ret.flags & HyundaiFlags.CANFD_LKA_STEERING:
         ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.CANFD_LKA_STEERING.value

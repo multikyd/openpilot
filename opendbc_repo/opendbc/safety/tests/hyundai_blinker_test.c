@@ -137,5 +137,24 @@ int main(void) {
   CHECK(!safety_tx_hook(&tbt));
   CANPacket_t release = command(0U, 0U);
   CHECK(safety_tx_hook(&release));
+  // Separate high-speed button test flag, with a neutral physical stalk.
+  reset(1024U | 2048U | 4096U);
+  set_timer(1000000U);
+  stalk = pkt(0x3c1U, 0U, 8U);
+  stalk_crc(&stalk);
+  safety_rx_hook(&stalk);
+  feed(0U, 2560U, false, false, 0U);
+  tbt = command(0U, 3U);
+  set_controls_allowed(true);
+  CHECK(safety_tx_hook(&tbt)); // 80 km/h, assistance active
+  set_timer(4200000U);
+  stalk = pkt(0x3c1U, 0U, 8U);
+  stalk_crc(&stalk);
+  safety_rx_hook(&stalk);
+  feed(0U, 2560U, false, false, 0U);
+  tbt = command(0U, 3U);
+  CHECK(!safety_tx_hook(&tbt)); // high-speed duration ceiling
+  release = command(0U, 0U);
+  CHECK(safety_tx_hook(&release));
   printf("PASS %u native safety checks\n",tests); return 0;
 }

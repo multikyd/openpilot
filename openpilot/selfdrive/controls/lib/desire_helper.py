@@ -585,6 +585,8 @@ class DesireHelper:
       lane_line_info_edge_detect = False
       self.lane_line_info = lane_line_info % 10
 
+    left_yellow_boundary = blinker_state == BLINKER_LEFT and lane_line_info // 10 == 2
+
     # 차선/엣지 기반 lane change 가능 여부
     lane_change_available = (lane_available or edge_available) and lane_line_info < 20  # 20 미만이면 흰색 라인
 
@@ -700,7 +702,7 @@ class DesireHelper:
             self.lane_change_direction = LaneChangeDirection.none
           else:
             # 차선변경 시작 조건
-            if (lane_change_available and self.lane_change_delay == 0) or lane_line_info_edge_detect:
+            if not left_yellow_boundary and ((lane_change_available and self.lane_change_delay == 0) or lane_line_info_edge_detect):
               if self.blindspot_detected_counter > 0 and not ignore_bsd:
                 if torque_applied and not block_lanechange_bsd:
                   self.lane_change_state = LaneChangeState.laneChangeStarting
