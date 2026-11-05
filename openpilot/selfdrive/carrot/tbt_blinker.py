@@ -4,8 +4,8 @@ from uuid import uuid4
 
 from opendbc.car.hyundai.blinker_test import CANCEL, TBT_REQUEST, TBT_MAX_SECONDS, TBT_WAIT_MAX_SECONDS, moving_speed_ok, read_json, write_json
 
-TURN_START_DISTANCE = 60.0
-TURN_MAX_START_DISTANCE = 80.0
+TURN_START_DISTANCE = 70.0
+TURN_MAX_START_DISTANCE = 90.0
 TURN_FALLBACK_START_DISTANCE = TURN_START_DISTANCE
 
 
