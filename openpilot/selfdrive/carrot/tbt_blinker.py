@@ -7,6 +7,8 @@ from opendbc.car.hyundai.blinker_test import CANCEL, TBT_REQUEST, TBT_MAX_SECOND
 TURN_START_DISTANCE = 70.0
 TURN_MAX_START_DISTANCE = 90.0
 TURN_FALLBACK_START_DISTANCE = TURN_START_DISTANCE
+TURN_APPROACH_SECONDS = 4.0
+TURN_FINISH_SECONDS = 5.0
 
 
 class TbtBlinker:
@@ -21,6 +23,7 @@ class TbtBlinker:
     self.request_distance_limit = 0.
     self.stationary_wait = False
     self.steered_into_turn = False
+    self.finish_until = None
     self.centered_since = None
     self.last_center_sample = None
     self.cancelled = False
@@ -32,6 +35,7 @@ class TbtBlinker:
       self.request_id = None
       self.stationary_wait = False
       self.steered_into_turn = False
+      self.finish_until = None
       self.centered_since = None
       self.last_center_sample = None
 
@@ -43,15 +47,26 @@ class TbtBlinker:
                    (self.previous_distance is not None and
                     (distance - self.previous_distance >= 45 or
                      (self.previous_distance <= 15 and distance >= 45))))
-      if next_turn:
-        self.stop(now)
-        self.turn_direction = direction
-        self.turn_id = uuid4().hex
-        self.last_request_id = None
-        self.cancelled = False
-      self.previous_distance = distance
-      if distance < -5:
-        self.cancelled = True
+      # Navigation can advance at the turn point while the car is still turning.
+      passed_turn_point = distance < -5 or (next_turn and distance >= 45.)
+      if (self.finish_until is None and self.request_id is not None and self.steered_into_turn and
+          self.previous_distance is not None and -5. <= self.previous_distance <= 12. and passed_turn_point):
+        self.finish_until = now + TURN_FINISH_SECONDS
+      if self.finish_until is not None and now < self.finish_until:
+        direction, distance = self.turn_direction, 0.
+      else:
+        if self.finish_until is not None:
+          self.stop(now)
+          self.cancelled = True
+        if next_turn:
+          self.stop(now)
+          self.turn_direction = direction
+          self.turn_id = uuid4().hex
+          self.last_request_id = None
+          self.cancelled = False
+        self.previous_distance = distance
+        if distance < -5:
+          self.cancelled = True
 
     if self.last_request_id is not None and read_json(self.cancel).get("id") == self.last_request_id:
       self.cancelled = True
@@ -81,7 +96,8 @@ class TbtBlinker:
     self.stationary_wait = self.stationary_wait or waiting
 
     stopped_threshold = 20. + min(10., max(0., 2. * (next_road_width - 5.)))
-    threshold = stopped_threshold if waiting else moving_threshold
+    # Reserve time for the turn inside the moving request deadline.
+    threshold = stopped_threshold if waiting else min(moving_threshold, abs(speed) * TURN_APPROACH_SECONDS)
     if self.request_id is None:
       if not 0 <= distance <= threshold or cs.leftBlinker or cs.rightBlinker:
         return
@@ -94,6 +110,10 @@ class TbtBlinker:
       return
 
     angle = cs.steeringAngleDeg
+    if self.finish_until is not None and not math.isfinite(angle):
+      self.cancelled = True
+      self.stop(now)
+      return
     # Only recognize a turn near the navigation point and while moving.
     if moving and math.isfinite(angle):
       direction_angle = angle if direction == "left" else -angle
