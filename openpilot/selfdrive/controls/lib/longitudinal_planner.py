@@ -357,7 +357,8 @@ class LongitudinalPlanner:
                not (cs.gasPressed or cs.brakePressed) and carrot.desireState <= .1 and
                carrot.xState not in [XState.e2eStop, XState.e2eStopped] and fresh and
                sm.all_checks(['carState', 'radarState', 'modelV2', 'controlsState', 'selfdriveState'])),
-      desired_distance=self.mpc.desired_distance, planned_accel=output_a_target)
+      desired_distance=self.mpc.desired_distance, planned_accel=output_a_target,
+      previous_accel=self.output_a_target, plan_dt=self.dt)
     before_gap_a = output_a_target
     output_a_target, output_v_target_now, output_j_target = apply_lead_gap_cap(
       output_a_target, output_v_target_now, self.j_desired_trajectory[0], gap_cap,

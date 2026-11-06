@@ -13,13 +13,22 @@ class LeadGapReserve:
     self.distance = self.relative_speed = 0.
     self.confirm = 0.
     self.cap = 0.
+    self.approach_target = None
     self.recovery_confirm = 0.
     self.handover_confirm = 0.
     self.releasing = False
     self.reason = 'off'
 
+  def _accel_cap(self, previous_accel, plan_dt):
+    reserve_cap = self.cap if self.cap < 0. or self.releasing else None
+    if self.approach_target is None or previous_accel is None or not math.isfinite(previous_accel):
+      return reserve_cap
+    # Start from the command already sent, including when it was positive.
+    approach_cap = max(self.approach_target, previous_accel - .4 * plan_dt)
+    return approach_cap if reserve_cap is None else min(reserve_cap, approach_cap)
+
   def update(self, lead, speed, follow, stop_distance, stamp, now, enabled,
-             desired_distance=None, planned_accel=None):
+             desired_distance=None, planned_accel=None, *, previous_accel=None, plan_dt=.05):
     values = (speed, follow, stop_distance, stamp, now, lead.dRel, lead.vRel,
               lead.vLead, lead.aLeadK, lead.modelProb, lead.dPath)
     if (not enabled or not all(math.isfinite(v) for v in values) or
@@ -32,7 +41,7 @@ class LeadGapReserve:
       return None
     identity = ('radar', lead.radarTrackId) if lead.radar else ('vision',)
     if self.stamp is not None and stamp == self.stamp:
-      return self.cap if self.cap < 0. or self.releasing else None
+      return self._accel_cap(previous_accel, plan_dt)
     dt = stamp-self.stamp if self.stamp is not None else 0.
     continuous = (self.identity == identity and .01 <= dt <= .2 and
                   abs(lead.dRel-self.distance-.5*(lead.vRel+self.relative_speed)*dt) <= 1.5)
@@ -41,6 +50,7 @@ class LeadGapReserve:
     if not continuous:
       # A new/cut-in target must establish its own history. MPC remains in charge.
       self.confirm, self.cap, self.recovery_confirm, self.handover_confirm = 0., 0., 0., 0.
+      self.approach_target = None
       self.releasing, self.reason = False, 'confirming'
       return None
     self.confirm = min(1., self.confirm+dt)
@@ -58,6 +68,15 @@ class LeadGapReserve:
     if deficit > 1. and lead.vRel < .5:
       # Restore a moving time gap even when lead speed temporarily equals ours.
       target = min(target, -min(1.6, (closing+deficit/2.5)/1.4))
+    # Match a slowing lead earlier, before the remaining gap demands hard braking.
+    # Fade the extra request at crawl speed and leave the final stop to MPC.
+    self.approach_target = None
+    if (lead.radar and lead.radarTrackId >= 0 and lead.modelProb >= .9 and abs(lead.dPath) <= 1. and
+        2.5 < speed <= 30. / 3.6 and lead.vLead > .5 and closing >= .45 and
+        lead.aLeadK <= -.25 and deficit >= -3.):
+      approach_weight = min(1., (speed - 2.5) / 1.5, lead.vLead - .5)
+      approach_decel = min(1., -.55 * lead.aLeadK + .30 * closing)
+      self.approach_target = -approach_weight * approach_decel
     # Release only with a stable opening gap AND room according to the current
     # MPC lead-distance objective. Relative speed alone is not sufficient.
     room_confirmed = (desired_distance is not None and planned_accel is not None and
@@ -101,7 +120,7 @@ class LeadGapReserve:
       self.cap, self.releasing, self.reason = 0., False, 'off'
     if abs(self.cap) < 1e-5:
       self.cap = 0.
-    return self.cap if self.cap < 0. or self.releasing else None
+    return self._accel_cap(previous_accel, plan_dt)
 
 
 def apply_lead_gap_cap(accel, velocity, jerk, cap, speed, action_time, previous_accel, dt):

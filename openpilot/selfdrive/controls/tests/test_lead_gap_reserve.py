@@ -11,11 +11,12 @@ class TestLeadGapReserve(unittest.TestCase):
                                 dRel=5., vRel=0., vLead=10., aLeadK=0., dPath=0.)
     self.time = 0.
 
-  def tick(self, count=1, enabled=True, speed=10.):
+  def tick(self, count=1, enabled=True, speed=10., previous_accel=None):
     result = None
     for _ in range(count):
       self.time += .05
-      result = self.helper.update(self.lead, speed, .9, 3.6, self.time, self.time, enabled)
+      result = self.helper.update(self.lead, speed, .9, 3.6, self.time, self.time, enabled,
+                                  previous_accel=previous_accel)
     return result
 
   def test_vision_equal_speed_still_restores_short_gap(self):
@@ -36,6 +37,25 @@ class TestLeadGapReserve(unittest.TestCase):
       self.lead.dRel -= .8*.05
       cap = self.tick(speed=12.)
     self.assertLess(cap, -.5)
+
+  def test_slower_radar_lead_adds_early_braking_before_the_gap_is_short(self):
+    self.lead.radar = True
+    self.lead.radarTrackId = 41
+    self.lead.dRel = 10.8
+    self.lead.vRel = -.5
+    self.lead.vLead = 5.0
+    self.lead.aLeadK = -.65
+    output = .25
+    for _ in range(55):
+      self.lead.dRel -= .5 * .05
+      cap = self.tick(speed=5.5, previous_accel=output)
+      if cap is not None:
+        self.assertGreaterEqual(cap, output - .4 * .05 - 1e-9)
+        output = min(.25, cap)
+    self.assertAlmostEqual(output, -.55 * .65 - .30 * .5)
+    self.assertEqual(apply_lead_gap_cap(-1.5, 4., -1., cap, 5.5, .25, -1.5, .05),
+                     (-1.5, 4., -1.))
+    self.assertIsNone(self.tick(speed=1.9))
 
   def test_stronger_existing_braking_preserved(self):
     cap = self.tick(80)
