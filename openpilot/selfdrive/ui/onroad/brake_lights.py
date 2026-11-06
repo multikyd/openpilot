@@ -1,4 +1,4 @@
-"""Experimental leadOne-gated lamp observation. Never consumed by vehicle control.
+"""Causal lamp observation associated with the current lead vehicle.
 
 No trained vehicle/lamp detector: projection is a search region, not a vehicle box.
 Causal per-target observers require a brightness/colour transition; startup is UNKNOWN.
@@ -354,7 +354,7 @@ class CenterLampTransitions:
 
   def __init__(self):
     self.history = deque(maxlen=3)  # Three bounded ROI copies, never full frames.
-    self.geometry = None
+    self.geometry = self.body_geometry = None
     self.reference = None
     self.count = 0
     self.candidate_misses = 0
@@ -363,7 +363,7 @@ class CenterLampTransitions:
     self.release_until = -math.inf
 
   def clear_candidate(self):
-    self.geometry = self.reference = None
+    self.geometry = self.body_geometry = self.reference = None
     self.count = 0
     self.candidate_misses = 0
     self.last_seen = None
@@ -385,7 +385,7 @@ class CenterLampTransitions:
     chroma = float(np.percentile(excess, 80))
     return np.array([raw, chroma, max(25., background)])
 
-  def update(self, rgb, now, components):
+  def update(self, rgb, now, components, body_box=None):
     if self.last_time is not None and (now <= self.last_time or now-self.last_time > .4):
       self.__init__()
     self.last_time = now
@@ -393,14 +393,27 @@ class CenterLampTransitions:
       self.clear_candidate()
     h, w = rgb.shape[:2]
     background = float(np.median(rgb[:, :, 0]))
+    expected = self.geometry
+    body = None
+    if body_box is not None and all(math.isfinite(v) for v in body_box):
+      bx, by, bw, bh = body_box
+      if bw >= .35*w and bh >= .35*h:
+        body = np.array([bx/w, by/h, bw/w, bh/h])
+        body_origin = np.array([body[0], body[1], 0., 0.])
+        body_scale = np.tile(body[2:], 2)
+        if self.body_geometry is not None:
+          expected = body_origin + self.body_geometry * body_scale
     # A known centre lamp returning to its unlit reference vetoes a side-only
     # brightness latch. Do not invent OFF from an occlusion or moved crop.
-    if self.count >= self.CONFIRM_FRAMES and self.reference is not None:
-      current = self.stats(rgb, self.geometry, background)
+    release_position_known = (expected is not None and np.all(expected[:2] >= 0.) and
+                              np.all(expected[:2] + expected[2:] <= 1.) and
+                              (self.body_geometry is None or body is not None))
+    if self.count >= self.CONFIRM_FRAMES and self.reference is not None and release_position_known:
+      current = self.stats(rgb, expected, background)
       exposure = current[2]/self.reference[2]
       delta = current-self.reference*exposure
-      matched = any(abs((b[0]+b[2]/2)/w-(self.geometry[0]+self.geometry[2]/2)) < .08 and
-                    abs((b[1]+b[3]/2)/h-(self.geometry[1]+self.geometry[3]/2)) < .06 and
+      matched = any(abs((b[0]+b[2]/2)/w-(expected[0]+expected[2]/2)) < .08 and
+                    abs((b[1]+b[3]/2)/h-(expected[1]+expected[3]/2)) < .06 and
                     .04*w <= b[2] < .35*w and b[3] < .13*h for b in components)
       if not matched and .5 <= exposure <= 2. and delta[0] < self.RAW_RISE*.25 and delta[1] < self.CHROMA_RISE*.25:
         self.release_until = max(self.release_until, self.last_seen+.8)
@@ -408,8 +421,12 @@ class CenterLampTransitions:
     for box in components:
       x, y, bw, bh = box
       cx, cy = x+bw/2, y+bh/2
-      if not (.30*w < cx < .70*w and .01*h < cy < .50*h and
-              3 <= bw < .35*w and bh < .13*h and bw >= 1.2*bh):
+      norm = np.array([x/w, y/h, bw/w, bh/h])
+      matched = (expected is not None and
+                 np.max(np.abs(norm[:2] + .5*norm[2:] - expected[:2] - .5*expected[2:])) < .08)
+      centered = .30*w < cx < .70*w and .01*h < cy < .50*h
+      body_tracked = matched and body is not None and self.body_geometry is not None
+      if not ((centered or body_tracked) and 3 <= bw < .35*w and bh < .13*h and bw >= 1.2*bh):
         continue
       # Current lower side evidence ties this upper strip to the lead's rear.
       lower = [b for b in components if b[2]*b[3] >= 3 and .05*h < b[1]+b[3]/2-cy < .55*h]
@@ -417,9 +434,6 @@ class CenterLampTransitions:
       right = any(b[0]+b[2]/2 > cx+.12*w for b in lower)
       connected = any(connected_lamp_ends(b, rgb.shape) and b[0] < cx-.12*w and b[0]+b[2] > cx+.12*w for b in lower)
       left, right = left or connected, right or connected
-      norm = np.array([x/w, y/h, bw/w, bh/h])
-      matched = (self.geometry is not None and
-                 np.max(np.abs(norm[:2] + .5*norm[2:] - self.geometry[:2] - .5*self.geometry[2:])) < .08)
       # A different component cannot replace a still-confirmed lamp during
       # the grace period; reacquire only after the old reference expires.
       if self.count >= self.CONFIRM_FRAMES and not matched:
@@ -456,6 +470,12 @@ class CenterLampTransitions:
       self.count = min(self.CONFIRM_FRAMES, self.count + 1) if matched else 1
       self.candidate_misses = 0
       self.geometry, self.reference = norm, reference
+      if body is not None:
+        relative_box = (norm - body_origin) / body_scale
+        center_x, center_y = relative_box[:2] + .5 * relative_box[2:]
+        self.body_geometry = relative_box if .2 <= center_x <= .8 and -.05 <= center_y <= .6 else None
+      elif not matched:
+        self.body_geometry = None
       self.last_seen = now
       if self.count >= self.CONFIRM_FRAMES:
         result = box
@@ -493,13 +513,13 @@ class AdaptiveLamps:
     self.baseline = None
     self.reference_confirmed = False
 
-  def update(self, rgb, now):
+  def update(self, rgb, now, body_box=None):
     if self.center.last_time is not None and not 0 < now-self.center.last_time <= .4:
       self.release_veto = False
     # Reuse the bounded component extraction for both observers.
     components = red_components(rgb)
     relative = self._update_relative(rgb, now, components)
-    middle = self.center.update(rgb, now, components)
+    middle = self.center.update(rgb, now, components, body_box)
     if middle is not None:
       self.release_veto = False
       lamps = relative.lamps[:2]+(middle,) if len(relative.lamps) >= 2 else (middle,)
@@ -512,6 +532,8 @@ class AdaptiveLamps:
       # Let the existing side observer finish its coordinated fall/reference
       # confirmation, but never display its old ON over a centre-lamp release.
       return Observation("UNKNOWN", "CENTER_LAMP_RELEASE", relative.lamps, relative.gains)
+    if self.center.count >= self.center.CONFIRM_FRAMES and relative.state != "OFF":
+      return Observation("UNKNOWN", "CENTER_LAMP_UNOBSERVED", relative.lamps, relative.gains)
     return relative
 
   def _update_relative(self, rgb, now, components):

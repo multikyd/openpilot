@@ -117,6 +117,25 @@ class CenterTransitionTest(unittest.TestCase):
     np.testing.assert_array_equal(state.center.reference, reference)
     self.assertEqual(state.update(self.center_on(), 1.).state, 'ON')
 
+  def test_body_anchor_reacquires_center_after_crop_shift_and_two_misses(self):
+    state = core.AdaptiveLamps()
+    body = (5., 10., 125., 112.)
+    for i in range(6):
+      state.update(scene(), i*.1, body)
+    for i in range(6, 9):
+      result = state.update(self.center_on(), i*.1, body)
+    self.assertEqual(result.reason, 'CENTER_LAMP_RISE')
+    reference = state.center.reference.copy()
+    for t in (.9, 1.):
+      missing = np.roll(scene(), 17, axis=1)
+      result = state.update(missing, t, None)
+      self.assertEqual((result.state, result.reason), ('UNKNOWN', 'CENTER_LAMP_UNOBSERVED'))
+      np.testing.assert_array_equal(state.center.reference, reference)
+    shifted = np.roll(self.center_on(), 17, axis=1)
+    result = state.update(shifted, 1.1, (22., 10., 125., 112.))
+    self.assertEqual((result.state, result.reason), ('ON', 'CENTER_LAMP_RISE'))
+    np.testing.assert_array_equal(state.center.reference, reference)
+
   def test_long_loss_discards_confirmed_reference_without_stale_on(self):
     state = core.AdaptiveLamps()
     self.run_frames(state, scene(), 0., 6)
@@ -366,6 +385,13 @@ class OverlayLifecycleTest(unittest.TestCase):
     self.assertIsNone(self.o.latest_observation(100.5))
     self.assertIsNone(self.o.latest_observation(99.8))
     self.o.clear();self.assertIsNone(self.o.latest_observation(100.))
+
+  def test_missing_center_is_not_replaced_by_model_on_hint(self):
+    self.o.previous = (99.9, 21.52, 0., 0., 3, 0)
+    self.o.model_roi = (0, 0, 80, 60)
+    self.o.display = (99.9, self.o.model_roi, 1, core.Observation('UNKNOWN', 'CENTER_LAMP_UNOBSERVED'))
+    with patch.object(self.o.vehicle_model, 'current_state', return_value={'state': 'ON'}):
+      self.assertEqual(self.o.latest_observation(100.).state, 'UNKNOWN')
 
   def test_no_lead_clears(self):
     self.sm['radarState'].leadOne.present=False

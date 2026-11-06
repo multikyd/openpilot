@@ -63,7 +63,7 @@ class BrakeLightOverlay:
     if PC:
       return
     from openpilot.cereal import messaging
-    braking = bool(sample is not None and sample['radar_track_id'] >= 0 and
+    braking = bool(sample is not None and sample.get('radar_track_id', -1) >= 0 and
                    observation.state == 'ON' and observation.reason in ('CENTER_LAMP_RISE', 'BRIGHTNESS_RISE'))
     if not braking and not self.brake_observation_active:
       return
@@ -90,6 +90,8 @@ class BrakeLightOverlay:
     if not self.enabled or self.previous is None:
       return None
     observation = self.display[3] if self.display is not None and 0 <= now-self.display[0] <= .35 else None
+    if observation is not None and observation.reason == 'CENTER_LAMP_UNOBSERVED':
+      return observation
     hint = self.vehicle_model.current_state(self.model_roi, self.epoch, now) if self.model_roi is not None else None
     return fuse_observation(observation, hint) if observation is not None or hint is not None else None
 
@@ -175,7 +177,7 @@ class BrakeLightOverlay:
       self.pending = None
       if epoch == self.epoch and now-captured < .35:
         self.display = (captured, result_roi, result_step, observation, body)
-        shown = fuse_observation(observation, self.vehicle_model.current_state(roi, self.epoch, now))
+        shown = self.latest_observation(now)
         if self.pending_sample is not None and self.pending_sample['frame_id'] == frame_id:
           self._publish_brake_observation(self.pending_sample, observation)
           self.label_cache = dict(self.pending_sample, rgb=rgb, step=result_step, resampling='point', prediction=shown.state, legacy_prediction=observation.state,
@@ -201,11 +203,17 @@ class BrakeLightOverlay:
                               y_rel=float(lead.yRel), v_rel=float(lead.vRel),
                               prediction=prediction.state if prediction else 'UNKNOWN',
                               prediction_mono=self.display[0] if prediction else None)
+      model_result = self.vehicle_model.result
+      anchor = model_body if model_result is not None and 0 <= now-model_result[1] <= .6 else None
       def process(state=state, outline=self.vehicle_outline, copied=copied, crop=local_roi,
-                  epoch=epoch, captured=now, result_roi=roi, frame_id=frame_id):
+                  epoch=epoch, captured=now, result_roi=roi, frame_id=frame_id, anchor=anchor):
         begin = time.monotonic()
         rgb, result_step = nv12_crop(copied, crop)
-        result = state.update(rgb, captured)
+        body_box = None
+        if anchor is not None:
+          x, y, w, h = anchor
+          body_box = ((x-result_roi[0])/result_step, (y-result_roi[1])/result_step, w/result_step, h/result_step)
+        result = state.update(rgb, captured, body_box)
         body = outline.update(rgb, result.lamps, captured)
         return epoch, captured, result_roi, result_step, result, frame_id, (time.monotonic()-begin)*1000, rgb, body
       if self.pool is None:
