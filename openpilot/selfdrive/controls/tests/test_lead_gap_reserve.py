@@ -1,7 +1,7 @@
 import unittest
 from types import SimpleNamespace
 
-from openpilot.selfdrive.controls.lib.lead_gap_reserve import LeadGapReserve, apply_lead_gap_cap
+from openpilot.selfdrive.controls.lib.lead_gap_reserve import LeadGapReserve, apply_lead_gap_cap, brake_light_accel_cap
 
 
 class TestLeadGapReserve(unittest.TestCase):
@@ -74,6 +74,31 @@ class TestLeadGapReserve(unittest.TestCase):
         output = min(0., cap)
     self.assertLess(output, -.15)
     self.assertIsNone(self.tick(speed=speed, enabled=False, previous_accel=output))
+
+  def test_low_speed_closing_gap_reacts_to_early_lead_deceleration(self):
+    self.lead.radar = True
+    self.lead.radarTrackId = 34
+    self.lead.dRel = 7.2
+    self.lead.vRel = -.2
+    self.lead.vLead = 3.3
+    self.lead.aLeadK = -.24
+    self.assertIsNone(self.tick(4, speed=3.5, previous_accel=.12))
+    cap = self.tick(12, speed=3.5, previous_accel=.12)
+    self.assertAlmostEqual(cap, .10)
+    self.lead.aLeadK = 0.
+    self.assertIsNone(self.tick(speed=3.5, previous_accel=cap))
+
+  def test_fresh_brake_light_on_same_lead_only_caps_positive_acceleration(self):
+    self.lead.radar, self.lead.radarTrackId = True, 34
+    self.lead.dRel, self.lead.vRel, self.lead.vLead, self.lead.aLeadK = 7., -.2, 3.2, -.25
+    observation = SimpleNamespace(braking=True, radarTrackId=34, frameMonoTime=10_000_000_000, distance=7.)
+    cap = brake_light_accel_cap(observation, self.lead, 3.4, 10.1, .12, .05)
+    self.assertAlmostEqual(cap, .09)
+    self.assertEqual(brake_light_accel_cap(observation, self.lead, 3.4, 10.1, -.1, .05), 0.)
+    self.assertEqual(apply_lead_gap_cap(-1., 3., 0., cap, 3.4, .2, -.8, .05), (-1., 3., 0.))
+    self.assertIsNone(brake_light_accel_cap(observation, self.lead, 3.4, 10.3, .12, .05))
+    observation.radarTrackId = 35
+    self.assertIsNone(brake_light_accel_cap(observation, self.lead, 3.4, 10.1, .12, .05))
 
   def test_stronger_existing_braking_preserved(self):
     cap = self.tick(80)
@@ -244,6 +269,24 @@ class TestNormalStopGap(unittest.TestCase):
     self.lead.dRel=2.
     for _ in range(20):self.assertIsNone(self.tick(speed=.5))
     self.assertFalse(self.h.stopping)
+  def test_shorter_target_only_when_comfortable_and_confirmed(self):
+    for distance, planned, expected in ((4., -.5, 2.5), (3.5, -.5, 2.), (3.2, -.5, 1.8),
+                                        (3., -.5, 2.5), (3.2, -1.2, 2.5)):
+      with self.subTest(distance=distance, planned=planned):
+        self.setUp()
+        for _ in range(20):
+          self.lead.dRel -= .25
+          self.tick()
+        self.assertTrue(self.h.armed)
+        self.lead.dRel, self.lead.vRel = distance, -1.3
+        self.h.distance, self.h.relative = distance + .065, -1.3
+        stamp = self.h.stamp + .05
+        self.h.update(self.lead, 1.3, planned, stamp, stamp, True)
+        self.assertEqual(self.h.target_gap, expected)
+        self.lead.vLead = 1.
+        self.tick(speed=1.3)
+        self.assertEqual(self.h.target_gap, 2.5)
+
   def test_disabled_clears(self):
     for _ in range(20):self.tick()
     self.assertIsNone(self.tick(enabled=False));self.assertFalse(self.h.armed)

@@ -72,9 +72,12 @@ class LeadGapReserve:
     # Match a slowing lead earlier, before the remaining gap demands hard braking.
     # Fade the extra request at crawl speed and leave the final stop to MPC.
     self.approach_target = None
+    # A close, already-confirmed lead can start braking before closing speed builds.
+    queue_approach = (speed <= 5.5 and .15 <= closing < .45 and
+                      lead.aLeadK <= -.2 and lead.dRel <= reserve + 1.5)
+    normal_approach = closing >= .45 and lead.aLeadK <= -.25 and within_closing_range
     if (lead.radar and lead.radarTrackId >= 0 and lead.modelProb >= .9 and abs(lead.dPath) <= 1. and
-        2.5 < speed <= 40. / 3.6 and lead.vLead > .5 and closing >= .45 and
-        lead.aLeadK <= -.25 and within_closing_range):
+        2.5 < speed <= 40. / 3.6 and lead.vLead > .5 and (queue_approach or normal_approach)):
       approach_weight = min(1., (speed - 2.5) / 1.5, lead.vLead - .5)
       approach_decel = min(1., -.55 * lead.aLeadK + .30 * closing)
       self.approach_target = -approach_weight * approach_decel
@@ -132,8 +135,23 @@ def apply_lead_gap_cap(accel, velocity, jerk, cap, speed, action_time, previous_
   return cap, velocity, min(jerk, (cap-previous_accel)/dt)
 
 
+def brake_light_accel_cap(observation, lead, speed, now, previous_accel, dt):
+  # Positive acceleration only: camera evidence never requests braking.
+  if (not observation.braking or not lead.present or not lead.radar or
+      lead.radarTrackId < 0 or lead.radarTrackId != observation.radarTrackId or
+      not 0 <= now - observation.frameMonoTime * 1e-9 <= .25 or
+      not all(math.isfinite(x) for x in (speed, lead.dRel, lead.vRel, lead.vLead, lead.aLeadK,
+                                        lead.modelProb, lead.dPath, observation.distance, previous_accel, dt)) or
+      not 1. <= speed <= 20. / 3.6 or not 3. <= lead.dRel <= 14. or
+      abs(lead.dRel - observation.distance) > 1.5 or lead.modelProb < .9 or abs(lead.dPath) > 1. or
+      lead.vLead <= .4 or lead.vRel > .2 or lead.aLeadK > .2 or
+      (lead.vRel > -.15 and lead.aLeadK > -.15)):
+    return None
+  return max(0., previous_accel - .6 * dt)
+
+
 class NormalStopGap:
-  """2.5m approach assist only after a continuous ordinary-speed lead approach."""
+  """Comfort stop assistance for a continuous radar lead."""
   def __init__(self):
     self.reset()
 
@@ -141,6 +159,7 @@ class NormalStopGap:
     self.identity = self.stamp = None
     self.distance = self.relative = self.confirm = 0.
     self.armed = self.stopping = False
+    self.target_gap = 2.5
     self.cap = None
 
   def update(self, lead, speed, planned, stamp, now, enabled):
@@ -153,7 +172,7 @@ class NormalStopGap:
       self.reset()
       return None
     if self.stamp==stamp:
-      self.stopping=bool(self.armed and self.cap is not None and speed<.1 and lead.vLead<.2 and lead.dRel<=2.2)
+      self.stopping=bool(self.armed and self.cap is not None and speed<.1 and lead.vLead<.2 and lead.dRel <= max(1.8, self.target_gap - .3))
       return self.cap
     dt=stamp-self.stamp if self.stamp is not None else 0.
     continuous=(self.identity==lead.radarTrackId and .01<=dt<=.2 and
@@ -167,13 +186,20 @@ class NormalStopGap:
     self.confirm+=dt
     if self.confirm>=.5 and speed>=3. and lead.dRel>6.:
       self.armed=True
-    if not self.armed or lead.vLead>.5:
-      self.cap=None
+    if not self.armed or lead.vLead > .5:
+      self.cap = None
+      self.target_gap = 2.5
       return None
-    # Include a short actuator allowance rather than waiting until the last metre.
-    room=max(.3,lead.dRel-2.5-.25*speed)
-    target=-min(2.5,speed*speed/(2.*room))
-    if speed<.1 and lead.dRel<=2.2 and lead.vLead<.2:
+    # Use the extra space only if gentle braking can still reach a shorter gap.
+    # Keep the chosen gap for this stop so slowing down cannot move the goal back.
+    available = lead.dRel - .25 * speed
+    if .25 < speed <= 2.5 and -.9 <= planned < 0. and lead.vRel < -.15:
+      comfortable_gap = available - speed * speed / (2. * .9)
+      if 1.8 <= comfortable_gap < self.target_gap:
+        self.target_gap = 2.0 if comfortable_gap >= 2.0 else 1.8
+    room = max(.3, available - self.target_gap)
+    target = -min(2.5, speed * speed / (2. * room))
+    if speed < .1 and lead.dRel <= max(1.8, self.target_gap - .3) and lead.vLead < .2:
       target=min(target,-.5)
       self.stopping=True
     if self.cap is None:

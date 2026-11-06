@@ -61,8 +61,10 @@ def main():
   lateral_planner = LateralPlanner(CP, debug=False)
 
   pm = messaging.PubMaster(['longitudinalPlan', 'driverAssistance', 'lateralPlan'])
-  sm = messaging.SubMaster(['carControl', 'carState', 'controlsState', 'vehicleParameters', 'radarState', 'modelV2', 'selfdriveState', 'carrotMan'],
-                           poll='modelV2', ignore_avg_freq=['radarState'])
+  sm = messaging.SubMaster(['carControl', 'carState', 'controlsState', 'vehicleParameters', 'radarState',
+                            'modelV2', 'selfdriveState', 'carrotMan', 'leadBrakeObservation'],
+                           poll='modelV2', ignore_avg_freq=['radarState'],
+                           ignore_alive=['leadBrakeObservation'], ignore_valid=['leadBrakeObservation'])
   carrot = CarrotPlanner()
   observe_overtake = CP.carFingerprint == 'HYUNDAI_IONIQ_5_PE' and CP.openpilotLongitudinalControl
   last_overtake_log = -1.

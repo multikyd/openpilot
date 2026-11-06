@@ -16,7 +16,7 @@ from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.params import Params
 from openpilot.selfdrive.controls.lib.cutin_anticipation import CutInAnticipation
-from openpilot.selfdrive.controls.lib.lead_gap_reserve import LeadGapReserve, NormalStopGap, apply_lead_gap_cap
+from openpilot.selfdrive.controls.lib.lead_gap_reserve import LeadGapReserve, NormalStopGap, apply_lead_gap_cap, brake_light_accel_cap
 from openpilot.selfdrive.controls.lib.turn_exit_recovery import TurnExitRecovery
 from openpilot.selfdrive.carrot.carrot_functions import XState
 
@@ -377,6 +377,16 @@ class LongitudinalPlanner:
       output_a_target, output_v_target_now, output_j_target, stop_cap,
       cs.vEgo, action_t, self.output_a_target, self.dt)
     self.output_should_stop = self.output_should_stop or self.normal_stop_gap.stopping
+    if (sm.valid.get('leadBrakeObservation', False) and self.CP.openpilotLongitudinalControl and
+        self.mpc.mode == 'acc' and not reset_state and not self.output_should_stop and fresh and
+        sm['carControl'].longActive and not (cs.gasPressed or cs.brakePressed or cs.steeringPressed or
+                                              cs.leftBlinker or cs.rightBlinker) and carrot.desireState <= .1 and
+        sm.all_checks(['carState', 'radarState', 'modelV2', 'carControl'])):
+      light_cap = brake_light_accel_cap(sm['leadBrakeObservation'], sm['radarState'].leadOne, cs.vEgo,
+                                        now, self.output_a_target, self.dt)
+      output_a_target, output_v_target_now, output_j_target = apply_lead_gap_cap(
+        output_a_target, output_v_target_now, output_j_target, light_cap,
+        cs.vEgo, action_t, self.output_a_target, self.dt)
     self.output_a_target = output_a_target
     self.output_v_target_now = output_v_target_now
     self.output_j_target_now = output_j_target

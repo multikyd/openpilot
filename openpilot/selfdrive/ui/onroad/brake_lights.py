@@ -418,7 +418,8 @@ class CenterLampTransitions:
       connected = any(connected_lamp_ends(b, rgb.shape) and b[0] < cx-.12*w and b[0]+b[2] > cx+.12*w for b in lower)
       left, right = left or connected, right or connected
       norm = np.array([x/w, y/h, bw/w, bh/h])
-      matched = self.geometry is not None and np.max(np.abs(norm[:2]-self.geometry[:2])) < .08
+      matched = (self.geometry is not None and
+                 np.max(np.abs(norm[:2] + .5*norm[2:] - self.geometry[:2] - .5*self.geometry[2:])) < .08)
       # A different component cannot replace a still-confirmed lamp during
       # the grace period; reacquire only after the old reference expires.
       if self.count >= self.CONFIRM_FRAMES and not matched:

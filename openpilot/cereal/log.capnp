@@ -1295,6 +1295,13 @@ struct LateralManeuverPlan {
   desiredCurvature @0 :Float32;  # 1/m
 }
 
+struct LeadBrakeObservation {
+  frameMonoTime @0 :UInt64;
+  radarTrackId @1 :Int32 = -1;
+  distance @2 :Float32;
+  braking @3 :Bool;
+}
+
 struct LongitudinalPlan @0xe00b5b3eba12876c {
   modelMonoTime @9 :UInt64;
   hasLead @7 :Bool;
@@ -2699,6 +2706,7 @@ struct Event {
 
     # UI services
     uiDebug @102 :UIDebug;
+    leadBrakeObservation @154 :LeadBrakeObservation;
 
     # driving feedback
     userBookmark @93 :UserBookmark;

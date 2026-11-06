@@ -1,7 +1,6 @@
-"""Display-only brake-lamp experiment for the C4 road view.
+"""Brake-lamp display and target-associated observations for the C4 road view.
 
 CPU work runs at <=10 Hz on one bounded copied ROI, with no work queue backlog.
-No state is published to planning/control. cloudlog events enter normal rlogs.
 """
 import os
 import time
@@ -39,6 +38,8 @@ class BrakeLightOverlay:
     self.last_vehicle_status = None
     self.last_vehicle_log = -10.
     self.model_roi = None
+    self.brake_observation_pm = None
+    self.brake_observation_active = False
 
   def clear(self):
     self.vehicle_model.clear()
@@ -54,6 +55,28 @@ class BrakeLightOverlay:
     self.last_frame = None
     self.label_cache = None
     self.pending_sample = None
+    if self.brake_observation_active:
+      self._publish_brake_observation()
+
+  def _publish_brake_observation(self, sample=None, observation=None):
+    from openpilot.common.hardware import PC
+    if PC:
+      return
+    from openpilot.cereal import messaging
+    braking = bool(sample is not None and sample['radar_track_id'] >= 0 and
+                   observation.state == 'ON' and observation.reason in ('CENTER_LAMP_RISE', 'BRIGHTNESS_RISE'))
+    if not braking and not self.brake_observation_active:
+      return
+    if self.brake_observation_pm is None:
+      self.brake_observation_pm = messaging.PubMaster(['leadBrakeObservation'])
+    msg = messaging.new_message('leadBrakeObservation', valid=True)
+    msg.leadBrakeObservation.braking = braking
+    if braking:
+      msg.leadBrakeObservation.frameMonoTime = round(sample['source_sof'] * 1e9)
+      msg.leadBrakeObservation.radarTrackId = sample['radar_track_id']
+      msg.leadBrakeObservation.distance = sample['d_rel']
+    self.brake_observation_pm.send('leadBrakeObservation', msg)
+    self.brake_observation_active = braking
 
   def label_sample(self, now):
     sample = self.label_cache
@@ -154,6 +177,7 @@ class BrakeLightOverlay:
         self.display = (captured, result_roi, result_step, observation, body)
         shown = fuse_observation(observation, self.vehicle_model.current_state(roi, self.epoch, now))
         if self.pending_sample is not None and self.pending_sample['frame_id'] == frame_id:
+          self._publish_brake_observation(self.pending_sample, observation)
           self.label_cache = dict(self.pending_sample, rgb=rgb, step=result_step, resampling='point', prediction=shown.state, legacy_prediction=observation.state,
                                   prediction_mono=captured, lamps=observation.lamps, reason=shown.reason)
         event = (shown.state, shown.reason)
