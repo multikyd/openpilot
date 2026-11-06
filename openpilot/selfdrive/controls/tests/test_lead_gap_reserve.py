@@ -57,6 +57,24 @@ class TestLeadGapReserve(unittest.TestCase):
                      (-1.5, 4., -1.))
     self.assertIsNone(self.tick(speed=1.9))
 
+  def test_slowing_radar_lead_can_add_gentle_braking_at_34_kph(self):
+    speed = 34. / 3.6
+    self.lead.radar = True
+    self.lead.radarTrackId = 47
+    self.lead.dRel = 19.
+    self.lead.vRel = -.5
+    self.lead.vLead = speed - .5
+    self.lead.aLeadK = -.45
+    output = 0.
+    for _ in range(23):
+      self.lead.dRel -= .5 * .05
+      cap = self.tick(speed=speed, previous_accel=output)
+      if cap is not None:
+        self.assertGreaterEqual(cap, output - .4 * .05 - 1e-9)
+        output = min(0., cap)
+    self.assertLess(output, -.15)
+    self.assertIsNone(self.tick(speed=speed, enabled=False, previous_accel=output))
+
   def test_stronger_existing_braking_preserved(self):
     cap = self.tick(80)
     self.assertEqual(apply_lead_gap_cap(-3., 4., -1., cap, 10., .2, -3., .05), (-3., 4., -1.))

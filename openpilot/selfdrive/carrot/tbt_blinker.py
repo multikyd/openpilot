@@ -8,6 +8,7 @@ TURN_START_DISTANCE = 70.0
 TURN_MAX_START_DISTANCE = 90.0
 TURN_FALLBACK_START_DISTANCE = TURN_START_DISTANCE
 TURN_APPROACH_SECONDS = 4.0
+FOLLOWING_TURN_APPROACH_SECONDS = 7.5
 TURN_FINISH_SECONDS = 5.0
 
 
@@ -17,6 +18,8 @@ class TbtBlinker:
     self.turn_direction = None
     self.turn_id = None
     self.previous_distance = None
+    self.following_turn_pending = False
+    self.close_following_turn = False
     self.request_id = None
     self.last_request_id = None
     self.start = 0.
@@ -43,7 +46,7 @@ class TbtBlinker:
     valid_turn = (code in (12, 13, 16, 19) and math.isfinite(distance) and 0 <= age <= 2.)
     direction = "left" if code in (12, 16) else "right"
     if valid_turn:
-      next_turn = (direction != self.turn_direction or
+      next_turn = (self.following_turn_pending or direction != self.turn_direction or
                    (self.previous_distance is not None and
                     (distance - self.previous_distance >= 45 or
                      (self.previous_distance <= 15 and distance >= 45))))
@@ -53,12 +56,19 @@ class TbtBlinker:
           self.previous_distance is not None and -5. <= self.previous_distance <= 12. and passed_turn_point):
         self.finish_until = now + TURN_FINISH_SECONDS
       if self.finish_until is not None and now < self.finish_until:
+        # Keep the next maneuver queued while the current one finishes.
+        self.following_turn_pending = self.following_turn_pending or next_turn
         direction, distance = self.turn_direction, 0.
       else:
         if self.finish_until is not None:
           self.stop(now)
           self.cancelled = True
         if next_turn:
+          self.close_following_turn = (
+            direction == self.turn_direction and self.last_request_id is not None and
+            self.previous_distance is not None and -5. <= self.previous_distance <= 12. and
+            0. <= distance <= TURN_MAX_START_DISTANCE)
+          self.following_turn_pending = False
           self.stop(now)
           self.turn_direction = direction
           self.turn_id = uuid4().hex
@@ -97,7 +107,8 @@ class TbtBlinker:
 
     stopped_threshold = 20. + min(10., max(0., 2. * (next_road_width - 5.)))
     # Reserve time for the turn inside the moving request deadline.
-    threshold = stopped_threshold if waiting else min(moving_threshold, abs(speed) * TURN_APPROACH_SECONDS)
+    approach_seconds = FOLLOWING_TURN_APPROACH_SECONDS if self.close_following_turn else TURN_APPROACH_SECONDS
+    threshold = stopped_threshold if waiting else min(moving_threshold, abs(speed) * approach_seconds)
     if self.request_id is None:
       if not 0 <= distance <= threshold or cs.leftBlinker or cs.rightBlinker:
         return

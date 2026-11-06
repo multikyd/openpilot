@@ -63,7 +63,8 @@ class LeadGapReserve:
     reserve = stop_distance + (max(.9, min(1.6, follow))+extra_follow)*speed
     deficit = reserve-lead.dRel
     target = 0.
-    if closing > .6 and lead.aLeadK < .3 and lead.dRel < reserve+2.*closing+5.:
+    within_closing_range = lead.dRel < reserve + 2. * closing + 5.
+    if closing > .6 and lead.aLeadK < .3 and within_closing_range:
       target = -min(.4, max(.12, .1*closing))
     if deficit > 1. and lead.vRel < .5:
       # Restore a moving time gap even when lead speed temporarily equals ours.
@@ -72,8 +73,8 @@ class LeadGapReserve:
     # Fade the extra request at crawl speed and leave the final stop to MPC.
     self.approach_target = None
     if (lead.radar and lead.radarTrackId >= 0 and lead.modelProb >= .9 and abs(lead.dPath) <= 1. and
-        2.5 < speed <= 30. / 3.6 and lead.vLead > .5 and closing >= .45 and
-        lead.aLeadK <= -.25 and deficit >= -3.):
+        2.5 < speed <= 40. / 3.6 and lead.vLead > .5 and closing >= .45 and
+        lead.aLeadK <= -.25 and within_closing_range):
       approach_weight = min(1., (speed - 2.5) / 1.5, lead.vLead - .5)
       approach_decel = min(1., -.55 * lead.aLeadK + .30 * closing)
       self.approach_target = -approach_weight * approach_decel
