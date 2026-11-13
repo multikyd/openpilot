@@ -1,0 +1,487 @@
+#!/usr/bin/env python3
+import math
+import time
+from numbers import Number
+
+from openpilot.cereal import log
+from opendbc.car.structs import car
+import openpilot.cereal.messaging as messaging
+from openpilot.common.constants import CV
+from openpilot.common.params import Params
+from openpilot.selfdrive.kisapilot.reboot_guard import reboot_requested
+from openpilot.common.realtime import config_realtime_process, DT_CTRL, Priority, Ratekeeper
+from openpilot.common.swaglog import cloudlog
+
+from opendbc.car.car_helpers import interfaces
+from opendbc.car.vehicle_model import VehicleModel
+from openpilot.selfdrive.controls.lib.drive_helpers import clip_curvature, get_lag_adjusted_curvature
+from openpilot.selfdrive.controls.lib.close_lead_mode import CloseLeadModelMode
+from openpilot.selfdrive.controls.lib.latcontrol import LatControl
+from openpilot.selfdrive.controls.lib.model_lane_guard import ModelLaneGuard, LanePositionGuard
+from openpilot.selfdrive.controls.lib.latcontrol_pid import LatControlPID
+from openpilot.selfdrive.controls.lib.latcontrol_angle import LatControlAngle, STEER_ANGLE_SATURATION_THRESHOLD
+from openpilot.selfdrive.controls.lib.latcontrol_curvature import LatControlCurvature
+from openpilot.selfdrive.controls.lib.latcontrol_torque import LatControlTorque
+from openpilot.selfdrive.controls.lib.longcontrol import LongControl
+from openpilot.selfdrive.modeld.modeld import LAT_SMOOTH_SECONDS
+from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
+
+import numpy as np
+
+State = log.SelfdriveState.OpenpilotState
+LaneChangeState = log.LaneChangeState
+LaneChangeDirection = log.LaneChangeDirection
+
+ACTUATOR_FIELDS = tuple(car.CarControl.Actuators.schema.fields.keys())
+
+
+def lane_curve_command(CP, v_ego, psis, curvatures, distances, actuator_delay,
+                       smoothing_seconds, previous_curvature, steering_pressed, curvature_adjust=None):
+  # Preview compensation must use the same smoothing time as the final filter.
+  curvature = get_lag_adjusted_curvature(CP, v_ego, psis, curvatures,
+                                        actuator_delay + smoothing_seconds, distances)
+  tau = smoothing_seconds
+  if (not steering_pressed and v_ego > 6.0 and smoothing_seconds > 0.15 and
+      np.all(np.isfinite([curvature, previous_curvature])) and
+      (curvature * previous_curvature >= 0 or abs(previous_curvature) < 0.0005)):
+    turn = float(np.interp(abs(curvature), [0.0006, 0.002], [0.0, 1.0]))
+    entry = float(np.interp(abs(curvature) - abs(previous_curvature), [0.0001, 0.0008], [0.0, 1.0]))
+    tau -= turn * entry * (smoothing_seconds - 0.15)
+    curvature = get_lag_adjusted_curvature(CP, v_ego, psis, curvatures,
+                                          actuator_delay + tau, distances)
+  if curvature_adjust is not None:
+    curvature = curvature_adjust(curvature)
+  alpha = 1 - np.exp(-DT_CTRL / tau) if tau > 0 else 1.0
+  return float(alpha * curvature + (1 - alpha) * previous_curvature), tau
+
+
+class Controls:
+  def __init__(self) -> None:
+    self.params = Params()
+    cloudlog.info("controlsd is waiting for CarParams")
+    self.CP = messaging.log_from_bytes(self.params.get("CarParams", block=True), car.CarParams)
+    cloudlog.info("controlsd got CarParams")
+
+    self.CI = interfaces[self.CP.carFingerprint](self.CP)
+
+    self.sm = messaging.SubMaster(['lateralDelay', 'vehicleParameters', 'lateralTorqueParameters', 'modelV2', 'selfdriveState',
+                                   'extrinsicsCalibration', 'deviceMotion', 'longitudinalPlan', 'lateralManeuverPlan', 'carState', 'carOutput',
+                                   'driverMonitoringState', 'onroadEvents', 'driverAssistance',
+                                   'carrotMan', 'lateralPlan', 'radarState',], poll='selfdriveState')
+    self.pm = messaging.PubMaster(['carControl', 'controlsState'])
+
+    self.steer_limited_by_safety = False
+    self.curvature = 0.0
+    self.desired_curvature = 0.0
+    self.model_lane_guard = ModelLaneGuard()
+    self.lane_position_guard = LanePositionGuard()
+    self.lane_center_preference = self.params.get("LaneCenterOffset", return_default=True)
+    self.camera_offset = self.params.get("CameraOffsetAdj", return_default=True)
+
+    self.pose_calibrator = PoseCalibrator()
+    self.calibrated_pose: Pose | None = None
+
+    self.LoC = LongControl(self.CP)
+    self.VM = VehicleModel(self.CP)
+    self.LaC: LatControl
+    if self.CP.steerControlType == car.CarParams.SteerControlType.angle:
+      self.LaC = LatControlAngle(self.CP, self.CI, DT_CTRL)
+    elif self.CP.steerControlType == car.CarParams.SteerControlType.curvature:
+      self.LaC = LatControlCurvature(self.CP, self.CI, DT_CTRL)
+    elif self.CP.lateralTuning.which() == 'pid':
+      self.LaC = LatControlPID(self.CP, self.CI, DT_CTRL)
+    elif self.CP.lateralTuning.which() == 'torque':
+      self.LaC = LatControlTorque(self.CP, self.CI, DT_CTRL)
+    self.standstill_elapsed_timer = 0.0
+
+    self.close_lead_mode = CloseLeadModelMode()
+    self.lanefull_timer = 0
+
+    self.timer = 0
+    self.sr_rate = self.params.get("SteerRatioRate", return_default=True)
+    self.custom_sr = self.params.get("CustomSR", return_default=True)
+    self.use_lane_line_curve_speed = self.params.get("UseLaneLineCurveSpeed", return_default=True)
+    self.lat_smooth_seconds = LAT_SMOOTH_SECONDS if self.params.get("LatSmoothSec", return_default=True) < 0 else self.params.get("LatSmoothSec", return_default=True)
+    self.steer_actuator_delay = self.params.get("SteerActuatorDelay", return_default=True)
+
+
+  def update(self):
+    self.sm.update(15)
+    if self.sm.updated["extrinsicsCalibration"]:
+      self.pose_calibrator.feed_extrinsics_calibration(self.sm['extrinsicsCalibration'])
+    if self.sm.updated["deviceMotion"]:
+      device_motion = Pose.from_device_motion(self.sm['deviceMotion'])
+      self.calibrated_pose = self.pose_calibrator.build_calibrated_pose(device_motion)
+
+  def state_control(self):
+    # user params
+    self.timer += 1
+    if self.timer >= 300: # 3sec
+      self.timer = 0
+      self.sr_rate = self.params.get("SteerRatioRate")
+      self.custom_sr = self.params.get("CustomSR")
+      self.use_lane_line_curve_speed = self.params.get("UseLaneLineCurveSpeed")
+      self.lat_smooth_seconds = self.params.get("LatSmoothSec", return_default=True)
+      if self.lat_smooth_seconds < 0:
+        self.lat_smooth_seconds = LAT_SMOOTH_SECONDS
+      self.steer_actuator_delay = self.params.get("SteerActuatorDelay")
+      self.camera_offset = self.params.get("CameraOffsetAdj", return_default=True)
+      self.lane_center_preference = self.params.get("LaneCenterOffset", return_default=True)
+
+    CS = self.sm['carState']
+
+    # Update VehicleModel
+    lp = self.sm['vehicleParameters']
+    x = max(lp.stiffnessFactor, 0.1)
+    sr = max(lp.steerRatio, 0.1) * (self.sr_rate/100)
+    sr = max(self.custom_sr if self.custom_sr > 1.0 else sr, 0.1)
+    self.VM.update_params(x, sr)
+
+    steer_angle_without_offset = math.radians(CS.steeringAngleDeg - lp.angleOffsetDeg)
+    self.curvature = -self.VM.calc_curvature(steer_angle_without_offset, CS.vEgo, lp.roll)
+
+    # Update Torque Params
+    if self.CP.lateralTuning.which() == 'torque':
+      torque_params = self.sm['lateralTorqueParameters']
+      if self.sm.all_checks(['lateralTorqueParameters']) and torque_params.useParams:
+        self.LaC.update_torque_parameters(torque_params.latAccelFactorFiltered, torque_params.latAccelOffsetFiltered,
+                                           torque_params.frictionCoefficientFiltered)
+
+    long_plan = self.sm['longitudinalPlan']
+    model_v2 = self.sm['modelV2']
+
+    CC = car.CarControl.new_message()
+    CC.enabled = self.sm['selfdriveState'].enabled
+
+    # carrot
+    gear = car.CarState.GearShifter
+    driving_gear = CS.gearShifter not in (gear.neutral, gear.park, gear.reverse, gear.unknown)
+    lateral_enabled = driving_gear
+    #self.soft_hold_active = CS.softHoldActive #car.OnroadEvent.EventName.softHold in [e.name for e in self.sm['onroadEvents']]
+
+    # Check which actuators can be enabled
+    standstill = abs(CS.vEgo) <= max(self.CP.minSteerSpeed, 0.3) or CS.standstill
+    CC.latActive = ((self.sm['selfdriveState'].active or lateral_enabled) and CS.latEnabled and
+                    not CS.steerFaultTemporary and not CS.steerFaultPermanent and not standstill)
+    CC.longActive = CC.enabled and not any(e.overrideLongitudinal for e in self.sm['onroadEvents']) and self.CP.openpilotLongitudinalControl
+
+    if reboot_requested(self.params):
+      CC.enabled = False
+      CC.latActive = False
+      CC.longActive = False
+
+    actuators = CC.actuators
+    actuators.longControlState = self.LoC.long_control_state
+
+    # Enable blinkers while lane changing
+    if model_v2.meta.laneChangeState != LaneChangeState.off:
+      CC.leftBlinker = model_v2.meta.laneChangeDirection == LaneChangeDirection.left
+      CC.rightBlinker = model_v2.meta.laneChangeDirection == LaneChangeDirection.right
+
+    if not CC.latActive:
+      self.LaC.reset()
+    if not CC.longActive:
+      self.LoC.reset()
+
+    # accel PID loop
+    pid_accel_limits = self.CI.get_pid_accel_limits(self.CP, CS.vEgo, CS.vCruise * CV.KPH_TO_MS)
+    t_since_plan = (self.sm.frame - self.sm.recv_frame['longitudinalPlan']) * DT_CTRL
+    if self.sm.valid['longitudinalPlan'] and 0 <= t_since_plan < 0.3 and not long_plan.allowThrottle:
+      pid_accel_limits = (pid_accel_limits[0], min(pid_accel_limits[1], 0.0))
+    stop_observation_time = time.monotonic()
+    accel, aTarget, jerk = self.LoC.update(
+      CC.longActive, CS, long_plan, pid_accel_limits, t_since_plan, self.sm['radarState'],
+      radar_stamp=self.sm.logMonoTime['radarState']*1e-9, observation_time=stop_observation_time,
+      terminal_stop_ready=(0. <= t_since_plan < .15 and
+                           self.sm.all_checks(['carState', 'radarState', 'longitudinalPlan']) and
+                           0. <= stop_observation_time-self.sm.logMonoTime['carState']*1e-9 <= .1))
+    actuators.accel = float(accel)
+    actuators.aTarget = float(aTarget)
+    actuators.jerk = float(jerk)
+
+    # Steering PID loop and lateral MPC
+    lat_plan = self.sm['lateralPlan']
+    #self.lanefull_mode_enabled = (lat_plan.useLaneLines and abs(self.sm['carrotMan'].vTurnSpeed) > self.use_lane_line_curve_speed)
+    v_turn = abs(self.sm['carrotMan'].vTurnSpeed)
+    mode_now = time.monotonic()
+    close_lead_model = self.close_lead_mode.update(
+      mode_now, CS.vEgo, self.sm['radarState'].leadOne, model_v2.laneLineProbs,
+      fresh=(self.sm.all_checks(['carState', 'radarState', 'modelV2']) and
+             all(0. <= mode_now-self.sm.logMonoTime[name]*1e-9 <= .2
+                 for name in ('carState', 'radarState', 'modelV2'))),
+      enabled=(CC.latActive and model_v2.meta.laneChangeState == LaneChangeState.off))
+    if lat_plan.useLaneLines and not close_lead_model:
+      buffer = 5.0  # 속도 버퍼 (±5.0)
+      HOLD_FRAMES = 50  # 약 0.5초 유지 (100Hz 기준: 50프레임)
+
+      # 1. 속도 조건 판단 (현재 모드 상태에 따른 히스테리시스)
+      if getattr(self, 'lanefull_mode_enabled', False):
+        target_request = (v_turn > (self.use_lane_line_curve_speed - buffer))
+      else:
+        target_request = (v_turn > (self.use_lane_line_curve_speed + buffer))
+
+      # 2. 시간 지연(Timer) 판정: 조건 변화 후 0.5초 동안 유지되어야만 최종 전환
+      if target_request != getattr(self, 'lanefull_mode_enabled', False):
+        self.lanefull_timer = getattr(self, 'lanefull_timer', 0) + 1
+        if self.lanefull_timer >= HOLD_FRAMES:
+          self.lanefull_mode_enabled = target_request
+          self.lanefull_timer = 0
+      else:
+        self.lanefull_timer = 0
+    else:
+      # 차선 유실 시 시간 지연 없이 즉시 안전하게 해제
+      self.lanefull_mode_enabled = False
+      self.lanefull_timer = 0
+
+    steer_actuator_delay = self.sm['lateralDelay'].lateralDelay if self.steer_actuator_delay == 0.0 else self.steer_actuator_delay
+    
+    def smooth_value(val, prev_val, tau):
+      alpha = 1 - np.exp(-DT_CTRL / tau) if tau > 0 else 1
+      return alpha * val + (1 - alpha) * prev_val
+
+    effective_lat_smoothing = self.lat_smooth_seconds
+    model_lane_guard_used = False
+    position_guard_used = False
+    position_now = time.monotonic()
+    def position_curvature(curvature, guarded=None):
+      return self.lane_position_guard.update(
+        model_v2, CS, curvature, curvature if guarded is None else guarded,
+        self.sm.logMonoTime['modelV2']*1e-9, position_now,
+        preference=self.lane_center_preference, camera_offset=self.camera_offset,
+        actuator_delay=steer_actuator_delay,
+        enabled=(self.sm.all_checks(['modelV2','carState']) and
+                 0. <= position_now-self.sm.logMonoTime['carState']*1e-9 <= .1))
+
+    if not CC.latActive:
+      new_desired_curvature = self.curvature
+    elif self.sm.valid['lateralManeuverPlan']:
+      new_desired_curvature = self.sm['lateralManeuverPlan'].desiredCurvature if CC.latActive else self.curvature
+    elif self.lanefull_mode_enabled:
+      if len(lat_plan.curvatures) == 0:
+        new_desired_curvature = self.curvature
+      else:
+        position_guard_used = True
+        new_desired_curvature, effective_lat_smoothing = lane_curve_command(
+          self.CP, CS.vEgo, lat_plan.psis, lat_plan.curvatures, lat_plan.distances,
+          steer_actuator_delay, self.lat_smooth_seconds, self.desired_curvature, CS.steeringPressed,
+          curvature_adjust=position_curvature)
+    else:
+      # Constrain the model action before smoothing; adding a correction after
+      # this filter would feed it back as a new baseline every control tick.
+      model_lane_guard_used = True
+      guard_now = time.monotonic()
+      guarded_curvature = self.model_lane_guard.update(
+        model_v2, CS, model_v2.action.desiredCurvature,
+        self.sm.logMonoTime['modelV2'] * 1e-9, guard_now,
+        enabled=(self.sm.all_checks(['modelV2', 'carState']) and
+                 0. <= guard_now-self.sm.logMonoTime['carState'] * 1e-9 <= .1),
+        camera_offset=self.camera_offset, actuator_delay=steer_actuator_delay)
+      position_guard_used = True
+      guarded_curvature = position_curvature(model_v2.action.desiredCurvature, guarded_curvature)
+      # Reduce filter lag only once the model has started the requested maneuver.
+      meta = model_v2.meta
+      right_entry = (meta.laneChangeDirection == LaneChangeDirection.right and
+                     CS.rightBlinker and not CS.leftBlinker and not CS.rightBlindspot and
+                     guarded_curvature > max(0.0, self.desired_curvature))
+      left_entry = (meta.laneChangeDirection == LaneChangeDirection.left and
+                    CS.leftBlinker and not CS.rightBlinker and not CS.leftBlindspot and
+                    guarded_curvature < min(0.0, self.desired_curvature))
+      lane_change_entry = (meta.laneChangeState == LaneChangeState.laneChangeStarting and
+                           not CS.steeringPressed and (right_entry or left_entry) and
+                           self.sm.all_checks(['modelV2', 'carState']) and
+                           0. <= guard_now-self.sm.logMonoTime['carState'] * 1e-9 <= .1 and
+                           0. <= guard_now-self.sm.logMonoTime['modelV2'] * 1e-9 <= .15)
+      new_desired_curvature = smooth_value(guarded_curvature, self.desired_curvature,
+                                            0.06 if lane_change_entry else 0.1)
+
+    if not position_guard_used:
+      self.lane_position_guard.reset()
+    if not model_lane_guard_used:
+      self.model_lane_guard.reset()
+
+    self.desired_curvature, curvature_limited = clip_curvature(CS.vEgo, self.desired_curvature, new_desired_curvature, lp.roll)
+    lat_delay = self.sm["lateralDelay"].lateralDelay + effective_lat_smoothing
+    actuators.curvature = float(self.desired_curvature)
+    steer, lateral_output, lac_log = self.LaC.update(CC.latActive, CS, self.VM, lp,
+                                                     self.steer_limited_by_safety, self.desired_curvature,
+                                                     curvature_limited, lat_delay)
+    actuators.torque = float(steer)
+    if self.CP.steerControlType == car.CarParams.SteerControlType.curvature:
+      actuators.curvature = float(lateral_output)
+    else:
+      actuators.steeringAngleDeg = float(lateral_output)
+    # Ensure no NaNs/Infs
+    for p in ACTUATOR_FIELDS:
+      attr = getattr(actuators, p)
+      if not isinstance(attr, Number):
+        continue
+
+      if not math.isfinite(attr):
+        cloudlog.error(f"actuators.{p} not finite {actuators.to_dict()}")
+        setattr(actuators, p, 0.0)
+
+    return CC, lac_log
+
+  def publish(self, CC, lac_log):
+    CS = self.sm['carState']
+
+    # Orientation and angle rates can be useful for carcontroller
+    # Only calibrated (car) frame is relevant for the carcontroller
+    CC.currentCurvature = self.curvature
+    if self.calibrated_pose is not None:
+      CC.orientationNED = self.calibrated_pose.orientation.xyz.tolist()
+      CC.angularVelocity = self.calibrated_pose.angular_velocity.xyz.tolist()
+
+    CC.cruiseControl.override = CC.enabled and not CC.longActive and self.CP.openpilotLongitudinalControl
+    CC.cruiseControl.cancel = CS.cruiseState.enabled and (not CC.enabled or not self.CP.pcmCruise)
+
+    desired_kph = min(CS.vCruiseCluster, self.sm['carrotMan'].desiredSpeed)
+    setSpeed = float(desired_kph * CV.KPH_TO_MS)
+    speeds = self.sm['longitudinalPlan'].speeds
+    if len(speeds):
+      CC.cruiseControl.resume = CC.enabled and CS.cruiseState.standstill and speeds[-1] > 0.1
+      vCluRatio = CS.vCluRatio if CS.vCluRatio > 0.5 else 1.0
+      setSpeed = speeds[-1] / vCluRatio
+
+    hudControl = CC.hudControl
+
+    hudControl.activeCarrot = self.sm['carrotMan'].activeCarrot
+    hudControl.atcDistance = self.sm['carrotMan'].xDistToTurn
+
+    lp = self.sm['longitudinalPlan']
+    if self.CP.pcmCruise:
+      hudControl.setSpeed = float(max(30/3.6, desired_kph * CV.KPH_TO_MS))
+    else:
+      hudControl.setSpeed = setSpeed if lp.xState == 3 else float(desired_kph * CV.KPH_TO_MS)
+    hudControl.speedVisible = CC.enabled
+    hudControl.lanesVisible = CC.enabled
+    hudControl.leadVisible = self.sm['longitudinalPlan'].hasLead
+    hudControl.leadDistanceBars = self.sm['selfdriveState'].personality.raw + 1
+    hudControl.visualAlert = self.sm['selfdriveState'].alertHudVisual
+
+    radarState = self.sm['radarState']
+    leadOne = radarState.leadOne
+    hudControl.leadDistance = leadOne.dRel if leadOne.present else 0
+    hudControl.leadRelSpeed = leadOne.vRel if leadOne.present else 0
+    hudControl.leadRadar = 1 if leadOne.radar else 0
+    hudControl.leadDPath = leadOne.dPath
+
+    meta = self.sm['modelV2'].meta
+    if False: # command
+      desire_map = {
+        log.Desire.turnLeft: 1,
+        log.Desire.turnRight: 2,
+        log.Desire.laneChangeLeft: 3,
+        log.Desire.laneChangeRight: 4,
+      }
+      hudControl.modelDesire = desire_map.get(meta.desire, 0)
+    else: # model.
+      hud_desire = 0
+      if len(meta.desireState) > 4:
+        if meta.desireState[1] > 0.1:
+          hud_desire = 1   # turnLeft
+        elif meta.desireState[2] > 0.1:
+          hud_desire = 2   # turnRight
+        elif meta.desireState[3] > 0.1:
+          hud_desire = 3   # laneChangeLeft
+        elif meta.desireState[4] > 0.1:
+          hud_desire = 4   # laneChangeRight
+      hudControl.modelDesire = hud_desire
+
+    hudControl.rightLaneVisible = True
+    hudControl.leftLaneVisible = True
+    if self.sm.valid['driverAssistance']:
+      hudControl.leftLaneDepart = self.sm['driverAssistance'].leftLaneDeparture
+      hudControl.rightLaneDepart = self.sm['driverAssistance'].rightLaneDeparture
+    
+    hudControl.e2eX = self.sm['longitudinalPlan'].e2eX
+    hudControl.vTurnSpeed = self.sm['carrotMan'].vTurnSpeed
+    hudControl.curvature = self.curvature
+
+    CO = self.sm['carOutput']
+    if self.sm['selfdriveState'].active:
+      if self.CP.steerControlType == car.CarParams.SteerControlType.angle:
+        self.steer_limited_by_safety = abs(CC.actuators.steeringAngleDeg - CO.actuatorsOutput.steeringAngleDeg) > \
+                                              STEER_ANGLE_SATURATION_THRESHOLD
+      else:
+        self.steer_limited_by_safety = abs(CC.actuators.torque - CO.actuatorsOutput.torque) > 1e-2
+
+    # TODO: both controlsState and carControl valids should be set by
+    #       sm.all_checks(), but this creates a circular dependency
+
+    # controlsState
+    dat = messaging.new_message('controlsState')
+    dat.valid = CS.canValid
+    cs = dat.controlsState
+
+    cs.curvature = self.curvature
+    cs.longitudinalPlanMonoTime = self.sm.logMonoTime['longitudinalPlan']
+    cs.lateralPlanMonoTime = self.sm.logMonoTime['modelV2']
+    cs.desiredCurvature = self.desired_curvature
+    cs.longControlState = self.LoC.long_control_state
+    cs.upAccelCmd = float(self.LoC.pid.p)
+    cs.uiAccelCmd = float(self.LoC.pid.i)
+    cs.ufAccelCmd = float(self.LoC.pid.f)
+    cs.forceDecel = bool(self.sm['driverMonitoringState'].noResponseForceDecel or
+                         (self.sm['selfdriveState'].state == State.softDisabling))
+
+    # trigger the car's stock driver monitoring escalation
+    CC.driverMonitoringEscalation = cs.forceDecel
+
+    cs.debugMsg1 = str(CO.actuatorsOutput.kisaLog1)
+    if abs(self.lane_position_guard.accel) > 1e-4:
+      cs.debugMsg1 += f" LPG={self.lane_position_guard.accel:+.2f}"
+    if self.close_lead_mode.active:
+      cs.debugMsg1 += " LCF=model"
+    if abs(self.model_lane_guard.accel) > 1e-4:
+      cs.debugMsg1 += f" MLG={self.model_lane_guard.side:+d}:{self.model_lane_guard.accel:+.2f}"
+    #cs.debugMsg2 = str(CO.actuatorsOutput.kisaLog2)
+    #cs.debugMsg3 = str(CO.actuatorsOutput.kisaLog3)
+    CC.e2eStandstill = bool(CO.actuatorsOutput.e2eStandstill)
+
+    lat_tuning = self.CP.lateralTuning.which()
+    if self.CP.steerControlType == car.CarParams.SteerControlType.angle:
+      cs.lateralControlState.angleState = lac_log
+    elif self.CP.steerControlType == car.CarParams.SteerControlType.curvature:
+      cs.lateralControlState.curvatureState = lac_log
+    elif lat_tuning == 'pid':
+      cs.lateralControlState.pidState = lac_log
+    elif lat_tuning == 'torque':
+      cs.lateralControlState.torqueState = lac_log
+
+    cs.activeLaneLine = self.lanefull_mode_enabled
+
+    cs.accel = float(CO.actuatorsOutput.accel)
+    if CS.standstill or CS.cruiseState.standstill:
+      self.standstill_elapsed_timer += DT_CTRL
+    elif self.standstill_elapsed_timer and CS.vEgo < 1.4:
+      self.standstill_elapsed_timer += DT_CTRL
+    else:
+      self.standstill_elapsed_timer = 0.0
+    cs.standStillTimer = int(self.standstill_elapsed_timer)
+
+    self.pm.send('controlsState', dat)
+
+    # carControl
+    cc_send = messaging.new_message('carControl')
+    cc_send.valid = CS.canValid
+    cc_send.carControl = CC
+    self.pm.send('carControl', cc_send)
+
+  def run(self):
+    rk = Ratekeeper(100, print_delay_threshold=None)
+    while True:
+      self.update()
+      CC, lac_log = self.state_control()
+      self.publish(CC, lac_log)
+      rk.monitor_time()
+
+
+def main():
+  config_realtime_process(4, Priority.CTRL_HIGH)
+  controls = Controls()
+  controls.run()
+
+
+if __name__ == "__main__":
+  main()
