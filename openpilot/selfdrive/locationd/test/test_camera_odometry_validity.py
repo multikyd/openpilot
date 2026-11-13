@@ -56,13 +56,15 @@ class TestCalibrationOdometryValidity(unittest.TestCase):
     self.assertTrue(self.skip())
     self.assertTrue(self.guard.can_hold(10.14, trusted=True))
 
-  def test_second_invalid_revokes_hold(self):
+  def test_consecutive_skips_share_one_half_second_deadline(self):
     self.assertTrue(self.skip())
-    self.assertFalse(self.skip(frame_id=104, timestamp_eof=10.2, log_time=10.21, now=10.22))
-    self.assertFalse(self.guard.can_hold(10.23, trusted=True))
+    self.assertTrue(self.skip(frame_id=104, timestamp_eof=10.2, log_time=10.21, now=10.22))
+    self.assertTrue(self.skip(frame_id=108, timestamp_eof=10.4, log_time=10.41, now=10.42))
+    self.assertFalse(self.guard.can_hold(10.501, trusted=True))
+    self.assertFalse(self.skip(frame_id=110, timestamp_eof=10.5, log_time=10.51, now=10.52))
 
   def test_timeout_and_future_or_nonfinite_clock(self):
-    for now in (10.251, 10.09, float('nan')):
+    for now in (10.501, 10.09, float('nan')):
       self.setUp()
       self.assertTrue(self.skip())
       self.assertFalse(self.guard.can_hold(now, trusted=True))
@@ -81,7 +83,7 @@ class TestCalibrationOdometryValidity(unittest.TestCase):
     self.assertFalse(self.skip(trusted=False))
 
   def test_old_pose_or_large_skip_cannot_enable_hold(self):
-    for changes in (dict(now=10.4), dict(frame_id=103), dict(log_time=10.3),
+    for changes in (dict(now=10.6), dict(frame_id=112), dict(log_time=10.7),
                     dict(timestamp_eof=float('nan'))):
       self.setUp()
       self.assertFalse(self.skip(**changes))
@@ -141,11 +143,13 @@ class TestLocationCameraOdometryValidity(unittest.TestCase):
     self.assertTrue(self.guard.update(False, 104, 10.2, 10.21, False, allow_grace=True))
     self.assertFalse(self.guard.update(False, 104, 10.2, 10.21, False, allow_grace=True))
 
-  def test_calibration_still_uses_original_single_skip_150ms_policy(self):
+  def test_trusted_calibration_bridges_test13_five_missing_frames(self):
     calibration = module.CalibrationOdometryValidity()
     calibration.update(True, 100, 10., 10.01, trusted=True, now=10.02)
-    self.assertFalse(calibration.update(False, 104, 10.2, 10.21, trusted=True, now=10.22))
-    self.assertEqual(calibration.camera.MAX_GAP,.15)
+    self.assertTrue(calibration.update(False, 106, 10.3, 10.36, trusted=True, now=10.37))
+    self.assertTrue(calibration.can_hold(10.49, trusted=True))
+    self.assertFalse(calibration.can_hold(10.501, trusted=True))
+    self.assertEqual(calibration.camera.MAX_GAP,.5)
 
   def test_real_locationd_publication_checks_all_other_inputs(self):
     import ast

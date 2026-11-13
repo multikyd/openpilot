@@ -1,4 +1,4 @@
-"""Allow only an isolated model frame skip between recent accepted odometry samples."""
+"""Bounded odometry validity holds; invalid samples never update estimators."""
 import math
 
 
@@ -28,7 +28,7 @@ class LocationCameraOdometryValidity:
   """Bridge at most 0.5 s of skipped-camera odometry with healthy other inputs.
 
   This changes the temporary-error input flag only. Invalid poses are never
-  passed to the estimator. Calibration retains its independent 0.15 s policy.
+  passed to the estimator. Calibration separately requires trusted calibration.
   """
   MAX_GAP = .5
   MAX_FRAME_GAP = 10  # camera frame IDs advance at 20 Hz
@@ -69,28 +69,36 @@ class LocationCameraOdometryValidity:
 
 
 class CalibrationOdometryValidity:
-  """Retain trusted calibration only for one fresh, isolated odometry skip.
+  """Retain established calibration for at most 0.5 s of camera frame skips.
 
   This never makes an invalid odometry sample usable for calibration updates.
   The caller must separately keep all other service and calibration checks.
   """
   def __init__(self):
-    self.camera = CameraOdometryValidity()
+    self.camera = LocationCameraOdometryValidity()
     self.holding = False
     self.eof = self.stamp = None
 
   def update(self, valid, frame_id, timestamp_eof, log_time, *, trusted, now):
-    isolated = self.camera.update(valid, frame_id, timestamp_eof, log_time, valid and trusted)
+    self.camera.update(valid, frame_id, timestamp_eof, log_time, valid and trusted,
+                       allow_grace=trusted)
     self.eof, self.stamp = timestamp_eof, log_time
-    self.holding = bool(not valid and trusted and isolated)
+    self.holding = bool(not valid and trusted and self.camera.holding)
     return self.can_hold(now, trusted=trusted)
 
   def can_hold(self, now, *, trusted):
-    fresh = (self.holding and trusted and
+    good = self.camera.last_good
+    fresh = (self.holding and trusted and good is not None and
              all(math.isfinite(v) for v in (now, self.eof, self.stamp)) and
              0 <= self.stamp - self.eof <= self.camera.MAX_GAP and
              0 <= now - self.eof <= self.camera.MAX_GAP and
-             0 <= now - self.stamp <= self.camera.MAX_GAP)
+             0 <= now - self.stamp <= self.camera.MAX_GAP and
+             0 <= now - good[1] <= self.camera.MAX_GAP and
+             0 <= now - good[2] <= self.camera.MAX_GAP)
     if not fresh:
+      # An expired/untrusted hold needs a new valid observation, never a bad-frame chain.
+      if self.holding or not trusted:
+        self.camera.last_good = None
+        self.camera.holding = False
       self.holding = False
     return bool(fresh)

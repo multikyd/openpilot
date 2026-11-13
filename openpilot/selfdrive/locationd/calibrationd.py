@@ -319,8 +319,7 @@ def main() -> NoReturn:
         print('got new rpy', new_rpy)
 
     inputs_valid = sm.all_checks() or camera_validity.can_hold(time.monotonic(), trusted=trusted)
-    # Keep 4Hz publication, but revoke a hold immediately on a second failure
-    # or timeout rather than leaving a previously valid message latched.
+    # Keep 4Hz publication; revoke expired/untrusted holds immediately.
     if sm.frame % 5 == 0 or (last_sent_valid is True and not inputs_valid):
       calibrator.send_data(pm, inputs_valid)
       last_sent_valid = inputs_valid
