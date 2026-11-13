@@ -18,6 +18,8 @@ from openpilot.selfdrive.controls.lib.drive_helpers import clip_curvature, get_l
 from openpilot.selfdrive.controls.lib.close_lead_mode import CloseLeadModelMode
 from openpilot.selfdrive.controls.lib.latcontrol import LatControl
 from openpilot.selfdrive.controls.lib.model_lane_guard import ModelLaneGuard, LanePositionGuard
+from openpilot.selfdrive.controls.lib.model_corridor_guard import ModelCorridorGuard
+from openpilot.selfdrive.controls.lib.stop_steering_guard import StopSteeringGuard
 from openpilot.selfdrive.controls.lib.latcontrol_pid import LatControlPID
 from openpilot.selfdrive.controls.lib.latcontrol_angle import LatControlAngle, STEER_ANGLE_SATURATION_THRESHOLD
 from openpilot.selfdrive.controls.lib.latcontrol_curvature import LatControlCurvature
@@ -74,7 +76,9 @@ class Controls:
     self.curvature = 0.0
     self.desired_curvature = 0.0
     self.model_lane_guard = ModelLaneGuard()
+    self.model_corridor_guard = ModelCorridorGuard()
     self.lane_position_guard = LanePositionGuard()
+    self.stop_steering_guard = StopSteeringGuard()
     self.lane_center_preference = self.params.get("LaneCenterOffset", return_default=True)
     self.camera_offset = self.params.get("CameraOffsetAdj", return_default=True)
 
@@ -241,6 +245,7 @@ class Controls:
 
     effective_lat_smoothing = self.lat_smooth_seconds
     model_lane_guard_used = False
+    model_corridor_guard_used = False
     position_guard_used = False
     position_now = time.monotonic()
     def position_curvature(curvature, guarded=None):
@@ -276,8 +281,18 @@ class Controls:
         enabled=(self.sm.all_checks(['modelV2', 'carState']) and
                  0. <= guard_now-self.sm.logMonoTime['carState'] * 1e-9 <= .1),
         camera_offset=self.camera_offset, actuator_delay=steer_actuator_delay)
-      position_guard_used = True
-      guarded_curvature = position_curvature(model_v2.action.desiredCurvature, guarded_curvature)
+      if self.CP.brand == 'hyundai':
+        model_corridor_guard_used = True
+        guarded_curvature = self.model_corridor_guard.update(
+          model_v2, CS, model_v2.action.desiredCurvature, guarded_curvature,
+          self.sm.logMonoTime['modelV2']*1e-9, guard_now,
+          preference=self.lane_center_preference, camera_offset=self.camera_offset,
+          actuator_delay=steer_actuator_delay,
+          enabled=(self.sm.all_checks(['modelV2','carState']) and
+                   0. <= guard_now-self.sm.logMonoTime['carState']*1e-9 <= .1))
+      else:
+        position_guard_used = True
+        guarded_curvature = position_curvature(model_v2.action.desiredCurvature, guarded_curvature)
       # Reduce filter lag only once the model has started the requested maneuver.
       meta = model_v2.meta
       right_entry = (meta.laneChangeDirection == LaneChangeDirection.right and
@@ -298,7 +313,25 @@ class Controls:
       self.lane_position_guard.reset()
     if not model_lane_guard_used:
       self.model_lane_guard.reset()
+    if not model_corridor_guard_used:
+      self.model_corridor_guard.reset()
 
+    stop_guard_now = time.monotonic()
+    stop_guard_was_active = self.stop_steering_guard.active
+    new_desired_curvature = self.stop_steering_guard.update(
+      model_v2, CS, new_desired_curvature, self.curvature,
+      self.sm.logMonoTime['modelV2']*1e-9, stop_guard_now,
+      stopping=bool(self.sm['longitudinalPlan'].shouldStop),
+      enabled=(CC.latActive and self.CP.brand == 'hyundai' and
+               self.CP.steerControlType == car.CarParams.SteerControlType.angle and
+               self.sm.all_checks(['modelV2', 'carState', 'longitudinalPlan']) and
+               0. <= stop_guard_now-self.sm.logMonoTime['carState']*1e-9 <= .1 and
+               0. <= stop_guard_now-self.sm.logMonoTime['longitudinalPlan']*1e-9 <= .25))
+    if stop_guard_was_active != self.stop_steering_guard.active:
+      cloudlog.event('stop_steering_guard', active=self.stop_steering_guard.active,
+                     speed_kph=round(CS.vEgo*3.6, 2), reference=self.stop_steering_guard.reference,
+                     geometry=self.stop_steering_guard.geometry,
+                     curvature=float(new_desired_curvature))
     self.desired_curvature, curvature_limited = clip_curvature(CS.vEgo, self.desired_curvature, new_desired_curvature, lp.roll)
     lat_delay = self.sm["lateralDelay"].lateralDelay + effective_lat_smoothing
     actuators.curvature = float(self.desired_curvature)
@@ -435,6 +468,8 @@ class Controls:
       cs.debugMsg1 += " LCF=model"
     if abs(self.model_lane_guard.accel) > 1e-4:
       cs.debugMsg1 += f" MLG={self.model_lane_guard.side:+d}:{self.model_lane_guard.accel:+.2f}"
+    if abs(self.model_corridor_guard.accel) > 1e-4:
+      cs.debugMsg1 += f" MCG={self.model_corridor_guard.accel:+.2f}:{self.model_corridor_guard.target_offset:+.2f}"
     #cs.debugMsg2 = str(CO.actuatorsOutput.kisaLog2)
     #cs.debugMsg3 = str(CO.actuatorsOutput.kisaLog3)
     CC.e2eStandstill = bool(CO.actuatorsOutput.e2eStandstill)
