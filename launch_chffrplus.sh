@@ -73,7 +73,7 @@ function agnos_init {
 function launch {
 
   # one touch git pull
-  KILINE="alias gi='git -C /data/openpilot pull && rm -f /data/openpilot/prebuilt && touch /data/ks && echo -en 1 > /data/params/d/DoReboot'"; KIFILE="$HOME/.bashrc"; grep -qxF "$KILINE" "$KIFILE" || echo "$KILINE" >> "$KIFILE"
+  python3 "$DIR/openpilot/selfdrive/kisapilot/terminal_update.py" --install-alias "$HOME/.bashrc"
 
   # Remove orphaned git lock if it exists on boot
   [ -f "$DIR/.git/index.lock" ] && rm -f "$DIR/.git/index.lock"
