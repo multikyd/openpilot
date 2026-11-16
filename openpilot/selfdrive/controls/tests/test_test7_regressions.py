@@ -82,7 +82,8 @@ class TestBumpPhysicalEvidence(unittest.TestCase):
     self.assertEqual(r['clear_passes'],2)
     self.assertIsNone(h.tick(100.,35.))
     live=h.tick(100.,35.,nav_distance=40.)
-    self.assertIsNotNone(live);self.assertEqual(live['target'],30.)
+    # Live navigation must still respect the previously learned/manual cap.
+    self.assertIsNotNone(live);self.assertEqual(live['target'],26.)
   def test_crawling_is_not_evidence_of_absent_bump(self):
     h,r=self.memory(physical_passes=2)
     for i in range(2):h.finish_pass(r,1.,0,100,12.,True,False,80.+i)

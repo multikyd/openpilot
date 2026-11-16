@@ -1,5 +1,6 @@
 """Local, directional bump memory. Thresholds are provisional, not height estimates."""
 import math
+import time
 from collections import deque
 
 MAX_RECORDS = 256
@@ -70,6 +71,8 @@ class BumpMemory:
     self.base = 30
     self.raise_limit = 10
     self.last_peak = self.last_pass_speed = 0.0
+    self.override_events = []
+    self.override_brake_until = 0.
 
   def export(self):
     return {'version': 1, 'records': self.records}
@@ -172,7 +175,45 @@ class BumpMemory:
   def _notify(self, now, text):
     self.notice, self.notice_until = text, now + 5
 
-  def finish_pass(self, record, peak, above, samples, speed, manual, eligible, now):
+  def _override_candidate(self, record, peak, speed, seconds, eligible, now):
+    # Only repeated, independent, smooth pedal overrides may raise this site's target.
+    if seconds < .3:
+      return
+    event = dict(lat=record['lat'], lon=record['lon'], heading=record['heading'],
+                 speed=round(speed, 1), peak=round(peak, 3), pedal_seconds=round(seconds, 2))
+    history = record.get('override_passes', [])
+    history = history if isinstance(history, list) else []
+    stamp = time.time()
+    history = [p for p in history if isinstance(p, dict) and
+               all(isinstance(p.get(k), (int, float)) and math.isfinite(p[k]) for k in ('time', 'speed', 'peak')) and
+               0 <= stamp-p['time'] <= 90*86400 and 10 <= p['speed'] <= 80 and 0 <= p['peak'] < SMOOTH_PEAK][-7:]
+    if peak >= SMOOTH_PEAK:
+      record.pop('override_passes', None)
+      history = []
+      self.dirty = True
+    reason = ('context_excluded' if not eligible else 'impact_not_smooth' if peak >= SMOOTH_PEAK else
+              'not_faster_than_target' if speed < record['target']+5 else
+              'same_encounter' if history and stamp-history[-1]['time'] < 300 else '')
+    if not reason:
+      history.append(dict(time=stamp, speed=round(speed, 1), peak=round(peak, 3)))
+      record['override_passes'] = history
+      speeds = sorted(p['speed'] for p in history)
+      median = (speeds[(len(speeds)-1)//2]+speeds[len(speeds)//2])/2
+      proposed = min(MAX_LEARNED_SPEED, self.base + self.raise_limit,
+                     record['manual_cap'], math.floor(median/5)*5)
+      # At least three independent passes with similar crossing speeds.
+      if len(history) >= 3 and speeds[-1]-speeds[0] <= 5 and proposed >= record['target']+5:
+        record['override_adjustment'] = dict(speed=proposed, previous_target=record['target'],
+                                             passes=len(history), time=stamp, observed_speed=round(median, 1))
+        record['target'] = proposed
+        self._notify(now, f"방지턱 목표 {proposed:.0f} 적용 · 반복 페달 {len(history)}회")
+      self.dirty = True
+    event.update(reason=reason or 'recorded', passes=len(history),
+                 adjustment=record.get('override_adjustment') if not reason else None)
+    self.override_events.append(event)
+
+  def finish_pass(self, record, peak, above, samples, speed, manual, eligible, now,
+                  override_seconds=0., override_eligible=False):
     # Missing/undersampled IMU must never count as a smooth pass.
     if samples < 15 or speed < 10 or not all(math.isfinite(v) for v in (peak, speed)):
       return
@@ -193,6 +234,7 @@ class BumpMemory:
       record['target'] = min(old, record['manual_cap'])
     # A sustained hard impact reduces the target even after a driver's slowdown.
     if peak >= ROUGH_PEAK and above >= 2:
+      record.pop('override_passes', None)
       record['impact_learned'] = True
       record['target'] = max(10, min(record['target'] - 5, math.floor((speed - 5)/5)*5))
       record['smooth'] = 0
@@ -212,8 +254,13 @@ class BumpMemory:
     record['last_time'] = now  # diagnostic monotonic only; never persisted as a cooldown
     self.dirty = True
     self.last_peak, self.last_pass_speed = peak, speed
+    self._override_candidate(record, peak, speed, override_seconds, override_eligible, now)
 
-  def tick(self, now, speed, nav_distance=None, manual=False, eligible=False):
+  def tick(self, now, speed, nav_distance=None, manual=False, eligible=False,
+           gas_pressed=False, override_eligible=False, brake_pressed=False):
+    if brake_pressed:
+      self.override_brake_until = now + 30.
+    override_eligible = override_eligible and now >= self.override_brake_until
     if manual:
       self.manual_until = now + 12
     if self.position is None or not (0 <= now-self.position[0] <= 1) or not math.isfinite(speed) or speed < 3:
@@ -258,13 +305,18 @@ class BumpMemory:
           self._notify(now, '노면 충격 저장')
     if self.pending is None and nearest is not None and 0 < nearest_d <= 35:
       self.pending = dict(record=nearest, start=now, manual=now < self.manual_until,
-                          eligible=eligible, crossing=None, speed=speed, valid=True)
+                          eligible=eligible, crossing=None, speed=speed, valid=True,
+                          override_seconds=0., override_eligible=override_eligible, last_tick=now)
     if self.pending is not None:
       p = self.pending
       d, cross = relative(lat, lon, heading, p['record'])
       p['manual'] |= now < self.manual_until
       p['eligible'] &= eligible
       p['valid'] &= fresh_sensor
+      p['override_eligible'] &= override_eligible
+      if gas_pressed and p['crossing'] is None and 0 <= d <= 35:
+        p['override_seconds'] += max(0., min(.1, now-p['last_tick']))
+      p['last_tick'] = now
       if abs(cross) > 8 or not direction_matches(heading, p['record']['heading']) or now-p['start'] > 25:
         self.pending = None
       else:
@@ -277,7 +329,8 @@ class BumpMemory:
                       max((b[0]-a[0] for a, b in zip(window, window[1:])), default=1) <= .1)
           if p['valid'] and coverage:
             self.finish_pass(p['record'], max(a for _, a in window), sum(a >= ROUGH_PEAK for _, a in window),
-                             len(window), p['speed'], p['manual'], p['eligible'], now)
+                             len(window), p['speed'], p['manual'], p['eligible'], now,
+                             p['override_seconds'], p['override_eligible'])
           self.cooldowns[id(p['record'])] = now
           self.pending = None
     if nearest is not None and nearest['confirmed'] and nearest_d >= -8:

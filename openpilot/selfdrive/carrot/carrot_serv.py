@@ -1119,7 +1119,20 @@ class CarrotServ:
                   sm.valid['radarState'] and sm.alive['radarState'] and not following and
                   sm['carControl'].longActive and not manual)
       nav_bump = self.xSpdDist if self.xSpdType == 22 and self.active_carrot > 1 else plus_distance
-      self.bump_display = self.bump_memory.tick(bump_now, v_ego_kph, nav_bump, manual, eligible)
+      # Pedal-based learning requires repeated smooth passes without braking.
+      override_eligible = (sm.valid['carControl'] and sm.alive['carControl'] and
+                           0 <= bump_now-sm.recv_time['carControl'] < .2 and
+                           sm['carControl'].enabled and sm.valid['radarState'] and sm.alive['radarState'] and
+                           0 <= bump_now-sm.recv_time['radarState'] < .5 and not following and
+                           not CS.brakePressed and not button_changed and abs(CS.steeringAngleDeg) < 30 and
+                           self.nRoadLimitSpeed > 0 and v_ego_kph <= self.nRoadLimitSpeed and
+                           not (self.xTurnInfo >= 0 and -10 < self.xDistToTurn < 80) and
+                           not (self.xSpdType not in [-1, 22] and 0 < self.xSpdDist < 150))
+      self.bump_display = self.bump_memory.tick(bump_now, v_ego_kph, nav_bump, manual, eligible,
+                                               CS.gasPressed, override_eligible, CS.brakePressed)
+      for event in self.bump_memory.override_events:
+        cloudlog.event('bump_pedal_override_learning', **event)
+      self.bump_memory.override_events.clear()
       if self.bump_memory.dirty and bump_now - self.bump_save_time > 5:
         self.params.put("BumpLearningData", self.bump_memory.export())
         self.bump_memory.dirty = False
