@@ -202,6 +202,10 @@ def finalize_update() -> None:
   cloudlog.info("done finalizing overlay")
 
 
+class OffroadOSUpdateRequired(Exception):
+  """Code is staged, but an OS image must wait for offroad."""
+
+
 def handle_agnos_update() -> None:
   from openpilot.common.hardware.comma.agnos import flash_agnos_update, get_target_slot_number
 
@@ -212,6 +216,9 @@ def handle_agnos_update() -> None:
   cloudlog.info(f"AGNOS version check: {cur_version} vs {updated_version}")
   if cur_version == updated_version:
     return
+
+  if not Params().get_bool("IsOffroad"):
+    raise OffroadOSUpdateRequired("OS update requires offroad")
 
   # prevent an openpilot getting swapped in with a mismatched or partially downloaded agnos
   set_consistent_flag(False)
@@ -413,6 +420,14 @@ class Updater:
 
 
 def main() -> None:
+  # Branch staging can run onroad; its Git/copy children yield CPU and I/O to driving.
+  try:
+    os.nice(10)
+  except OSError:
+    pass
+  ionice = shutil.which("ionice")
+  if ionice:
+    subprocess.run([ionice, "-c", "3", "-p", str(os.getpid())], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
   params = Params()
 
   if params.get_bool("DisableUpdates"):
@@ -440,13 +455,19 @@ def main() -> None:
     # invalidate old finalized update
     set_consistent_flag(False)
 
-    # set initial state
-    params.put("UpdaterState", "idle", block=True)
+    # The worker can run onroad; code downloads only touch the staging overlay.
+    params.put("UpdaterState", "starting...", block=True)
 
     # Run the update loop
     first_run = True
+    deferred_os = False
     while True:
       wait_helper.ready_event.clear()
+      if deferred_os and not params.get_bool("IsOffroad") and wait_helper.user_request != UserRequest.FETCH:
+        params.put("UpdaterState", "waiting_offroad_os", block=True)
+        wait_helper.sleep(30)
+        continue
+      deferred_os = False
 
       # Attempt an update
       exception = None
@@ -480,6 +501,10 @@ def main() -> None:
           updater.fetch_update()
           write_time_to_param(params, "UpdaterLastFetchTime")
         update_failed_count = 0
+      except OffroadOSUpdateRequired:
+        deferred_os = True
+        update_failed_count = 0
+        cloudlog.info("code downloaded; waiting for offroad before OS image preparation")
       except subprocess.CalledProcessError as e:
         cloudlog.event(
           "update process failed",
@@ -495,15 +520,15 @@ def main() -> None:
         OVERLAY_INIT.unlink(missing_ok=True)
 
       try:
-        params.put("UpdaterState", "idle", block=True)
-        update_successful = (update_failed_count == 0)
+        params.put("UpdaterState", "waiting_offroad_os" if deferred_os else "idle", block=True)
+        update_successful = (not deferred_os and update_failed_count == 0)
         updater.set_params(update_successful, update_failed_count, exception)
       except Exception:
         cloudlog.exception("uncaught updated exception while setting params, shouldn't happen")
 
       # infrequent attempts if we successfully updated recently
       wait_helper.user_request = UserRequest.NONE
-      wait_helper.sleep(5*60 if update_failed_count > 0 else 1.5*60*60)
+      wait_helper.sleep(30 if deferred_os else 5*60 if update_failed_count > 0 else 1.5*60*60)
 
 
 if __name__ == "__main__":

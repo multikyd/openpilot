@@ -117,7 +117,7 @@ procs = [
   PythonProcess("hardwared", "openpilot.system.hardware.hardwared", always_run),
   PythonProcess("modem", "openpilot.common.hardware.comma.modem", always_run, enabled=COMMA_HARDWARE),
   PythonProcess("tombstoned", "openpilot.system.tombstoned", always_run, enabled=not PC),
-  PythonProcess("updated", "openpilot.system.updated.updated", only_offroad, enabled=not PC),
+  PythonProcess("updated", "openpilot.system.updated.updated", always_run, enabled=not PC),
   #PythonProcess("uploader", "openpilot.system.loggerd.uploader", always_run),
 
   # debug procs
