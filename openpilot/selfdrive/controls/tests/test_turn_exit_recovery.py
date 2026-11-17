@@ -44,7 +44,7 @@ class TestTurnExitRecovery(unittest.TestCase):
     for side in (-1, 1):
       self.setUp(); self.arm(side)
       values = self.exit(25, steering_angle=15.*side, curvature=-side*.004, preview=-side*.004)
-      self.assertEqual(values[:5], [.8]*5)
+      self.assertEqual(values[:2], [.8]*2)
       self.assertGreater(values[-1], 1.2)
       self.assertLessEqual(max(values), 1.25+1e-9)
       self.assertLessEqual(max(b-a for a,b in zip(values,values[1:])), .45*.05/.6+1e-9)
@@ -119,7 +119,7 @@ class TestTurnExitRecovery(unittest.TestCase):
     self.assertEqual(self.guard.strength,0.)
     self.assertEqual(self.guard.until,until)
     values = self.exit(30)
-    self.assertEqual(values[:5],[.8]*5)
+    self.assertEqual(values[:2],[.8]*2)
     self.assertGreater(values[-1],.8)
     self.assertEqual(self.guard.until,until)
 
@@ -127,6 +127,17 @@ class TestTurnExitRecovery(unittest.TestCase):
     self.arm()
     self.assertEqual(self.exit(10,leads=(lead(present=True,dRel=15.),lead())),[.8]*10)
     self.assertGreater(self.exit()[-1],.8)
+
+  def test_recovery_starts_while_wheel_is_still_unwinding(self):
+    self.arm()
+    values = self.exit(8, steering_angle=38.)
+    self.assertEqual(values[:2], [.8]*2)
+    self.assertGreater(values[3], .8)
+    self.assertLessEqual(max(values), 1.25+1e-9)
+
+  def test_unwinding_does_not_bypass_lateral_acceleration_gate(self):
+    self.arm()
+    self.assertEqual(self.exit(15, steering_angle=38., curvature=.03), [.8]*15)
 
 
 class TestPlannerRecoveryIntegration(unittest.TestCase):

@@ -375,17 +375,20 @@ class TestPositionGuardRouting(unittest.TestCase):
     method=next(n for n in controls.body if isinstance(n,ast.FunctionDef) and n.name=='state_control')
     helper=next(n for n in method.body if isinstance(n,ast.FunctionDef) and n.name=='position_curvature')
     start=method.body.index(helper)
-    block=method.body[start:start+4]  # helper, controller selection, guard resets
+    block=method.body[start:start+5]  # helper, controller selection, guard resets
     self.code=compile(ast.Module(body=block,type_ignores=[]),'actual_control_selection','exec')
     self.position=NS(update=Mock(return_value=.003),reset=Mock())
     self.boundary=NS(update=Mock(return_value=.004),reset=Mock())
-    sm={'lateralManeuverPlan':NS(desiredCurvature=.006)}
+    self.narrow=NS(update=Mock(side_effect=lambda model,cs,curvature,guarded,*args,**kw:guarded),
+                   reset=Mock(),active=False)
+    sm={'lateralManeuverPlan':NS(desiredCurvature=.006),'carrotMan':NS(naviHighway=False)}
     class Messages(dict):
       valid={'lateralManeuverPlan':False}
       logMonoTime={'modelV2':10_000_000_000,'carState':10_000_000_000}
       def all_checks(self, services):
         return True
     self.controls=NS(lane_position_guard=self.position,model_lane_guard=self.boundary,
+                    model_narrow_road_guard=self.narrow,
                     sm=Messages(sm),lanefull_mode_enabled=True,curvature=.001,
                     CP=None,lat_smooth_seconds=.1,desired_curvature=.002,
                     lane_center_preference=-.03,camera_offset=.04)
@@ -397,12 +400,12 @@ class TestPositionGuardRouting(unittest.TestCase):
                   lat_plan=NS(curvatures=[.005],psis=[],distances=[]),
                   lane_curve_command=Mock(return_value=(.005,.1)),
                   steer_actuator_delay=.4,position_now=10.,position_guard_used=False,
-                  model_lane_guard_used=False,effective_lat_smoothing=.1,
+                  model_lane_guard_used=False,narrow_guard_used=False,effective_lat_smoothing=.1,
                   LaneChangeDirection=NS(left=1,right=2),LaneChangeState=NS(laneChangeStarting=1),
                   time=NS(monotonic=lambda:10.),smooth_value=lambda value,previous,tau:value)
 
   def run_selection(self):
-    self.env.update(position_guard_used=False,model_lane_guard_used=False)
+    self.env.update(position_guard_used=False,model_lane_guard_used=False,narrow_guard_used=False)
     exec(self.code,self.env)
 
   def test_lane_mode_uses_planner_target_and_clears_model_correction(self):
@@ -412,6 +415,8 @@ class TestPositionGuardRouting(unittest.TestCase):
     self.position.reset.assert_called_once()
     self.boundary.update.assert_not_called()
     self.boundary.reset.assert_called_once()
+    self.narrow.update.assert_not_called()
+    self.narrow.reset.assert_called_once()
 
   def test_model_mode_retains_position_and_boundary_corrections(self):
     self.controls.lanefull_mode_enabled=False
@@ -431,6 +436,21 @@ class TestPositionGuardRouting(unittest.TestCase):
     self.assertEqual(self.env['new_desired_curvature'],.005)
     self.position.update.assert_called_once()
     self.position.reset.assert_called_once()
+
+  def test_active_narrow_right_preference_excludes_left_recovery(self):
+    self.controls.lanefull_mode_enabled=False
+    self.narrow.active=True
+    self.run_selection()
+    self.assertEqual(self.env['new_desired_curvature'],.004)
+    self.position.update.assert_not_called()
+    self.position.reset.assert_called_once()
+    self.narrow.update.assert_called_once()
+
+  def test_highway_disables_narrow_road_preference(self):
+    self.controls.lanefull_mode_enabled=False
+    self.controls.sm['carrotMan'].naviHighway=True
+    self.run_selection()
+    self.assertFalse(self.narrow.update.call_args.kwargs['enabled'])
 
 
 if __name__ == '__main__':

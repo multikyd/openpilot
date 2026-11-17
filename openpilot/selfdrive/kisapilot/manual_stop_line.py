@@ -3,7 +3,7 @@ import json
 import math
 import statistics
 
-from openpilot.selfdrive.carrot.signal_follow import _offset, normalized_position
+from openpilot.selfdrive.kisapilot.signal_follow import _offset, normalized_position
 
 
 def geometry(lat, lon, heading, target):

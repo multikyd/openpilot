@@ -9,7 +9,7 @@ ROOT=Path(__file__).parents[1]
 def module(name,path):
   spec=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
 narrow=module('test7_narrow',ROOT/'lib/narrow_road_bias.py')
-bump=module('test7_bump',ROOT.parent/'carrot/bump_learning.py')
+bump=module('test7_bump',ROOT.parent/'kisapilot/bump_learning.py')
 
 def model():
   x=np.linspace(0,40,33)
@@ -127,7 +127,7 @@ class TestLaneReleaseAndDiagnostics(unittest.TestCase):
     self.assertAlmostEqual(step(),-.06);self.assertEqual(p.lane_release_remaining,0.)
   def test_memory_source_is_logged_on_change_and_release_only(self):
     import textwrap
-    source=(ROOT.parent/'carrot/carrot_serv.py').read_text(encoding='utf8')
+    source=(ROOT.parent/'kisapilot/carrot_serv.py').read_text(encoding='utf8')
     start=source.index('    # Record source changes once per encounter')
     end=source.index('    # A secondary bump can drive passage',start)
     block=compile(textwrap.dedent(source[start:end]),'real_memory_diagnostics','exec')

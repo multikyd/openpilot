@@ -1,5 +1,5 @@
 import unittest
-from openpilot.selfdrive.carrot.bump_learning import BumpMemory, offset
+from openpilot.selfdrive.kisapilot.bump_learning import BumpMemory, offset
 
 class TestLocalBumpEligibility(unittest.TestCase):
   def make(self, passes=0, impact=False, cap=50, cross=0, physical=0):

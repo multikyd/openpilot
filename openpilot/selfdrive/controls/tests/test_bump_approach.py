@@ -1,7 +1,7 @@
 import math
 import unittest
 
-from openpilot.selfdrive.carrot.bump_approach import BumpApproach
+from openpilot.selfdrive.kisapilot.bump_approach import BumpApproach
 
 
 class TestBumpApproach(unittest.TestCase):

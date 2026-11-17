@@ -1,6 +1,6 @@
 import unittest
 from collections import deque
-from openpilot.selfdrive.carrot.bump_learning import BumpPassage, offset
+from openpilot.selfdrive.kisapilot.bump_learning import BumpPassage, offset
 
 class TestFrontLift(unittest.TestCase):
   def drive(self, pitch=True, vertical=True, sign=1., stale=False, accel=0., strong=False, distance0=10., enabled=True, reverse=False):

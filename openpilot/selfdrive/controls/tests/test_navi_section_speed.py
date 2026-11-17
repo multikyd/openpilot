@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import unittest
 
-source = Path(__file__).resolve().parents[2] / 'carrot' / 'carrot_serv.py'
+source = Path(__file__).resolve().parents[2] / 'kisapilot' / 'carrot_serv.py'
 tree = ast.parse(source.read_text(encoding='utf8'))
 method = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == '_update_sdi')
 namespace = {}

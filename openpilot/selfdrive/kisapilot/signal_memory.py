@@ -4,7 +4,7 @@ import json
 import math
 import statistics
 
-from openpilot.selfdrive.carrot.signal_follow import normalized_position, _offset, matched_lane_movement
+from openpilot.selfdrive.kisapilot.signal_follow import normalized_position, _offset, matched_lane_movement
 
 UNKNOWN, RED, GREEN, YELLOW = 0, 1, 2, 3
 DIRECTIONS = ('straight', 'left', 'right', 'observed')

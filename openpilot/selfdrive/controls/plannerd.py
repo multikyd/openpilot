@@ -16,7 +16,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPl
 from openpilot.selfdrive.controls.lib.lateral_planner import LateralPlanner
 import openpilot.cereal.messaging as messaging
 
-from openpilot.selfdrive.carrot.carrot_functions import CarrotPlanner
+from openpilot.selfdrive.kisapilot.carrot_functions import CarrotPlanner
 
 
 def log_highway_overtake_candidate(sm, last_logged):

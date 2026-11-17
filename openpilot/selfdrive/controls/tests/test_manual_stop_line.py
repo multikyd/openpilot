@@ -1,7 +1,7 @@
 import copy
 import unittest
 
-from openpilot.selfdrive.carrot.manual_stop_line import ManualStopLineMemory, ManualStopLineCorrection
+from openpilot.selfdrive.kisapilot.manual_stop_line import ManualStopLineMemory, ManualStopLineCorrection
 
 
 class TestManualStopLine(unittest.TestCase):

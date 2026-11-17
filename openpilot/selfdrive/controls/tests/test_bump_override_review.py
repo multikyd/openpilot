@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from openpilot.selfdrive.carrot.bump_learning import BumpMemory, offset
+from openpilot.selfdrive.kisapilot.bump_learning import BumpMemory, offset
 
 
 class TestBumpOverrideReview(unittest.TestCase):
@@ -14,7 +14,7 @@ class TestBumpOverrideReview(unittest.TestCase):
                 manual=True, eligible=False, now=stamp,
                 override_seconds=.8, override_eligible=True)
     args.update(kwargs)
-    with patch('openpilot.selfdrive.carrot.bump_learning.time.time', return_value=stamp):
+    with patch('openpilot.selfdrive.kisapilot.bump_learning.time.time', return_value=stamp):
       self.memory.finish_pass(**args)
 
   def test_three_independent_passes_apply_to_this_site(self):
@@ -82,7 +82,7 @@ class TestBumpOverrideReview(unittest.TestCase):
       m.gps(now, lat, lon, 0., 1.)
       m.sensor_last = now
       m.samples.append((now, 1.))
-      with patch('openpilot.selfdrive.carrot.bump_learning.time.time', return_value=1000.):
+      with patch('openpilot.selfdrive.kisapilot.bump_learning.time.time', return_value=1000.):
         m.tick(now, 40., distance if distance > 0 else None, True, False,
                gas_pressed=True, override_eligible=True, brake_pressed=brake and index == 30)
     self.assertEqual(len(self.record.get('override_passes', [])), 0 if brake else 1)

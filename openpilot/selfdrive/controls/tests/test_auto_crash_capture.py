@@ -5,8 +5,8 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
-from openpilot.selfdrive.carrot import auto_crash_capture as auto
-from openpilot.selfdrive.carrot import collect_crash as collector
+from openpilot.selfdrive.kisapilot import auto_crash_capture as auto
+from openpilot.selfdrive.kisapilot import collect_crash as collector
 
 
 class TestAutoCrashCapture(unittest.TestCase):
@@ -164,7 +164,8 @@ class TestAutoCrashCapture(unittest.TestCase):
     fault.mkdir()
     original = fault / 'large.log'
     original.write_bytes(b'123456')
-    chosen, skipped, total = collector.select_files((fault,), __import__('time').time(), max_file=4, max_total=4)
+    # Use a deterministic age; filesystem timestamps can round past time.time().
+    chosen, skipped, total = collector.select_files((fault,), original.stat().st_mtime+1., max_file=4, max_total=4)
     self.assertEqual(chosen, [])
     self.assertTrue(skipped)
     self.assertTrue(original.exists())

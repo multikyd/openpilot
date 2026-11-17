@@ -61,7 +61,7 @@ class AutoCrashCapture:
         try:
           event['route'] = self.route_path.read_text(encoding='utf-8').strip()
           # Record segment identities now, not at the later collection time.
-          from openpilot.selfdrive.carrot.collect_crash import nearby_segments
+          from openpilot.selfdrive.kisapilot.collect_crash import nearby_segments
           event['segments'] = nearby_segments(self.destination, event['route'])
         except Exception as error:
           event['route_error'] = str(error)
@@ -86,7 +86,7 @@ class AutoCrashCapture:
       return
     pending = self.pending()
     if pending:
-      self.child = self.spawn([sys.executable, '-m', 'openpilot.selfdrive.carrot.auto_crash_capture',
+      self.child = self.spawn([sys.executable, '-m', 'openpilot.selfdrive.kisapilot.auto_crash_capture',
                                '--collect', str(pending[0]), '--output', str(self.destination)],
                               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
@@ -141,7 +141,7 @@ def package_event(path, destination):
 
 
 def _package_event(path, destination):
-  from openpilot.selfdrive.carrot.collect_crash import collect
+  from openpilot.selfdrive.kisapilot.collect_crash import collect
   try:
     os.nice(19)
   except (AttributeError, OSError):

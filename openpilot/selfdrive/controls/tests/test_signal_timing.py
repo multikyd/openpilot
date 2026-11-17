@@ -1,6 +1,6 @@
 import unittest
-from openpilot.selfdrive.carrot.signal_timing import display_timing
-from openpilot.selfdrive.carrot.signal_follow import signal_from_sinf, directional_signal
+from openpilot.selfdrive.kisapilot.signal_timing import display_timing
+from openpilot.selfdrive.kisapilot.signal_follow import signal_from_sinf, directional_signal
 from openpilot.selfdrive.controls.tests import test_signal_live_display as live
 
 

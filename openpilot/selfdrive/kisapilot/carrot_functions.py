@@ -5,7 +5,7 @@ import json
 import os
 import time
 from openpilot.common.swaglog import cloudlog
-from openpilot.selfdrive.carrot.signal_follow import SignalFollowAssist
+from openpilot.selfdrive.kisapilot.signal_follow import SignalFollowAssist
 
 from openpilot.cereal import log
 from openpilot.common.params import Params

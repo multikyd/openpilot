@@ -1,7 +1,7 @@
 import copy
 import unittest
 
-from openpilot.selfdrive.carrot.signal_memory import SignalMemory
+from openpilot.selfdrive.kisapilot.signal_memory import SignalMemory
 
 
 class TestLiveSignalDisplay(unittest.TestCase):

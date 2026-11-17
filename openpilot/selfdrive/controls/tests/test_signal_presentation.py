@@ -1,7 +1,7 @@
 import unittest
 from types import SimpleNamespace
 
-from openpilot.selfdrive.carrot.signal_memory import movement
+from openpilot.selfdrive.kisapilot.signal_memory import movement
 # Load the graphics-independent helper without importing the onroad widget package.
 import importlib.util
 from pathlib import Path

@@ -22,7 +22,7 @@ from openpilot.selfdrive.controls.lib.turn_exit_recovery import TurnExitRecovery
 from openpilot.selfdrive.controls.lib.launch_follow import LaunchFollow
 from openpilot.selfdrive.controls.lib.overtake_plan import OvertakeAcceleration
 from openpilot.selfdrive.selfdrived.events import EventName
-from openpilot.selfdrive.carrot.carrot_functions import XState
+from openpilot.selfdrive.kisapilot.carrot_functions import XState
 
 import time
 

@@ -2,7 +2,7 @@ import copy
 import math
 import unittest
 from types import SimpleNamespace as NS
-from openpilot.selfdrive.carrot.signal_follow import SignalFollowAssist, red_approach
+from openpilot.selfdrive.kisapilot.signal_follow import SignalFollowAssist, red_approach
 
 
 def signal(distance=200.,speed=50/3.6):

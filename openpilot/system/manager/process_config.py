@@ -125,7 +125,7 @@ procs = [
   PythonProcess("webrtcd", "openpilot.system.webrtc.webrtcd", or_(livestream, notcar)),
   PythonProcess("joystick", "openpilot.tools.joystick.joystick_control", and_(joystick, iscar)),
 
-  PythonProcess("carrot_man", "openpilot.selfdrive.carrot.carrot_man", always_run),#, enabled=not PC),
+  PythonProcess("carrot_man", "openpilot.selfdrive.kisapilot.carrot_man", always_run),#, enabled=not PC),
   PythonProcess("kisa_agent", "openpilot.selfdrive.kisapilot.kisa_agent", always_run, enabled=not PC),
 ]
 

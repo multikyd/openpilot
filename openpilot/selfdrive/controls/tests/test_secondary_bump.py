@@ -7,10 +7,10 @@ import sys
 from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import MagicMock
-from openpilot.selfdrive.carrot.bump_approach import BumpApproach
+from openpilot.selfdrive.kisapilot.bump_approach import BumpApproach
 
 ROOT=Path(__file__).parents[2]
-PATH=ROOT/'carrot/carrot_serv.py'
+PATH=ROOT/'kisapilot/carrot_serv.py'
 TREE=ast.parse(PATH.read_text(encoding='utf8'))
 SERV=next(n for n in TREE.body if isinstance(n,ast.ClassDef) and any(isinstance(m,ast.FunctionDef) and m.name=='_update_sdi' for m in n.body))
 UPDATE=next(n for n in SERV.body if isinstance(n,ast.FunctionDef) and n.name=='update_navi')
@@ -124,7 +124,7 @@ class TestSecondaryBump(unittest.TestCase):
 
   def test_sensor_passage_releases_secondary_without_dropping_camera(self):
     h=instance()
-    spec=importlib.util.spec_from_file_location('openpilot.selfdrive.carrot.bump_learning',ROOT/'carrot/bump_learning.py')
+    spec=importlib.util.spec_from_file_location('openpilot.selfdrive.kisapilot.bump_learning',ROOT/'kisapilot/bump_learning.py')
     module=importlib.util.module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module)
     h.bump_memory.position=(100.,37.,127.,0.);h.bump_passage.matches.return_value=True
     self.assertEqual(h._plus_bump_speed(100.,10.),250.)

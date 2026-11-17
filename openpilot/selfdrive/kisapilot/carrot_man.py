@@ -27,12 +27,12 @@ import ipaddress
 import openpilot.cereal.messaging as messaging
 from openpilot.common.realtime import Ratekeeper, set_core_affinity
 from openpilot.common.params import Params
-from openpilot.selfdrive.carrot.carrot_functions import MyMovingAverage
+from openpilot.selfdrive.kisapilot.carrot_functions import MyMovingAverage
 from openpilot.common.hardware import PC, COMMA_HARDWARE
 from openpilot.common.constants import CV
 
-from openpilot.selfdrive.carrot.carrot_serv import CarrotServ
-from openpilot.selfdrive.carrot.navi_transport import DISCOVERY_PORTS, NaviSourceMux, NaviTcpServer
+from openpilot.selfdrive.kisapilot.carrot_serv import CarrotServ
+from openpilot.selfdrive.kisapilot.navi_transport import DISCOVERY_PORTS, NaviSourceMux, NaviTcpServer
 
 from openpilot.common.gps import get_gps_location_service
 
@@ -947,11 +947,11 @@ class CarrotMan:
       {"ts": now, "navigation": navigation, "gps": gps}))
 
   def _put_directional_signal(self, data):
-    from openpilot.selfdrive.carrot.signal_follow import directional_signal, usable_signal
+    from openpilot.selfdrive.kisapilot.signal_follow import directional_signal, usable_signal
     now = time.monotonic()
     navigation, physical_gps = self._signal_context(now)
     candidate = directional_signal(data, now, navigation, physical_gps)
-    from openpilot.selfdrive.carrot.signal_timing import display_timing
+    from openpilot.selfdrive.kisapilot.signal_timing import display_timing
     candidate.update(display_timing(data.get('_source_timestamp_ms'), time.time()))
     if not usable_signal(candidate):
       cloudlog.event("tmap_signal_rejected", raw=data, reason="invalid_or_unavailable")
@@ -1025,7 +1025,7 @@ class CarrotMan:
     if lamp is None:
       return
 
-    from openpilot.selfdrive.carrot.signal_follow import normalized_position, signal_from_sinf, directional_signal, usable_signal
+    from openpilot.selfdrive.kisapilot.signal_follow import normalized_position, signal_from_sinf, directional_signal, usable_signal
     if not usable_signal(directional_signal(signal_from_sinf(d), time.monotonic(), {}, {})):
       return
     # Prefer a recent direction-specific ssinf, but support legacy sinf-only feeds.
@@ -1049,7 +1049,7 @@ class CarrotMan:
     if not isinstance(d, dict):
       return
 
-    from openpilot.selfdrive.carrot.signal_follow import normalized_position
+    from openpilot.selfdrive.kisapilot.signal_follow import normalized_position
     d = dict(d)
     # A malformed ssinf must not suppress a valid sinf fallback.
     if not self._put_directional_signal(d):
@@ -1603,7 +1603,7 @@ class CarrotMan:
 
 
 def main():
-  from openpilot.selfdrive.carrot.crash_diagnostics import enable_crash_diagnostics
+  from openpilot.selfdrive.kisapilot.crash_diagnostics import enable_crash_diagnostics
   fault_file = enable_crash_diagnostics()
   cloudlog.event('carrot_crash_diagnostics', fault_file=fault_file,
                  note='Python all-thread fatal stacks; native core collection uses system configuration')

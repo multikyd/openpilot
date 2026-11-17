@@ -138,7 +138,7 @@ class ManagerProcess(ABC):
 
     # The surviving manager records evidence even when the child cannot handle a signal.
     try:
-      from openpilot.selfdrive.carrot.auto_crash_capture import capture_service
+      from openpilot.selfdrive.kisapilot.auto_crash_capture import capture_service
       capture_service().record(self.name, proc.pid, exit_code, signal_name)
     except Exception:
       cloudlog.exception("automatic_crash_capture_enqueue_failed")

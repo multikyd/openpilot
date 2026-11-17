@@ -59,26 +59,28 @@ class TurnExitRecovery:
       if self.last_turn_time is not None and now-self.last_turn_time > 6.:
         self.reset()
         return normal_max
-      opening = (self.armed and angle <= min(30., .4*self.peak_angle) and
+      # Recognize sustained unwinding before the wheel is almost straight.
+      # Actual/near/far lateral-acceleration and lead gates remain unchanged.
+      opening = (self.armed and angle <= min(40., .5*self.peak_angle) and
                  abs(curvature)*v_ego**2 <= .8 and abs(preview)*v_ego**2 <= .8 and
-                 abs(far_preview)*v_ego**2 <= 1.2 and abs(preview) <= .4*self.peak_curve and
+                 abs(far_preview)*v_ego**2 <= 1.2 and abs(preview) <= .5*self.peak_curve and
                  target_speed-v_ego >= .8 and self.clear_leads(leads, v_ego))
       self.exit_confirm = self.exit_confirm+dt if opening else 0.
-      if self.exit_confirm >= .3:
+      if self.exit_confirm >= .15:
         self.until = now+6.
 
     if self.until is None:
       return normal_max
     # Re-entering a bend, approaching a lead or reaching the target removes assistance.
-    if (now >= self.until or not self.clear_leads(leads, v_ego) or angle > 40. or target_speed-v_ego < .8):
+    if (now >= self.until or not self.clear_leads(leads, v_ego) or angle >= 50. or target_speed-v_ego < .8):
       self.reset()
       return normal_max
     if (abs(curvature)*v_ego**2 > .8 or abs(preview)*v_ego**2 > .8 or abs(far_preview)*v_ego**2 > 1.2):
       # Pause on an uncertain preview; the original window keeps counting down.
       self.strength = self.exit_confirm = 0.
       return normal_max
-    self.exit_confirm = min(.3, self.exit_confirm+dt)
-    if self.exit_confirm < .3:
+    self.exit_confirm = min(.15, self.exit_confirm+dt)
+    if self.exit_confirm < .15:
       return normal_max
     self.strength = min(1., self.strength+dt/.6, max(0., self.until-now))
     desired = _interp(v_ego*3.6, (10., 20., 40., 60.), (1.6, 1.5, 1.2, .9))

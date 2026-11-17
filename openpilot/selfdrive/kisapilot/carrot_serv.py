@@ -13,12 +13,12 @@ from datetime import datetime
 from ftplib import FTP
 from openpilot.cereal import log
 import openpilot.cereal.messaging as messaging
-from openpilot.selfdrive.carrot.bump_learning import BumpMemory, BumpPassage
-from openpilot.selfdrive.carrot.bump_approach import BumpApproach
-from openpilot.selfdrive.carrot.tbt_blinker import TbtBlinker
+from openpilot.selfdrive.kisapilot.bump_learning import BumpMemory, BumpPassage
+from openpilot.selfdrive.kisapilot.bump_approach import BumpApproach
+from openpilot.selfdrive.kisapilot.tbt_blinker import TbtBlinker
 from openpilot.common.swaglog import cloudlog
-from openpilot.selfdrive.carrot.signal_memory import SignalMemory, GREEN, blank as blank_signal
-from openpilot.selfdrive.carrot.manual_stop_line import ManualStopLineMemory
+from openpilot.selfdrive.kisapilot.signal_memory import SignalMemory, GREEN, blank as blank_signal
+from openpilot.selfdrive.kisapilot.manual_stop_line import ManualStopLineMemory
 from openpilot.common.realtime import Ratekeeper
 from openpilot.common.params import Params
 from openpilot.common.hardware import PC
@@ -718,7 +718,7 @@ class CarrotServ:
     if distance < -8.:
       return None
     if self.bump_memory.position is not None:
-      from openpilot.selfdrive.carrot.bump_learning import offset
+      from openpilot.selfdrive.kisapilot.bump_learning import offset
       stamp, lat, lon, heading = self.bump_memory.position
       lat, lon = offset(lat, lon, heading, max(0., v_ego)*(now-stamp))
       if self.bump_passage.matches(now, (*offset(lat, lon, heading, distance), heading)):
@@ -1175,7 +1175,7 @@ class CarrotServ:
     nav_bump_passed = False
     if self.bump_memory.position is not None:
       stamp, lat, lon, heading = self.bump_memory.position
-      from openpilot.selfdrive.carrot.bump_learning import offset
+      from openpilot.selfdrive.kisapilot.bump_learning import offset
       lat, lon = offset(lat, lon, heading, max(0., v_ego)*(bump_now-stamp))
       if nav_distance is not None:
         nav_bump_passed = self.bump_passage.matches(bump_now, (*offset(lat, lon, heading, nav_distance), heading))
@@ -1622,7 +1622,7 @@ class CarrotServ:
       if self.szPosRoadName == "null":
         self.szPosRoadName = ""
 
-      from openpilot.selfdrive.carrot.signal_follow import lane_guidance
+      from openpilot.selfdrive.kisapilot.signal_follow import lane_guidance
       # Replace on every navigation packet so omitted points cannot stay stale.
       self.signal_lane_points = lane_guidance(json)
       self.vpPosPointLatNavi = float(json.get("vpPosPointLat", 0.0))
@@ -1670,7 +1670,7 @@ def main():
   print("CarrotManager Started")
   #print("Carrot GitBranch = {}, {}".format(Params().get("GitBranch"), Params().get("GitCommitDate")))
   # 延迟导入，避免与 carrot_man 中导入 CarrotServ 的循环依赖
-  from openpilot.selfdrive.carrot.carrot_man import CarrotMan
+  from openpilot.selfdrive.kisapilot.carrot_man import CarrotMan
   carrot_man = CarrotMan()
 
   print(f"CarrotMan {carrot_man}")

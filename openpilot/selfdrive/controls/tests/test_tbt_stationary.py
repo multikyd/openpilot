@@ -19,7 +19,7 @@ def load(name, path):
 
 sender = load('stationary_sender', ROOT/'opendbc_repo/opendbc/car/hyundai/blinker_test.py')
 with patch.dict(sys.modules, {'opendbc.car.hyundai.blinker_test': sender}):
-  tbt = load('stationary_tbt', ROOT/'openpilot/selfdrive/carrot/tbt_blinker.py')
+  tbt = load('stationary_tbt', ROOT/'openpilot/selfdrive/kisapilot/tbt_blinker.py')
 
 
 class TestStationaryTbt(unittest.TestCase):

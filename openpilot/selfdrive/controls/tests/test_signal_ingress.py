@@ -1,5 +1,5 @@
 import unittest
-from openpilot.selfdrive.carrot.signal_follow import directional_signal, usable_signal
+from openpilot.selfdrive.kisapilot.signal_follow import directional_signal, usable_signal
 
 class TestSignalIngress(unittest.TestCase):
   def signal(self, **changes):
