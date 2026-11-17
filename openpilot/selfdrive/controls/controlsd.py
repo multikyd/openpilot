@@ -75,6 +75,7 @@ class Controls:
     self.model_lane_guard = ModelLaneGuard()
     self.lane_position_guard = LanePositionGuard()
     self.model_narrow_road_guard = ModelNarrowRoadGuard()
+    self.narrow_guard_used = False
     self.lane_center_preference = self.params.get("LaneCenterOffset", return_default=True)
     self.camera_offset = self.params.get("CameraOffsetAdj", return_default=True)
 
@@ -242,7 +243,7 @@ class Controls:
     effective_lat_smoothing = self.lat_smooth_seconds
     model_lane_guard_used = False
     position_guard_used = False
-    narrow_guard_used = False
+    self.narrow_guard_used = False
     position_now = time.monotonic()
     def position_curvature(curvature, guarded=None):
       return self.lane_position_guard.update(
@@ -277,7 +278,7 @@ class Controls:
         enabled=(self.sm.all_checks(['modelV2', 'carState']) and
                  0. <= guard_now-self.sm.logMonoTime['carState'] * 1e-9 <= .1),
         camera_offset=self.camera_offset, actuator_delay=steer_actuator_delay)
-      narrow_guard_used = True
+      self.narrow_guard_used = True
       guarded_curvature = self.model_narrow_road_guard.update(
         model_v2, CS, model_v2.action.desiredCurvature, guarded_curvature,
         self.sm.logMonoTime['modelV2']*1e-9, guard_now,
@@ -308,7 +309,7 @@ class Controls:
       self.lane_position_guard.reset()
     if not model_lane_guard_used:
       self.model_lane_guard.reset()
-    if not narrow_guard_used:
+    if not self.narrow_guard_used:
       self.model_narrow_road_guard.reset()
 
     self.desired_curvature, curvature_limited = clip_curvature(CS.vEgo, self.desired_curvature, new_desired_curvature, lp.roll)
@@ -443,7 +444,7 @@ class Controls:
     cs.debugMsg1 = str(CO.actuatorsOutput.kisaLog1)
     if abs(self.lane_position_guard.accel) > 1e-4:
       cs.debugMsg1 += f" LPG={self.lane_position_guard.accel:+.2f}"
-    if narrow_guard_used and CC.latActive and CS.vEgo <= 60./3.6:
+    if self.narrow_guard_used and CC.latActive and CS.vEgo <= 60./3.6:
       cs.debugMsg1 += f" NRG={self.model_narrow_road_guard.accel:+.3f}:{self.model_narrow_road_guard.reason}"
     if self.close_lead_mode.active:
       cs.debugMsg1 += " LCF=model"
