@@ -18,8 +18,8 @@
       "3": { "ko": "순정 종방향", "en": "Stock Long" }
     },
     "description": {
-      "ko": "1: SCC CAN 라인을 CAM에 연결, 2: 크루즈 상태 동기화, 3: 순정 종방향 제어",
-      "en": "1: Connect SCC CAN line to CAM, 2: Sync cruise state, 3: Use stock longitudinal control"
+      "ko": "현대차 SCC 배선과 제어 방식을 선택합니다. 0: 카메라 SCC 강제 설정 없음, 1: 카메라 SCC, 2: 카메라 SCC와 크루즈 상태 동기화, 3: 순정 종방향 제어용 버튼 전달. 실제 배선·지원 차종에 맞춰 설정하고 재시작해야 합니다.",
+      "en": "Selects the Hyundai SCC wiring/control variant. 0: no camera-SCC override; 1: camera SCC; 2: camera SCC with cruise-state synchronization; 3: button forwarding for stock longitudinal control. Match the supported vehicle and wiring, then restart."
     }
   },
   {
@@ -37,11 +37,11 @@
     "special_texts": {
       "0": { "ko": "없음", "en": "None" },
       "1": { "ko": "HDA2", "en": "HDA2" },
-      "2": { "ko": "HDA2 + BSM", "en": "HDA2 + BSM" }
+      "2": { "ko": "HDA2 (현재 1과 동일)", "en": "HDA2 (Same as 1)" }
     },
     "description": {
-      "ko": "1: HDA2, 2: HDA2 + 사각지대 감지",
-      "en": "1: HDA2, 2: HDA2 with Blind Spot Monitoring"
+      "ko": "CAN-FD 차량의 HDA2 조향 메시지 구성을 선택합니다. 0은 강제 설정 없음이며 1과 2는 현재 코드에서 모두 HDA2 구성을 선택합니다. 2를 선택해도 사각지대 센서가 새로 활성화되지는 않으며 실제 CAN 수신 여부로 감지합니다. 변경 후 재시작해야 합니다.",
+      "en": "Selects the CAN-FD HDA2 steering-message layout. 0 leaves it unforced; both 1 and 2 select HDA2 in this code. Value 2 does not activate additional blind-spot hardware: detection depends on received CAN messages. Restart after changing."
     }
   },
   {
@@ -57,15 +57,15 @@
     "decimal_places": 0,
     "value_type": "INT",
     "special_texts": {
-      "-1": { "ko": "SCC 레이더(항상 ON)", "en": "SCC Radar (Always On)" },
+      "-1": { "ko": "SCC 레이더", "en": "SCC Radar" },
       "0": { "ko": "SCC 레이더", "en": "SCC Radar" },
-      "1": { "ko": "레이더 트랙", "en": "Radar Track" },
-      "2": { "ko": "레이더 트랙(SCC ON)", "en": "Radar Track (SCC On)" },
-      "3": { "ko": "레이더 트랙(끼어들기 감지)", "en": "Radar Track (Cut-in Detect)" }
+      "1": { "ko": "레이더 트랙", "en": "Radar Tracks" },
+      "2": { "ko": "레이더 트랙", "en": "Radar Tracks" },
+      "3": { "ko": "레이더 트랙", "en": "Radar Tracks" }
     },
     "description": {
-      "ko": "레이더 기반 추적 방식 설정",
-      "en": "Configure radar-based tracking behavior"
+      "ko": "레이더 입력 방식을 선택합니다. -1과 0은 SCC 기반 입력, 1~3은 지원 차량의 레이더 트랙 입력입니다. 현재 레이더 파서는 1~3을 같은 트랙 모드로 처리하며, 2·3의 별도 SCC/끼어들기 기능은 이 값만으로 추가되지 않습니다. 배선·차종 지원이 필요하며 변경 후 재시작해야 합니다.",
+      "en": "Selects radar input. -1 and 0 use SCC-derived data; 1–3 use supported radar tracks. The current radar parser treats 1–3 as the same track mode; selecting 2 or 3 alone adds no separate SCC/cut-in feature. Requires compatible wiring and vehicle support; restart after changing."
     }
   },
   {
@@ -83,11 +83,11 @@
     "special_texts": {
       "0": { "ko": "사용안함", "en": "Not Use" },
       "1": { "ko": "소프트홀드+오토크루즈", "en": "Softhold + Auto Cruise" },
-      "2": { "ko": "소프트홀드 오류 발생 차량", "en": "if softhold error" }
+      "2": { "ko": "자동 제어 (현재 1과 동일)", "en": "Automatic (Same as 1)" }
     },
     "description": {
-      "ko": "소프트홀드 및 자동 크루즈 ON/OFF 제어",
-      "en": "Softhold and automatic cruise ON/OFF control"
+      "ko": "페달을 놓거나 앞차가 가까워지는 조건에서 크루즈 자동 재개와 소프트홀드를 허용합니다. 0은 끄기, 1·2는 자동 제어 허용입니다. 실제 재개는 기어·취소 대기·차량 상태 조건을 함께 확인하며, 순정 SCC 차량에서는 소프트홀드가 적용되지 않습니다.",
+      "en": "Allows automatic cruise re-engagement and soft hold under pedal-release/lead-distance conditions. 0 disables; 1 and 2 allow automatic control. Gear, cancellation delay and vehicle-state checks still apply. Soft hold is unavailable with stock SCC."
     }
   },
   {
@@ -103,8 +103,8 @@
     "decimal_places": 1,
     "value_type": "FLOAT",
     "description": {
-      "ko": "가속/브레이크 미사용 시 선행 차량이 가까워지면 크루즈 자동 ON",
-      "en": "When gas/brake is off, cruise turns on as the lead vehicle approaches"
+      "ko": "페달을 놓은 상태에서 크루즈 자동 재개를 판단하는 앞차 거리입니다(단위 m). 0은 거리 조건으로 재개하지 않습니다. AutoCruiseControl 및 차량 상태 조건을 만족해야 하며, 정차 목표 간격을 설정하는 항목은 아닙니다.",
+      "en": "Lead-distance threshold for automatic cruise re-engagement with pedals released, in metres. 0 disables this distance trigger. AutoCruiseControl and vehicle-state gates still apply. This is not the target standstill gap."
     }
   },
   {
@@ -125,8 +125,8 @@
       "2": { "ko": "조향 + 크루즈", "en": "Steer & Cruise" }
     },
     "description": {
-      "ko": "자동 인게이지 동작 방식 설정",
-      "en": "Configure auto-engage behavior at startup"
+      "ko": "초기 자동 활성화 범위를 선택합니다. 0: 자동 활성화 없음, 1: 조향, 2: 조향과 크루즈. 차량 준비 상태와 기존 활성화 제한을 통과해야 작동하며, 변경 후 차량 인터페이스 재시작이 필요합니다.",
+      "en": "Selects initial automatic engagement: 0 off, 1 steering, 2 steering and cruise. Vehicle readiness and existing engagement checks still apply. Restart the vehicle interface after changing."
     }
   },
   {
@@ -142,8 +142,8 @@
     "decimal_places": 0,
     "value_type": "INT",
     "description": {
-      "ko": "자동 GasTok 기능 활성화 속도",
-      "en": "Speed threshold to enable GasTok Feature"
+      "ko": "가속 페달을 짧게 밟았다 놓는 GasTok 및 페달 해제 자동 재개 조건에 사용하는 속도 기준입니다(단위 km/h). 값이 높을수록 저속에서 해당 재개 조건이 제한됩니다. AutoCruiseControl이 꺼져 있으면 자동 재개하지 않습니다.",
+      "en": "Speed threshold, in km/h, for GasTok (a short accelerator tap) and pedal-release re-engagement conditions. Higher values restrict these triggers at lower speeds. Automatic re-engagement requires AutoCruiseControl."
     }
   },
   {
@@ -157,24 +157,18 @@
     "max_value": 200,
     "step": 5,
     "decimal_places": 0,
-    "value_type": "INT"
+    "value_type": "INT",
+    "description": {
+      "ko": "안내음·경고음 전체에 곱하는 음량 비율입니다. 100은 기본 음량, 50은 절반입니다. soundd 시작 시 읽으므로 변경 반영에는 사운드 서비스 재시작이 필요합니다.",
+      "en": "Overall sound multiplier for prompts and alerts. 100 is the base volume and 50 is half. Read when soundd starts; restart the sound service to apply a change."
+    }
   },
   {
     "group": "UI/Start",
     "title": {
-      "ko": "인게이지 사운드 볼륨(10%)",
-      "en": "Engage Sound Volume (10%)"
+      "ko": "화면 밝기(%)",
+      "en": "Brightness Ratio(%)"
     },
-    "param": "SoundVolumeAdjustEngage",
-    "min_value": 5,
-    "max_value": 200,
-    "step": 5,
-    "decimal_places": 0,
-    "value_type": "INT"
-  },
-  {
-    "group": "UI/Start",
-    "title": { "ko": "화면 밝기(%)", "en": "Brightness Ratio(%)" },
     "param": "ShowCustomBrightness",
     "min_value": 10,
     "max_value": 100,
@@ -182,30 +176,8 @@
     "decimal_places": 0,
     "value_type": "INT",
     "description": {
-      "ko": "화면 밝기를 설정합니다. 이벤트 발생시 원래 밝기로 바뀌고 다시 설정한 밝기로 됩니다.(단위:%)",
-      "en": "Sets the screen brightness. When the event occurs, it changes to the original brightness and the set brightness. (Unit:%)"
-    }
-  },
-  {
-    "group": "UI/Start",
-    "title": {
-      "ko": "전방 카메라 녹화",
-      "en": "Record Road Camera"
-    },
-    "param": "RecordRoadCam",
-    "min_value": 0,
-    "max_value": 2,
-    "step": 1,
-    "decimal_places": 0,
-    "value_type": "INT",
-    "special_texts": {
-      "0": { "ko": "없음", "en": "None" },
-      "1": { "ko": "전방", "en": "Road Cam" },
-      "2": { "ko": "전방 + 광각", "en": "Road + Wide" }
-    },
-    "description": {
-      "ko": "주행 영상 녹화 방식 설정",
-      "en": "Configure road camera recording mode"
+      "ko": "화면의 사용자 밝기 비율입니다(단위 %). 화면 밝기 제어에서 사용하는 값이며 카메라 노출에는 영향을 주지 않습니다. UI 시작 시 읽으므로 변경 후 UI를 재시작해야 합니다.",
+      "en": "User display-brightness percentage. Used by display brightness control; it does not adjust camera exposure. Read at UI startup, so restart the UI after changing."
     }
   },
   {
@@ -222,8 +194,12 @@
     "value_type": "INT",
     "special_texts": {
       "0": { "ko": "사용 안 함", "en": "None" },
-      "1": { "ko": "APN 사용 시", "en": "With APN" },
-      "2": { "ko": "항상 사용", "en": "Always" }
+      "1": { "ko": "크루즈 + 내비 활성 시", "en": "Cruise + Navigation Active" },
+      "2": { "ko": "크루즈 활성 시", "en": "Cruise Active" }
+    },
+    "description": {
+      "ko": "지원되는 순정 HUD에 보내는 HDP 상태 표시를 선택합니다. 0: 추가 표시 안 함, 1: 크루즈와 내비 안내가 함께 활성화될 때, 2: 크루즈 활성화 시. 실제 순정 HDP 자율주행 기능을 켜는 설정은 아닙니다.",
+      "en": "Selects HDP status sent to a supported stock HUD. 0: no extra indication; 1: cruise and navigation active; 2: cruise active. This changes HUD status, not actual stock HDP driving capability."
     }
   },
   {
@@ -235,61 +211,8 @@
     "param": "AutoGasSyncSpeed",
     "value_type": "BOOL",
     "description": {
-      "ko": "가속 페달로 설정 속도를 초과하면 크루즈 속도 자동 갱신",
-      "en": "If accelerator exceeds set speed, update cruise set speed automatically"
-    }
-  },
-  {
-    "group": "UI/Start",
-    "title": {
-      "ko": "후측방 차량 감지 표시",
-      "en": "Display BSM Status"
-    },
-    "param": "KisaBlindSpotDetect",
-    "value_type": "BOOL",
-    "description": {
-      "ko": "화면에 후측방 차량 감지 기능 표시를 추가합니다.",
-      "en": "Displays rear-side vehicle detection on the screen."
-    }
-  },
-  {
-    "group": "UI/Start",
-    "title": {
-      "ko": "영상 파일당 녹화 시간(분)",
-      "en": "Recording Time per Video (min)"
-    },
-    "param": "RecordingTimePerVideo",
-    "value_type": "INT",
-    "min_value": 1,
-    "max_value": 120,
-    "step": 1,
-    "decimal_places": 0,
-    "description": {
-      "ko": "영상 파일 하나당 녹화되는 시간을 설정합니다. (단위: 분)",
-      "en": "Sets the recording duration for each video file (in minutes)."
-    }
-  },
-  {
-    "group": "UI/Start",
-    "title": {
-      "ko": "최대 녹화 파일 수",
-      "en": "Recording Max Files"
-    },
-    "param": "RecordingMaxFiles",
-    "value_type": "INT",
-    "min_value": 0,
-    "max_value": 2000,
-    "step": 10,
-    "decimal_places": 0,
-    "special_texts": {
-      "0": {
-        "ko": "무제한",
-        "en": "Unlimited"
-      }
-    },
-    "description": {
-      "ko": "저장할 수 있는 최대 녹화 파일 수를 설정합니다. 저장 공간이 가득 차면 가장 오래된 파일부터 자동으로 삭제됩니다.",
-      "en": "Sets the maximum number of recording files. When storage is full, the oldest files are automatically deleted."
+      "ko": "가속 페달을 일정 시간 이상 밟는 동안 현재 속도가 설정 속도를 넘으면 크루즈 설정 속도를 현재 속도에 맞춥니다. 주변 차량 속도를 따라 설정 속도를 계속 올리는 기능은 아닙니다.",
+      "en": "Synchronizes cruise set speed upward to vehicle speed during a sustained accelerator press above the setting. It does not continuously adapt set speed to surrounding traffic."
     }
   },
   {
@@ -305,21 +228,18 @@
     "decimal_places": 2,
     "value_type": "FLOAT",
     "special_texts": {
-      "0": {
-        "ko": "중앙",
-        "en": "Center"
-      }
+      "0": { "ko": "오프셋 0m", "en": "Offset 0 m" }
     },
     "description": {
-      "ko": "카메라 오프셋을 조정합니다. -값은 좌측으로 +값은 우측으로 치우쳐 주행하게 합니다.(기본값: 0.04)",
-      "en": "Adjust the camera offset. Negative values move the car left, positive values move the car right. (Default value: 0.04)"
+      "ko": "차선 경로 계산에 쓰는 카메라 기준 오프셋입니다(단위 m). 수동 항은 음수가 왼쪽, 양수가 오른쪽 방향이며, 기존 계산은 0.04m를 보정 기준으로 사용합니다. 자동 차로 위치 프로필이 이 값을 보상할 수 있으므로 표시값과 실제 횡이동량은 같지 않습니다. 모델 직접 조향의 고정 이동량도 아닙니다.",
+      "en": "Camera-reference offset for lane-path calculations, in metres. The manual term shifts left when negative and right when positive; legacy calculations use 0.04 m as a calibration reference. Automatic lane-position profiles may compensate it, so the value is not the resulting lateral displacement or a fixed shift of direct model steering."
     }
   },
   {
     "group": "LAT",
     "title": {
-      "ko": "레인모드 중심 보정",
-      "en": "Lane Center Offset"
+      "ko": "차선 중심 위치 선호(m)",
+      "en": "Lane Centre Preference (m)"
     },
     "param": "LaneCenterOffset",
     "min_value": -0.1,
@@ -328,14 +248,11 @@
     "decimal_places": 2,
     "value_type": "FLOAT",
     "special_texts": {
-      "0": {
-        "ko": "사용 안 함",
-        "en": "Disabled"
-      }
+      "0": { "ko": "수동 선호 없음", "en": "No Manual Preference" }
     },
     "description": {
-      "ko": "레인모드의 직선 주행 위치를 보정합니다. 음수는 왼쪽, 양수는 오른쪽입니다. 단위는 m이며 기본값은 -0.03입니다. 강한 커브에서는 서서히 줄이고 레인리스에는 적용하지 않습니다.",
-      "en": "Adjusts lane-mode position on straight roads. Negative is left, positive is right. Units: m; default: -0.03. Fades in stronger curves and does not apply in laneless mode."
+      "ko": "차선 중심에 더하는 수동 위치 선호입니다(단위 m). 음수는 왼쪽, 양수는 오른쪽이며 레인모드에서 커브·차선변경 시 줄어듭니다. 현재 모델모드에서는 음수 설정에 한해 일정 속도·차선 조건에서 왼쪽 복귀 보정에도 사용합니다. 0은 이 수동 선호만 해제하며 자동 위치·경계 보정은 남습니다.",
+      "en": "Manual lane-centre preference in metres: negative left, positive right. It fades during curves and lane changes in lane mode. In current model mode, only negative settings also enable conditional left-recovery correction. Zero disables this manual preference, while automatic positioning/boundary guards remain active."
     }
   },
   {
@@ -354,8 +271,8 @@
       "0": { "ko": "라이브 SR", "en": "Live SR" }
     },
     "description": {
-      "ko": "차량 Steer Ratio를 수동으로 설정합니다.",
-      "en": "Manually sets the Steering Ratio."
+      "ko": "수동 조향비입니다. 1보다 큰 값은 실시간 추정 조향비 대신 사용하며, 0~1은 실시간 추정값에 SteerRatioRate를 곱해 사용합니다. 조향 계산의 차량 모델에 반영되며 핸들 각도 자체를 고정하지 않습니다.",
+      "en": "Manual steering ratio. Values above 1 replace the live estimate; values from 0 to 1 use the live estimate multiplied by SteerRatioRate. Changes the steering vehicle model, not a fixed steering-wheel angle."
     }
   },
   {
@@ -374,28 +291,8 @@
       "100": { "ko": "변동없음", "en": "Not Change" }
     },
     "description": {
-      "ko": "Live Steer Ratio가 적용되는 비율을 설정합니다.",
-      "en": "Sets how strongly the Steer Ratio is applied."
-    }
-  },
-  {
-    "group": "LAT",
-    "title": {
-      "ko": "Path Offset",
-      "en": "Path Offset"
-    },
-    "param": "PathOffset",
-    "min_value": -5,
-    "max_value": 5,
-    "step": 0.01,
-    "decimal_places": 2,
-    "value_type": "FLOAT",
-    "special_texts": {
-      "0": { "ko": "중앙", "en": "Center" }
-    },
-    "description": {
-      "ko": "주행 경로를 좌우로 이동합니다. 음수는 왼쪽, 양수는 오른쪽입니다.(기본값: 0.0)",
-      "en": "Shifts the driving path laterally. Negative values move left, positive values move right.(Default: 0.0)"
+      "ko": "실시간 추정 조향비에 곱하는 비율입니다(단위 %). 100은 추정값 그대로 사용합니다. CustomSR가 1보다 크면 수동 조향비가 우선하므로 이 비율은 적용되지 않습니다.",
+      "en": "Percentage multiplier of the live steering-ratio estimate. 100 uses the estimate unchanged. A CustomSR above 1 overrides the live ratio and this multiplier."
     }
   },
   {
@@ -411,11 +308,11 @@
     "decimal_places": 2,
     "value_type": "FLOAT",
     "special_texts": {
-      "0": { "ko": "중앙", "en": "Center" }
+      "0": { "ko": "추가 YAW 보정 없음", "en": "No Extra Yaw Trim" }
     },
     "description": {
-      "ko": "레인리스모드(모델모드) 사용시 카메라 좌우(YAW) 값을 미세조정 합니다.(+값: 차를 오른쪽으로 이동, -값: 차를 왼쪽으로 이동)(기본값: 0.0)",
-      "en": "Adjusts the camera left/right (yaw) value finely when using Laneless Mode (Model Mode).(Positive Value: car to right, Negative Value: car to left)(Default: 0.0)"
+      "ko": "모델 입력 카메라의 좌우 회전 보정입니다(단위 도). 0은 추가 YAW 보정 없음입니다. 모델 영상 변환과 캘리브레이션 처리에 관여하므로 차량을 일정 거리만큼 옮기는 오프셋과 다릅니다. 0이 아니면 기존 캘리브레이션 갱신을 제한하는 처리도 적용됩니다.",
+      "en": "Additional camera yaw trim for model input, in degrees. Zero adds no yaw trim. Affects image transforms and calibration rather than shifting the car by a fixed distance. Nonzero trim also restricts normal calibration updates."
     }
   },
   {
@@ -431,11 +328,11 @@
     "decimal_places": 2,
     "value_type": "FLOAT",
     "special_texts": {
-      "0": { "ko": "실시간", "en": "Live" }
+      "0": { "ko": "실시간 추정값", "en": "Live Estimate" }
     },
     "description": {
-      "ko": "조향 액추에이터 지연 시간을 설정합니다. 0은 실시간 응답입니다.",
-      "en": "Sets steering actuator delay. 0 means live response."
+      "ko": "조향 명령과 차량 응답 사이의 예측 지연 시간입니다(단위 초). 0은 지연 없음이 아니라 실시간 lateralDelay 추정값 사용입니다. 양수는 수동 지연값으로 사용하며 조향 예측과 모델 입력에 반영됩니다.",
+      "en": "Predicted delay from steering command to vehicle response, in seconds. Zero selects the live lateralDelay estimate, not zero latency. Positive values provide a manual delay for steering prediction and model input."
     }
   },
   {
@@ -454,8 +351,8 @@
       "-0.01": { "ko": "기본값", "en": "Default" }
     },
     "description": {
-      "ko": "조향 입력을 부드럽게 만드는 시간을 설정합니다.",
-      "en": "Sets the smoothing duration for steering input."
+      "ko": "조향 목표 스무딩의 기본 시간입니다(단위 초). 레인 제어에서는 음수일 때 코드 기본값을 사용합니다. 모델 처리에서는 0 이하이면 추가 스무딩을 끄고, 양수이면 궤적 불확실성에 따라 늘리되 최대 0.60초로 제한합니다. 크게 하면 변화는 완만해지지만 반응도 늦어질 수 있습니다.",
+      "en": "Base steering-target smoothing time in seconds. Lane control uses its code default for negative settings. Model processing disables extra smoothing at zero or below; positive values grow with trajectory uncertainty, capped at 0.60 seconds. Larger values soften changes but may delay response."
     }
   },
   {
@@ -474,8 +371,8 @@
       "0": { "ko": "기본값", "en": "Default" }
     },
     "description": {
-      "ko": "Steer Max 값을 설정합니다.",
-      "en": "Set the Steer Max value."
+      "ko": "지원되는 현대차 토크 조향 송신에서 최대 조향 토크을 재정의합니다(CAN 원시 단위). 0은 차종 기본값입니다. 각도 조향 방식에는 동일하게 적용되지 않을 수 있으며 Panda 송신 제한은 별도로 유지됩니다.",
+      "en": "Overrides maximum steering torque in supported Hyundai torque-steering messages, in raw CAN units. Zero uses the vehicle default. Angle-steering variants may behave differently; Panda transmission limits still apply."
     }
   },
   {
@@ -494,8 +391,8 @@
       "0": { "ko": "기본값", "en": "Default" }
     },
     "description": {
-      "ko": "Steer Delta Up 값을 설정합니다.",
-      "en": "Set the Steer Delta Up value."
+      "ko": "지원되는 현대차 토크 조향 송신에서 조향 토크 증가 폭을 재정의합니다(CAN 원시 단위). 0은 차종 기본값입니다. 각도 조향 방식에는 동일하게 적용되지 않을 수 있으며 Panda 송신 제한은 별도로 유지됩니다.",
+      "en": "Overrides steering-torque increase per update in supported Hyundai torque-steering messages, in raw CAN units. Zero uses the vehicle default. Angle-steering variants may behave differently; Panda transmission limits still apply."
     }
   },
   {
@@ -514,8 +411,8 @@
       "0": { "ko": "기본값", "en": "Default" }
     },
     "description": {
-      "ko": "Steer Delta Down 값을 설정합니다.",
-      "en": "Set the Steer Delta Down value."
+      "ko": "지원되는 현대차 토크 조향 송신에서 조향 토크 감소 폭을 재정의합니다(CAN 원시 단위). 0은 차종 기본값입니다. 각도 조향 방식에는 동일하게 적용되지 않을 수 있으며 Panda 송신 제한은 별도로 유지됩니다.",
+      "en": "Overrides steering-torque decrease per update in supported Hyundai torque-steering messages, in raw CAN units. Zero uses the vehicle default. Angle-steering variants may behave differently; Panda transmission limits still apply."
     }
   },
   {
@@ -531,14 +428,11 @@
     "decimal_places": 1,
     "value_type": "FLOAT",
     "special_texts": {
-      "0": {
-        "ko": "비활성",
-        "en": "Disabled"
-      }
+      "0": { "ko": "끼어들기 예측 끄기", "en": "Cut-in Prediction Off" }
     },
     "description": {
-      "ko": "레이더 기반 컷인 및 차로 이탈 차량에 대한 감도를 설정합니다. 값이 높을수록 주변 차량 움직임에 더 민감하게 반응합니다.",
-      "en": "Adjusts sensitivity to vehicles cutting in or exiting based on radar data. Higher values increase responsiveness."
+      "ko": "레이더 차량의 횡방향 움직임으로 끼어들기를 예측하는 감도입니다. 예측 시간과 판정 문턱을 함께 조절하며, 0은 이 예측을 끕니다. 레이더 자체나 기존 앞차 추적을 끄는 설정은 아닙니다.",
+      "en": "Sensitivity of lateral-motion radar cut-in prediction. Adjusts the prediction horizon and detection thresholds together. Zero disables this prediction, not radar reception or ordinary lead tracking."
     }
   },
   {
@@ -559,8 +453,8 @@
       "2": { "ko": "끼어들기검출", "en": "CutinDetect" }
     },
     "description": {
-      "ko": "코너레이더를 활성화하여 주변차량 정보를 활용합니다.",
-      "en": "Uses surrounding vehicle information by enabling the corner radar."
+      "ko": "지원 코너레이더 CAN 정보를 사용합니다. 0: 사용 안 함, 1: 객체 정보 수신, 2: 수신한 객체를 끼어들기 판단에도 사용. 끼어들기 예측에는 RadarLatFactor도 0보다 커야 합니다. 장착·배선·메시지 지원이 필요하며 수신 구성 변경 후 재시작해야 합니다.",
+      "en": "Uses supported corner-radar CAN data. 0 off; 1 receive objects; 2 also use objects for cut-in detection. Cut-in prediction additionally requires RadarLatFactor above zero. Requires compatible hardware, wiring and messages; restart after changing reception configuration."
     }
   },
   {
@@ -576,8 +470,8 @@
     "decimal_places": 2,
     "value_type": "FLOAT",
     "description": {
-      "ko": "차량의 왼쪽에 도로 엣지가 있을 경우 카메라 오프셋을 조절하여 차량 위치를 조정합니다.(-값: 차량을 왼쪽으로 이동, +값: 차량을 오른쪽으로 이동), 기본 카메라 오프셋과 값 조정 정도가 동일합니다.",
-      "en": "Adjusts the camera offset to the left edge of the car if a road edge is present.(Negative value: moves the car to the left, Positive value: moves the car to the right), The default camera offset and value adjustment ratio are the same."
+      "ko": "왼쪽 도로경계가 인식될 때 사용하는 레거시 모델모드 경로 계산 보정입니다(단위 m, 음수 왼쪽·양수 오른쪽). 0은 해당 보정을 끕니다. 현재 모델 직접 조향은 이 경로를 그대로 사용하지 않으므로 모델모드 차량 위치를 고정 이동시키는 효과는 보장되지 않습니다.",
+      "en": "Legacy model-mode path-calculation offset when a left road edge is detected, in metres (negative left, positive right). Zero disables it. Current direct model steering does not directly follow this calculated path, so this is not a guaranteed fixed lateral shift in model mode."
     }
   },
   {
@@ -593,12 +487,10 @@
     "decimal_places": 2,
     "value_type": "FLOAT",
     "description": {
-      "ko": "차량의 오른쪽에 도로 엣지가 있을 경우 카메라 오프셋을 조절하여 차량 위치를 조정합니다.(-값: 차량을 왼쪽으로 이동, +값: 차량을 오른쪽으로 이동), 기본 카메라 오프셋과 값 조정 정도가 동일합니다.",
-      "en": "Adjusts the camera offset to the right edge of the car if a road edge is present.(Negative value: moves the car to the left, Positive value: moves the car to the right), The default camera offset and value adjustment ratio are the same."
+      "ko": "오른쪽 도로경계가 인식될 때 사용하는 레거시 모델모드 경로 계산 보정입니다(단위 m, 음수 왼쪽·양수 오른쪽). 0은 해당 보정을 끕니다. 현재 모델 직접 조향은 이 경로를 그대로 사용하지 않으므로 모델모드 차량 위치를 고정 이동시키는 효과는 보장되지 않습니다.",
+      "en": "Legacy model-mode path-calculation offset when a right road edge is detected, in metres (negative left, positive right). Zero disables it. Current direct model steering does not directly follow this calculated path, so this is not a guaranteed fixed lateral shift in model mode."
     }
   },
-
-
   {
     "group": "LONG",
     "title": {
@@ -612,8 +504,8 @@
     "decimal_places": 2,
     "value_type": "FLOAT",
     "description": {
-      "ko": "종방향 제어의 비례(P) 게인을 설정합니다. 가속 반응의 즉각성에 영향을 줍니다.",
-      "en": "Sets the proportional (P) gain for longitudinal control. Affects acceleration responsiveness."
+      "ko": "종방향 속도 오차에 반응하는 P 게인입니다. 값이 클수록 같은 오차에 대한 즉각 반응이 커집니다. 차량 기본 P·I 게인 테이블이 모두 단일 기준점인 경우에만 수동값을 적용하며, 속도별 테이블이 있는 차종은 기본 테이블을 사용합니다.",
+      "en": "Proportional gain for longitudinal speed error. Larger values increase the immediate response to an error. Manual P/I gains apply only when both vehicle gain tables have one breakpoint; vehicles with speed-dependent tables retain those tables."
     }
   },
   {
@@ -629,11 +521,11 @@
     "decimal_places": 2,
     "value_type": "FLOAT",
     "special_texts": {
-      "0": { "ko": "비활성", "en": "Disabled" }
+      "0": { "ko": "적분항 끄기", "en": "Integral Term Off" }
     },
     "description": {
-      "ko": "종방향 제어의 적분(I) 게인을 설정합니다. 지속적인 오차 보정에 사용됩니다.",
-      "en": "Sets the integral (I) gain for longitudinal control. Used for correcting sustained errors."
+      "ko": "누적 속도 오차를 보정하는 종방향 I 게인입니다. 0은 적분항만 끄며 종방향 제어 전체를 끄지 않습니다. 차량 기본 P·I 게인 테이블이 모두 단일 기준점일 때만 수동값이 적용됩니다.",
+      "en": "Integral gain for accumulated longitudinal speed error. Zero disables only the integral term, not longitudinal control. Manual gains apply only when both vehicle P/I tables have one breakpoint."
     }
   },
   {
@@ -649,15 +541,15 @@
     "decimal_places": 2,
     "value_type": "FLOAT",
     "description": {
-      "ko": "가속/감속 액추에이터의 반응 지연을 설정합니다.",
-      "en": "Sets the response delay of the acceleration/deceleration actuator."
+      "ko": "가감속 명령부터 차량 반응까지의 예측 지연입니다(단위 초). 모델과 종방향 계획이 이 시간만큼 앞선 상태를 고려합니다. 정차 거리나 감속 강도를 직접 지정하는 값은 아닙니다.",
+      "en": "Predicted delay from acceleration/braking commands to vehicle response, in seconds. Model and longitudinal planning account for this response horizon. It does not directly set stopping distance or braking strength."
     }
   },
   {
     "group": "LONG",
     "title": {
-      "ko": "정지 감속 계수",
-      "en": "Stopping Velocity Factor"
+      "ko": "모델 정지 판정 속도(m/s)",
+      "en": "Model Stop Threshold (m/s)"
     },
     "param": "VEgoStopping",
     "min_value": 0.01,
@@ -666,8 +558,8 @@
     "decimal_places": 2,
     "value_type": "FLOAT",
     "description": {
-      "ko": "정지 구간에서의 감속 강도를 조절합니다.",
-      "en": "Adjusts deceleration strength during stopping phases."
+      "ko": "모델 궤적에서 정지 여부를 판단하는 저속 기준입니다(단위 m/s, 0.25m/s는 약 0.9km/h). 기준을 높이면 정지로 분류하는 속도 범위가 넓어집니다. 감속 강도나 목표 정차 간격을 설정하는 항목은 아닙니다.",
+      "en": "Low-speed threshold for determining a stop from the model trajectory, in m/s (0.25 m/s is about 0.9 km/h). Higher values broaden the speed range classified as stopping. This is not braking strength or standstill gap."
     }
   },
   {
@@ -683,18 +575,18 @@
     "decimal_places": 1,
     "value_type": "FLOAT",
     "special_texts": {
-      "0": { "ko": "비활성", "en": "Disabled" }
+      "0": { "ko": "계수 0", "en": "Factor 0" }
     },
     "description": {
-      "ko": "레이더 기반 선행 차량 반응 민감도를 설정합니다. 낮은 값일 수록 더 민감하게 반응합니다.",
-      "en": "Sets how aggressively the system reacts to lead vehicles detected by radar. Lower values make the system more responsive."
+      "ko": "앞차 가속도 필터의 반응 문턱과 예측 감쇠에 쓰는 계수입니다. 작게 하면 작은 가속도 변화에도 예측 상태가 더 빨리 바뀔 수 있습니다. 0도 계산에 사용하는 값이며 레이더를 끄지 않습니다.",
+      "en": "Factor for lead-acceleration reaction thresholds and prediction decay. Smaller values can update prediction state for smaller acceleration changes. Zero is still used in these calculations and does not disable radar."
     }
   },
   {
     "group": "LONG",
     "title": {
-      "ko": "정지 시작 가속도",
-      "en": "Stopping Start Acceleration"
+      "ko": "정지 상태 감속 목표(m/s²)",
+      "en": "Stopping-State Target (m/s²)"
     },
     "param": "StoppingAccel",
     "min_value": -1,
@@ -706,8 +598,8 @@
       "0": { "ko": "기본값", "en": "Default" }
     },
     "description": {
-      "ko": "정지 구간 진입 시 적용되는 초기 감속 가속도입니다.",
-      "en": "Initial deceleration applied when entering a stop."
+      "ko": "종방향 제어가 정지 상태로 전환할 때 사용하는 감속 목표를 재정의합니다(단위 m/s²). 음수가 클수록 강한 제동이며 0은 차량 기본 stopAccel 사용입니다. 실제 명령에는 정지 상태 전환·감속 변화 제한도 적용됩니다.",
+      "en": "Overrides the deceleration target used by the longitudinal stopping state, in m/s². More negative values request stronger braking; zero uses the vehicle stopAccel default. State transitions and acceleration-change limits still shape the actual command."
     }
   },
   {
@@ -723,8 +615,8 @@
     "decimal_places": 1,
     "value_type": "FLOAT",
     "description": {
-      "ko": "선행 차량 또는 정지 지점과의 목표 정지 거리를 설정합니다. (단위: m)",
-      "en": "Sets the target stopping distance from the lead vehicle or stop point. (Unit: m)"
+      "ko": "앞차 추종 계산의 기본 정차 여유 거리입니다(단위 m). 속도에 따른 차간 시간·제동 거리와 함께 사용합니다. 실제 최종 간격은 앞차 추정과 정지 제어에 따라 달라지므로 이 거리에서 즉시 멈추는 스위치가 아닙니다.",
+      "en": "Base standstill allowance in lead-following calculations, in metres. Used together with time headway and braking-distance terms. Actual final gap depends on lead estimates and stopping control; this is not a hard stop-at-distance switch."
     }
   },
   {
@@ -740,18 +632,18 @@
     "decimal_places": 2,
     "value_type": "FLOAT",
     "special_texts": {
-      "0": { "ko": "비활성", "en": "Disabled" }
+      "0": { "ko": "앞차 저크 보정 끄기", "en": "Lead-Jerk Adjustment Off" }
     },
     "description": {
-      "ko": "선행 차량 가감속 변화(저크)에 대한 반응 강도를 설정합니다.",
-      "en": "Adjusts sensitivity to lead vehicle acceleration changes (jerk)."
+      "ko": "앞차의 가속도 변화율(저크)을 미래 움직임 예측에 반영하는 비율입니다. 0은 해당 저크 보정을 사용하지 않습니다. 앞차 추적·거리 기반 감속은 계속 작동합니다.",
+      "en": "Weight of lead jerk (rate of acceleration change) in motion prediction. Zero disables this jerk adjustment. Lead tracking and distance-based braking remain active."
     }
   },
   {
     "group": "LONG",
     "title": {
-      "ko": "정지 부드러움 계수",
-      "en": "Stopping Smoothness Factor"
+      "ko": "앞차 저크별 가속 변화 비용",
+      "en": "Lead-Jerk Acceleration Change Cost"
     },
     "param": "AChangeCost2",
     "min_value": 10,
@@ -760,15 +652,15 @@
     "decimal_places": 0,
     "value_type": "INT",
     "description": {
-      "ko": "정지 구간에서의 감속 변화를 부드럽게 만듭니다. 값이 높을수록 정지가 더욱 부드러워집니다.",
-      "en": "Smooths deceleration changes during stopping. Higher values result in smoother stops."
+      "ko": "앞차 저크가 커질 때 MPC에 사용하는 가속도 변화 비용입니다. 기본 비용과 이 값 사이를 상황에 따라 보간합니다. 비용이 크면 가속도 변화를 더 억제하지만, 정차 마지막 충격이나 목표 거리를 직접 지정하지는 않습니다.",
+      "en": "MPC acceleration-change cost used as lead jerk grows, interpolated from the base cost. Higher costs penalize acceleration changes more strongly, but do not directly set terminal stop jerk or final gap."
     }
   },
   {
     "group": "LONG",
     "title": {
-      "ko": "정지 시작 계수",
-      "en": "Stopping Start Factor"
+      "ko": "앞차 위험 거리 제약 계수",
+      "en": "Lead-Danger Distance Factor"
     },
     "param": "LeadDangerFactor",
     "min_value": 0.5,
@@ -777,13 +669,16 @@
     "decimal_places": 2,
     "value_type": "FLOAT",
     "description": {
-      "ko": "정지 시작 타이밍을 조절합니다. 높은값은 미리 감속을 시작하며 낮은값은 감속시점을 늦춥니다.",
-      "en": "Adjusts the timing for deceleration and stopping. Higher values start deceleration earlier, while lower values delay the start of deceleration."
+      "ko": "MPC의 앞차 위험 거리 제약에 곱하는 계수입니다. 크게 하면 거리 제약이 더 보수적으로 작용합니다. 감속 시작 시점만을 독립적으로 정하는 값이 아니며 실제 감속은 속도·상대속도·다른 제약과 함께 결정됩니다.",
+      "en": "Multiplier of the MPC lead-danger distance constraint. Larger values make this constraint more conservative. It does not independently set braking onset; speed, relative speed and other constraints also determine deceleration."
     }
   },
   {
     "group": "LONG",
-    "title": { "ko": "가속 제한 0~10km/h", "en": "Accel Limit 0–10 km/h" },
+    "title": {
+      "ko": "가속 상한 기준점 0km/h",
+      "en": "Acceleration Limit at 0 km/h"
+    },
     "param": "CruiseMaxVals0",
     "min_value": 0,
     "max_value": 2.5,
@@ -791,13 +686,16 @@
     "decimal_places": 2,
     "value_type": "FLOAT",
     "description": {
-      "ko": "0~10km/h 구간에서 허용되는 최대 가속도입니다. 값이 높을수록 출발 가속이 강해집니다. (단위: m/s²)",
-      "en": "Maximum allowed acceleration in the 0–10 km/h range. Higher values result in stronger launch acceleration. (Unit: m/s²)"
+      "ko": "0km/h 기준점의 최대 가속도입니다(단위 m/s²). 기준 속도는 0·10·40·60·80·110·140km/h이며 사이 속도에서는 이웃 값 사이를 선형 보간합니다. 140km/h 이상은 마지막 값을 사용합니다. 실제 가속 명령은 앞차·주행 모드·커브 제한 등에 의해 더 낮아질 수 있습니다.",
+      "en": "Maximum acceleration at the 0 km/h knot, in m/s². Knots are 0, 10, 40, 60, 80, 110 and 140 km/h; intermediate speeds interpolate adjacent values and speeds above 140 use the final value. Lead, driving-mode and curve limits may reduce actual acceleration further."
     }
   },
   {
     "group": "LONG",
-    "title": { "ko": "가속 제한 10~40km/h", "en": "Accel Limit 10–40 km/h" },
+    "title": {
+      "ko": "가속 상한 기준점 10km/h",
+      "en": "Acceleration Limit at 10 km/h"
+    },
     "param": "CruiseMaxVals1",
     "min_value": 0,
     "max_value": 2.5,
@@ -805,13 +703,16 @@
     "decimal_places": 2,
     "value_type": "FLOAT",
     "description": {
-      "ko": "10~40km/h 구간에서 허용되는 최대 가속도입니다. 도심 주행 가속 성향에 영향을 줍니다. (단위: m/s²)",
-      "en": "Maximum allowed acceleration in the 10–40 km/h range. Affects urban driving acceleration behavior. (Unit: m/s²)"
+      "ko": "10km/h 기준점의 최대 가속도입니다(단위 m/s²). 기준 속도는 0·10·40·60·80·110·140km/h이며 사이 속도에서는 이웃 값 사이를 선형 보간합니다. 140km/h 이상은 마지막 값을 사용합니다. 실제 가속 명령은 앞차·주행 모드·커브 제한 등에 의해 더 낮아질 수 있습니다.",
+      "en": "Maximum acceleration at the 10 km/h knot, in m/s². Knots are 0, 10, 40, 60, 80, 110 and 140 km/h; intermediate speeds interpolate adjacent values and speeds above 140 use the final value. Lead, driving-mode and curve limits may reduce actual acceleration further."
     }
   },
   {
     "group": "LONG",
-    "title": { "ko": "가속 제한 40~60km/h", "en": "Accel Limit 40–60 km/h" },
+    "title": {
+      "ko": "가속 상한 기준점 40km/h",
+      "en": "Acceleration Limit at 40 km/h"
+    },
     "param": "CruiseMaxVals2",
     "min_value": 0,
     "max_value": 2.5,
@@ -819,13 +720,16 @@
     "decimal_places": 2,
     "value_type": "FLOAT",
     "description": {
-      "ko": "40~60km/h 구간에서의 최대 가속도 설정입니다. 일반 도로 주행 시 가속 반응을 조절합니다. (단위: m/s²)",
-      "en": "Maximum acceleration setting for the 40–60 km/h range. Tunes acceleration response during normal road driving. (Unit: m/s²)"
+      "ko": "40km/h 기준점의 최대 가속도입니다(단위 m/s²). 기준 속도는 0·10·40·60·80·110·140km/h이며 사이 속도에서는 이웃 값 사이를 선형 보간합니다. 140km/h 이상은 마지막 값을 사용합니다. 실제 가속 명령은 앞차·주행 모드·커브 제한 등에 의해 더 낮아질 수 있습니다.",
+      "en": "Maximum acceleration at the 40 km/h knot, in m/s². Knots are 0, 10, 40, 60, 80, 110 and 140 km/h; intermediate speeds interpolate adjacent values and speeds above 140 use the final value. Lead, driving-mode and curve limits may reduce actual acceleration further."
     }
   },
   {
     "group": "LONG",
-    "title": { "ko": "가속 제한 60~80km/h", "en": "Accel Limit 60–80 km/h" },
+    "title": {
+      "ko": "가속 상한 기준점 60km/h",
+      "en": "Acceleration Limit at 60 km/h"
+    },
     "param": "CruiseMaxVals3",
     "min_value": 0,
     "max_value": 2.5,
@@ -833,13 +737,16 @@
     "decimal_places": 2,
     "value_type": "FLOAT",
     "description": {
-      "ko": "60~80km/h 구간에서의 가속 한계입니다. 국도 및 고속화도로 주행 감성을 결정합니다. (단위: m/s²)",
-      "en": "Acceleration limit for the 60–80 km/h range. Influences driving feel on highways and express roads. (Unit: m/s²)"
+      "ko": "60km/h 기준점의 최대 가속도입니다(단위 m/s²). 기준 속도는 0·10·40·60·80·110·140km/h이며 사이 속도에서는 이웃 값 사이를 선형 보간합니다. 140km/h 이상은 마지막 값을 사용합니다. 실제 가속 명령은 앞차·주행 모드·커브 제한 등에 의해 더 낮아질 수 있습니다.",
+      "en": "Maximum acceleration at the 60 km/h knot, in m/s². Knots are 0, 10, 40, 60, 80, 110 and 140 km/h; intermediate speeds interpolate adjacent values and speeds above 140 use the final value. Lead, driving-mode and curve limits may reduce actual acceleration further."
     }
   },
   {
     "group": "LONG",
-    "title": { "ko": "가속 제한 80~110km/h", "en": "Accel Limit 80–110 km/h" },
+    "title": {
+      "ko": "가속 상한 기준점 80km/h",
+      "en": "Acceleration Limit at 80 km/h"
+    },
     "param": "CruiseMaxVals4",
     "min_value": 0,
     "max_value": 2.5,
@@ -847,13 +754,16 @@
     "decimal_places": 2,
     "value_type": "FLOAT",
     "description": {
-      "ko": "80~110km/h 구간에서의 최대 가속도입니다. 고속 주행 시 가속 안정성에 영향을 줍니다. (단위: m/s²)",
-      "en": "Maximum acceleration for the 80–110 km/h range. Affects stability during high-speed acceleration. (Unit: m/s²)"
+      "ko": "80km/h 기준점의 최대 가속도입니다(단위 m/s²). 기준 속도는 0·10·40·60·80·110·140km/h이며 사이 속도에서는 이웃 값 사이를 선형 보간합니다. 140km/h 이상은 마지막 값을 사용합니다. 실제 가속 명령은 앞차·주행 모드·커브 제한 등에 의해 더 낮아질 수 있습니다.",
+      "en": "Maximum acceleration at the 80 km/h knot, in m/s². Knots are 0, 10, 40, 60, 80, 110 and 140 km/h; intermediate speeds interpolate adjacent values and speeds above 140 use the final value. Lead, driving-mode and curve limits may reduce actual acceleration further."
     }
   },
   {
     "group": "LONG",
-    "title": { "ko": "가속 제한 110~140km/h", "en": "Accel Limit 110–140 km/h" },
+    "title": {
+      "ko": "가속 상한 기준점 110km/h",
+      "en": "Acceleration Limit at 110 km/h"
+    },
     "param": "CruiseMaxVals5",
     "min_value": 0,
     "max_value": 2.5,
@@ -861,13 +771,16 @@
     "decimal_places": 2,
     "value_type": "FLOAT",
     "description": {
-      "ko": "110~140km/h 구간에서의 가속 한계입니다. 고속도로 추월 가속 성향을 조절합니다. (단위: m/s²)",
-      "en": "Acceleration limit for the 110–140 km/h range. Controls overtaking acceleration on highways. (Unit: m/s²)"
+      "ko": "110km/h 기준점의 최대 가속도입니다(단위 m/s²). 기준 속도는 0·10·40·60·80·110·140km/h이며 사이 속도에서는 이웃 값 사이를 선형 보간합니다. 140km/h 이상은 마지막 값을 사용합니다. 실제 가속 명령은 앞차·주행 모드·커브 제한 등에 의해 더 낮아질 수 있습니다.",
+      "en": "Maximum acceleration at the 110 km/h knot, in m/s². Knots are 0, 10, 40, 60, 80, 110 and 140 km/h; intermediate speeds interpolate adjacent values and speeds above 140 use the final value. Lead, driving-mode and curve limits may reduce actual acceleration further."
     }
   },
   {
     "group": "LONG",
-    "title": { "ko": "가속 제한 140km/h 이상", "en": "Accel Limit 140+ km/h" },
+    "title": {
+      "ko": "가속 상한 기준점 140km/h",
+      "en": "Acceleration Limit at 140 km/h"
+    },
     "param": "CruiseMaxVals6",
     "min_value": 0,
     "max_value": 2.5,
@@ -875,16 +788,16 @@
     "decimal_places": 2,
     "value_type": "FLOAT",
     "description": {
-      "ko": "140km/h 이상 구간에서의 최대 가속도입니다. 초고속 영역에서의 가속 안정성을 우선합니다. (단위: m/s²)",
-      "en": "Maximum acceleration above 140 km/h. Prioritizes stability in very high-speed ranges. (Unit: m/s²)"
+      "ko": "140km/h 기준점의 최대 가속도입니다(단위 m/s²). 기준 속도는 0·10·40·60·80·110·140km/h이며 사이 속도에서는 이웃 값 사이를 선형 보간합니다. 140km/h 이상은 마지막 값을 사용합니다. 실제 가속 명령은 앞차·주행 모드·커브 제한 등에 의해 더 낮아질 수 있습니다.",
+      "en": "Maximum acceleration at the 140 km/h knot, in m/s². Knots are 0, 10, 40, 60, 80, 110 and 140 km/h; intermediate speeds interpolate adjacent values and speeds above 140 use the final value. Lead, driving-mode and curve limits may reduce actual acceleration further."
     }
   },
-
-
-
   {
     "group": "Button/Gap/Stop",
-    "title": { "ko": "크루즈 버튼 동작 모드", "en": "Cruise Button Mode" },
+    "title": {
+      "ko": "크루즈 버튼 동작 모드",
+      "en": "Cruise Button Mode"
+    },
     "param": "CruiseButtonMode",
     "min_value": 0,
     "max_value": 2,
@@ -897,13 +810,16 @@
       "2": { "ko": "사용자 2", "en": "User2" }
     },
     "description": {
-      "ko": "크루즈 버튼의 동작 방식을 설정합니다.",
-      "en": "Selects the operation mode of the cruise control button."
+      "ko": "크루즈 +/- 버튼의 짧게·길게 누름 동작을 선택합니다. 0은 기본 증감 단위, 1·2는 확장 감속 단위도 사용합니다. 2에서는 설정 속도보다 현재 속도가 높을 때 감속 버튼으로 현재 속도를 반영하는 분기가 추가됩니다. 활성 상태·누름 길이에 따라 재개·감속 동작이 달라집니다.",
+      "en": "Selects short/long cruise +/- button behavior. 0 uses the basic increment; 1 and 2 also use the extended decrement. Mode 2 additionally allows the decel button to adopt current speed when it exceeds the setting. Engagement state and press duration determine resume/deceleration behavior."
     }
   },
   {
     "group": "Button/Gap/Stop",
-    "title": { "ko": "취소 버튼 동작 모드", "en": "Cancel Button Mode" },
+    "title": {
+      "ko": "취소 버튼 동작 모드",
+      "en": "Cancel Button Mode"
+    },
     "param": "CancelButtonMode",
     "min_value": 0,
     "max_value": 1,
@@ -915,13 +831,16 @@
       "1": { "ko": "종/횡방향 해제", "en": "Longitudinal + Lateral" }
     },
     "description": {
-      "ko": "취소 버튼 동작 시 해제 범위를 설정합니다.",
-      "en": "Defines which controls are disengaged when the cancel button is pressed."
+      "ko": "취소 버튼의 해제 범위입니다. 0은 크루즈 취소, 1은 크루즈 취소와 함께 조향 활성 상태도 해제합니다. 운전자 취소 상태를 기록하여 자동 재개 판단에도 사용합니다.",
+      "en": "Cancellation scope: 0 cancels cruise; 1 also disables steering engagement. Driver cancellation state is retained for automatic re-engagement decisions."
     }
   },
   {
     "group": "Button/Gap/Stop",
-    "title": { "ko": "LFA 버튼 확장 모드", "en": "LFA Button Mode" },
+    "title": {
+      "ko": "LFA 버튼 확장 모드",
+      "en": "LFA Button Mode"
+    },
     "param": "LfaButtonMode",
     "min_value": 0,
     "max_value": 1,
@@ -933,13 +852,16 @@
       "1": { "ko": "감속/정지/선행차 대응", "en": "Decel/Stop/Lead Ready" }
     },
     "description": {
-      "ko": "LFA 버튼에 감속 및 정지 관련 확장 기능을 부여합니다.",
-      "en": "Enables extended deceleration and stopping behavior via the LFA button."
+      "ko": "LFA 버튼의 짧은 누름 기능입니다. 0은 조향 활성 상태 전환, 1은 추가 감속 상태 요청입니다. 현재 화면 범위는 0~1이며 감속 동작에는 기존 크루즈 상태 조건이 적용됩니다.",
+      "en": "Short-press function of the LFA button. 0 toggles steering engagement; 1 requests the additional deceleration state. The current UI exposes 0–1; existing cruise-state gates apply to deceleration."
     }
   },
   {
     "group": "Button/Gap/Stop",
-    "title": { "ko": "크루즈 속도 단위(기본)", "en": "Cruise Speed Unit (Basic)" },
+    "title": {
+      "ko": "크루즈 속도 단위(기본)",
+      "en": "Cruise Speed Unit (Basic)"
+    },
     "param": "CruiseSpeedUnitBasic",
     "min_value": 1,
     "max_value": 20,
@@ -947,13 +869,16 @@
     "decimal_places": 0,
     "value_type": "INT",
     "description": {
-      "ko": "기본 크루즈 속도 증감 단위를 설정합니다.",
-      "en": "Sets the basic increment unit for cruise speed adjustment."
+      "ko": "크루즈 속도 버튼의 기본 증감 폭입니다. 미터법에서는 km/h 단위이며, 비미터법에서는 버튼 계산에서 mph에 맞춰 환산합니다. 길게 누름·확장 동작은 CruiseSpeedUnit과 버튼 모드도 함께 사용합니다.",
+      "en": "Basic cruise-speed button increment. In metric mode the unit is km/h; nonmetric button calculations convert for mph. Long-press/extended behavior also uses CruiseSpeedUnit and the button mode."
     }
   },
   {
     "group": "Button/Gap/Stop",
-    "title": { "ko": "크루즈 속도 단위(확장)", "en": "Cruise Speed Unit (Extra)" },
+    "title": {
+      "ko": "크루즈 속도 단위(확장)",
+      "en": "Cruise Speed Unit (Extra)"
+    },
     "param": "CruiseSpeedUnit",
     "min_value": 1,
     "max_value": 20,
@@ -961,13 +886,16 @@
     "decimal_places": 0,
     "value_type": "INT",
     "description": {
-      "ko": "확장 크루즈 속도 증감 단위를 설정합니다.",
-      "en": "Sets the extended increment unit for cruise speed adjustment."
+      "ko": "길게 누르기 및 확장 감속 동작에서 사용하는 속도 단위입니다. 미터법에서는 km/h이며 해당 배수의 속도로 맞추는 분기에도 사용합니다. 모든 짧은 버튼 입력에 일괄 적용되지는 않습니다.",
+      "en": "Speed step for long presses and extended decrement behavior, in km/h in metric mode. Also used by branches that snap to multiples of the step. It does not replace every short-press increment."
     }
   },
   {
     "group": "Button/Gap/Stop",
-    "title": { "ko": "에코 크루즈 보정", "en": "Cruise Eco Control" },
+    "title": {
+      "ko": "에코 크루즈 보정",
+      "en": "Cruise Eco Control"
+    },
     "param": "CruiseEcoControl",
     "min_value": 0,
     "max_value": 10,
@@ -975,13 +903,16 @@
     "decimal_places": 0,
     "value_type": "INT",
     "description": {
-      "ko": "연비 개선을 위해 설정 속도를 일시적으로 증가시킵니다.",
-      "en": "Temporarily increases the set speed to improve fuel efficiency."
+      "ko": "설정 속도보다 느린 상태에서 재가속할 때 계획 속도에 일시적으로 더하는 값입니다(단위 km/h). 원래 목표 속도에 도달하면 해제합니다. 0은 끄기이며 고정된 도로 제한 속도 오프셋과는 별도입니다.",
+      "en": "Temporary addition to planned cruise speed while accelerating back toward the setting, in km/h. Cleared once the original target is reached. Zero disables it; separate from the road-limit offset."
     }
   },
   {
     "group": "Button/Gap/Stop",
-    "title": { "ko": "자동 속도 상승 비율", "en": "Auto Speed Increase Ratio" },
+    "title": {
+      "ko": "자동 속도 상승 비율",
+      "en": "Auto Speed Increase Ratio"
+    },
     "param": "AutoSpeedUptoRoadSpeedLimit",
     "min_value": 0,
     "max_value": 200,
@@ -989,13 +920,16 @@
     "decimal_places": 0,
     "value_type": "INT",
     "description": {
-      "ko": "선행 차량을 기준으로 도로 제한 속도까지 자동 가속합니다.",
-      "en": "Automatically increases speed based on the lead vehicle up to the road speed limit."
+      "ko": "앞차를 따라 설정 속도를 자동으로 높이는 기능의 도로 제한 속도 배율입니다(단위 %). 0은 끄기, 100은 도로 제한 속도, 110은 제한 속도의 1.1배를 기준으로 사용합니다. 앞차·페달·일시정지 조건을 만족할 때만 작동하며 도로속도 오프셋과는 별도입니다.",
+      "en": "Road-limit percentage used by lead-based automatic set-speed increases. 0 off; 100 uses the limit; 110 uses 1.1 times the limit as its reference. Requires lead, pedal and pause conditions; separate from the road-limit offset."
     }
   },
   {
     "group": "Button/Gap/Stop",
-    "title": { "ko": "차간 거리 GAP 1", "en": "Following Gap 1" },
+    "title": {
+      "ko": "차간 거리 GAP 1",
+      "en": "Following Gap 1"
+    },
     "param": "TFollowGap1",
     "min_value": 0.7,
     "max_value": 3,
@@ -1003,13 +937,16 @@
     "decimal_places": 2,
     "value_type": "FLOAT",
     "description": {
-      "ko": "GAP 1 차간 거리 설정입니다. (단위: 초)",
-      "en": "GAP 1 following distance setting. (Unit: sec)"
+      "ko": "차간 단계 1의 기본 추종 시간입니다(단위 초). 속도에 곱해 거리 항으로 사용하고 정차 여유·제동 거리 등을 더합니다. 속도별 GAP·동적 GAP 설정에 따라 실제 사용 시간은 달라질 수 있습니다.",
+      "en": "Base time headway for gap level 1, in seconds. Multiplied by speed and combined with standstill/braking allowances. Speed-based and dynamic-gap settings may modify the effective headway."
     }
   },
   {
     "group": "Button/Gap/Stop",
-    "title": { "ko": "차간 거리 GAP 2", "en": "Following Gap 2" },
+    "title": {
+      "ko": "차간 거리 GAP 2",
+      "en": "Following Gap 2"
+    },
     "param": "TFollowGap2",
     "min_value": 0.7,
     "max_value": 3,
@@ -1017,13 +954,16 @@
     "decimal_places": 2,
     "value_type": "FLOAT",
     "description": {
-      "ko": "GAP 2 차간 거리 설정입니다. (단위: 초)",
-      "en": "GAP 2 following distance setting. (Unit: sec)"
+      "ko": "차간 단계 2의 기본 추종 시간입니다(단위 초). 속도에 곱해 거리 항으로 사용하고 정차 여유·제동 거리 등을 더합니다. 속도별 GAP·동적 GAP 설정에 따라 실제 사용 시간은 달라질 수 있습니다.",
+      "en": "Base time headway for gap level 2, in seconds. Multiplied by speed and combined with standstill/braking allowances. Speed-based and dynamic-gap settings may modify the effective headway."
     }
   },
   {
     "group": "Button/Gap/Stop",
-    "title": { "ko": "차간 거리 GAP 3", "en": "Following Gap 3" },
+    "title": {
+      "ko": "차간 거리 GAP 3",
+      "en": "Following Gap 3"
+    },
     "param": "TFollowGap3",
     "min_value": 0.7,
     "max_value": 3,
@@ -1031,13 +971,16 @@
     "decimal_places": 2,
     "value_type": "FLOAT",
     "description": {
-      "ko": "GAP 3 차간 거리 설정입니다. (단위: 초)",
-      "en": "GAP 3 following distance setting. (Unit: sec)"
+      "ko": "차간 단계 3의 기본 추종 시간입니다(단위 초). 속도에 곱해 거리 항으로 사용하고 정차 여유·제동 거리 등을 더합니다. 속도별 GAP·동적 GAP 설정에 따라 실제 사용 시간은 달라질 수 있습니다.",
+      "en": "Base time headway for gap level 3, in seconds. Multiplied by speed and combined with standstill/braking allowances. Speed-based and dynamic-gap settings may modify the effective headway."
     }
   },
   {
     "group": "Button/Gap/Stop",
-    "title": { "ko": "차간 거리 GAP 4", "en": "Following Gap 4" },
+    "title": {
+      "ko": "차간 거리 GAP 4",
+      "en": "Following Gap 4"
+    },
     "param": "TFollowGap4",
     "min_value": 0.7,
     "max_value": 3,
@@ -1045,13 +988,16 @@
     "decimal_places": 2,
     "value_type": "FLOAT",
     "description": {
-      "ko": "GAP 4 차간 거리 설정입니다. (단위: 초)",
-      "en": "GAP 4 following distance setting. (Unit: sec)"
+      "ko": "차간 단계 4의 기본 추종 시간입니다(단위 초). 속도에 곱해 거리 항으로 사용하고 정차 여유·제동 거리 등을 더합니다. 속도별 GAP·동적 GAP 설정에 따라 실제 사용 시간은 달라질 수 있습니다.",
+      "en": "Base time headway for gap level 4, in seconds. Multiplied by speed and combined with standstill/braking allowances. Speed-based and dynamic-gap settings may modify the effective headway."
     }
   },
   {
     "group": "Button/Gap/Stop",
-    "title": { "ko": "속도별 차간거리 설정", "en": "Speed Based TFollow" },
+    "title": {
+      "ko": "속도별 차간거리 설정",
+      "en": "Speed Based TFollow"
+    },
     "param": "EnableSpeedTF",
     "min_value": -3,
     "max_value": 50,
@@ -1065,13 +1011,16 @@
       "0": { "ko": "기본값", "en": "Default" }
     },
     "description": {
-      "ko": "-1 이하: 자동단계선택(-1: [0, 30, 60, 90], -2: [0, 40, 80, 120], -3: [0, 50, 100, 150]), >0: 저속 차간거리 비율 감소, 0: 기본값",
-      "en": "Below -1: Auto selection(-1: [0, 30, 60, 90], -2: [0, 40, 80, 120], -3: [0, 50, 100, 150]), >0: Decrease following distance ratio at low speed, 0: Default value"
+      "ko": "0은 선택한 GAP의 기본 시간 사용입니다. -1·-2·-3은 각각 [0,30,60,90]·[0,40,80,120]·[0,50,100,150]km/h에서 GAP 1~4 시간을 보간합니다. 양수는 저속 추종 시간을 해당 비율(%)만큼 줄이고 100km/h에 가까워질수록 원래 시간으로 복귀합니다.",
+      "en": "Zero uses the selected gap time. -1, -2 and -3 interpolate gap levels 1–4 at [0,30,60,90], [0,40,80,120] and [0,50,100,150] km/h respectively. Positive values reduce low-speed headway by that percentage, fading back to the base time by 100 km/h."
     }
   },
   {
     "group": "Button/Gap/Stop",
-    "title": { "ko": "동적 차간 거리 제어", "en": "Dynamic Gap Control" },
+    "title": {
+      "ko": "동적 차간 거리 제어",
+      "en": "Dynamic Gap Control"
+    },
     "param": "DynamicTFollow",
     "min_value": 0,
     "max_value": 1,
@@ -1079,13 +1028,16 @@
     "decimal_places": 2,
     "value_type": "FLOAT",
     "description": {
-      "ko": "주행 상황에 따라 차간 거리를 동적으로 조절합니다.",
-      "en": "Dynamically adjusts following distance based on driving conditions."
+      "ko": "앞차 저크에 따라 기본 추종 시간에 더하거나 빼는 동적 보정량입니다(단위 초). 앞차 감속 변화에는 여유를 늘리고 가속 변화에는 줄입니다. 0은 이 보정만 끕니다.",
+      "en": "Dynamic time-headway adjustment driven by lead jerk, in seconds. Adds allowance for decelerating lead motion and reduces it for accelerating motion. Zero disables only this adjustment."
     }
   },
   {
     "group": "Button/Gap/Stop",
-    "title": { "ko": "차로 변경 시 동적 GAP 제어", "en": "Dynamic Gap (Lane Change)" },
+    "title": {
+      "ko": "차로 변경 시 동적 GAP 제어",
+      "en": "Dynamic Gap (Lane Change)"
+    },
     "param": "DynamicTFollowLC",
     "min_value": 0,
     "max_value": 1,
@@ -1093,13 +1045,19 @@
     "decimal_places": 2,
     "value_type": "FLOAT",
     "description": {
-      "ko": "차선 변경시 동적으로 차간거리를 조절합니다.",
-      "en": "Dynamically adjusts the following distance during lane changes."
+      "ko": "차선변경 desire가 활성화될 때 추종 시간과 저크 계수에 곱하는 비율입니다. 1은 원래 값, 작을수록 간격·변화 비용을 줄입니다. 계산에서 최소 0.2로 제한하므로 0은 끄기가 아니라 0.2배로 적용됩니다.",
+      "en": "Multiplier of time headway and jerk factor while lane-change desire is active. 1 retains the base values; smaller values reduce them. Clamped to at least 0.2, so zero means a 0.2 multiplier rather than disabling the feature."
+    },
+    "special_texts": {
+      "0": { "ko": "최소 0.2배 적용", "en": "Clamped to 0.2" }
     }
   },
   {
     "group": "Button/Gap/Stop",
-    "title": { "ko": "주행 모드 선택", "en": "Driving Mode Select" },
+    "title": {
+      "ko": "주행 모드 선택",
+      "en": "Driving Mode Select"
+    },
     "param": "MyDrivingMode",
     "min_value": 1,
     "max_value": 4,
@@ -1111,11 +1069,18 @@
       "2": { "ko": "안전", "en": "SAFE" },
       "3": { "ko": "일반", "en": "NORMAL" },
       "4": { "ko": "고성능", "en": "HIGH" }
+    },
+    "description": {
+      "ko": "1 ECO, 2 SAFE, 3 NORMAL, 4 HIGH 주행 모드입니다. 가속 상한과 추종·신호 정지 판단에 영향을 줍니다. 현재 HIGH는 가속 비율을 높이며 모델 신호 정지 상태를 사용하지 않는 분기도 있으므로 단순 화면 테마 설정이 아닙니다.",
+      "en": "Driving mode: 1 ECO, 2 SAFE, 3 NORMAL, 4 HIGH. Affects acceleration limits, following and traffic-stop decisions. HIGH increases the acceleration multiplier and bypasses some model traffic-stop states; this is not just a display theme."
     }
   },
   {
     "group": "Button/Gap/Stop",
-    "title": { "ko": "주행 모드 자동 전환", "en": "Driving Mode Auto" },
+    "title": {
+      "ko": "주행 모드 자동 전환",
+      "en": "Driving Mode Auto"
+    },
     "param": "MyDrivingModeAuto",
     "min_value": 0,
     "max_value": 1,
@@ -1123,13 +1088,16 @@
     "decimal_places": 0,
     "value_type": "INT",
     "description": {
-      "ko": "NORMAL 모드에서 자동 전환을 허용합니다.",
-      "en": "Enables automatic mode switching (NORMAL mode only)."
+      "ko": "NORMAL 모드에서 상황에 따른 SAFE 성향 자동 조절을 허용합니다. 운전자가 주행 중 모드를 직접 바꾸면 해당 세션의 자동 모드 적용이 제한될 수 있습니다. 설정 속도를 임의로 높이는 기능은 아닙니다.",
+      "en": "Allows context-based SAFE behavior while in NORMAL mode. Manually changing driving mode can restrict automatic mode application for the session. Does not independently raise cruise set speed."
     }
   },
   {
     "group": "Button/Gap/Stop",
-    "title": { "ko": "신호등 인식 모드", "en": "Traffic Light Detection Mode" },
+    "title": {
+      "ko": "신호등 인식 모드",
+      "en": "Traffic Light Detection Mode"
+    },
     "param": "TrafficLightDetectMode",
     "min_value": 0,
     "max_value": 2,
@@ -1140,11 +1108,18 @@
       "0": { "ko": "사용 안 함", "en": "None" },
       "1": { "ko": "정지 전용", "en": "Stopping Only" },
       "2": { "ko": "정지 및 출발", "en": "Stop & Go" }
+    },
+    "description": {
+      "ko": "신호 정지 상태 처리를 선택합니다. 0: 사용 안 함, 1: 정지 판단만, 2: 정지와 출발 판단. 모델 예측과 유효한 내비 신호를 기존 조건에 따라 활용하며, 티맵 UI 표시 여부 자체를 제어하는 설정은 아닙니다.",
+      "en": "Traffic-stop state handling: 0 off; 1 stop decisions only; 2 stop and departure decisions. Uses model predictions and valid navigation signals under existing gates. Does not itself control whether TMAP draws a signal on its UI."
     }
   },
   {
     "group": "Button/Gap/Stop",
-    "title": { "ko": "신호 정지 거리 보정(m)", "en": "Traffic Stop Distance Adjust(m)" },
+    "title": {
+      "ko": "신호 정지 거리 보정(m)",
+      "en": "Traffic Stop Distance Adjust(m)"
+    },
     "param": "TrafficStopDistanceAdjust",
     "min_value": -10,
     "max_value": 10,
@@ -1152,8 +1127,8 @@
     "decimal_places": 1,
     "value_type": "FLOAT",
     "description": {
-      "ko": "신호등 정지 시 정차 거리를 미세 조정합니다. 신호등 보다 정차시 갑을 낮추세요. 신호등을 지나칠경우 값을 높이세요.(단위: m)",
-      "en": "Adjusts the stopping distance at traffic lights. Decrease the value if stopping beyond the traffic light. Increase the value if stopping before it. (Unit: m)"
+      "ko": "모델 신호 정지 위치에 더하는 거리 보정입니다(단위 m). 양수는 목표를 더 앞쪽으로 보내 더 진행하게 하고, 음수는 목표를 가까이 당겨 일찍 멈추게 합니다. 주행 중 MPC 정지 장애물 위치에 적용하며 실제 정차 간격을 보장하는 값은 아닙니다.",
+      "en": "Distance added to the model traffic-stop position, in metres. Positive values move the target farther ahead; negative values bring it closer for an earlier stop. Applied to the moving MPC stop obstacle, not a guaranteed final physical gap."
     }
   },
   {
@@ -1169,15 +1144,15 @@
     "decimal_places": 0,
     "value_type": "INT",
     "description": {
-      "ko": "차선 인식 기반 제어를 적용할 최소 속도를 설정합니다. 해당 속도 이상에서 lat_mpc 제어가 사용됩니다.",
-      "en": "Sets the minimum speed to enable lane-line-based control. Above this speed, lat_mpc control is used."
+      "ko": "레인모드 요청에 사용하는 차량 속도 기준입니다(단위 km/h). 0은 기본 모델모드이며 양수는 기준 +5km/h 이상에서 레인모드, -5km/h 미만에서 모델모드를 요청합니다. 근거리 앞차·커브·모델 상태가 최종 모드를 바꿀 수 있습니다.",
+      "en": "Vehicle-speed threshold for requesting lane mode, in km/h. Zero selects model mode by default; positive settings request lane mode above threshold +5 and model mode below threshold -5. Close-lead, curve and model conditions can override the final mode."
     }
   },
   {
     "group": "Curv/Safety/Nav",
     "title": {
-      "ko": "차선 인식 모드 곡선 적용 속도",
-      "en": "Lane Line Curve Mode Speed"
+      "ko": "예측 커브 속도별 레인모드 기준",
+      "en": "Lane-Mode Predicted Curve-Speed Threshold"
     },
     "param": "UseLaneLineCurveSpeed",
     "min_value": 0,
@@ -1186,8 +1161,8 @@
     "decimal_places": 0,
     "value_type": "INT",
     "description": {
-      "ko": "고속 주행 시 차선 인식 기반 곡선 제어를 적용할 최소 속도를 설정합니다.",
-      "en": "Sets the minimum speed for lane-line-based curve control, mainly for high-speed driving."
+      "ko": "레인모드 전환에 사용하는 예측 커브 속도 기준입니다(단위 km/h). 현재 차량 속도 기준이 아닙니다. 예측값과 기준의 ±5km/h 차이 및 약 0.5초 확인을 사용하며, 다른 모델모드 우선 조건이 있으면 전환하지 않을 수 있습니다.",
+      "en": "Predicted curve-speed threshold for lane-mode selection, in km/h, not the current vehicle speed. Uses ±5 km/h hysteresis and about 0.5 seconds of confirmation. Other model-mode overrides may prevent the switch."
     }
   },
   {
@@ -1208,8 +1183,8 @@
       "1": { "ko": "토크 필요", "en": "Nudge Required" }
     },
     "description": {
-      "ko": "차선 변경 시 운전자 토크(핸들 입력) 필요 여부를 설정합니다.",
-      "en": "Defines whether driver steering torque is required to initiate a lane change."
+      "ko": "차선변경 요청 시 운전자 핸들 입력 조건입니다. -1: 차선변경 비활성, 0: 토크 입력 없이 기존 조건으로 시작, 1: 방향에 맞는 운전자 토크 필요. 차선·도로경계·주변 차량 등의 제한은 별도로 적용됩니다.",
+      "en": "Driver steering-torque requirement for lane changes. -1 disables lane changes; 0 allows existing conditions to initiate without a nudge; 1 requires a directional driver nudge. Lane, edge and surrounding-object checks remain separate."
     }
   },
   {
@@ -1225,11 +1200,11 @@
     "decimal_places": 1,
     "value_type": "FLOAT",
     "special_texts": {
-      "0": { "ko": "즉시", "en": "Immediate" }
+      "0": { "ko": "추가 대기 없음", "en": "No Extra Wait" }
     },
     "description": {
-      "ko": "차선 변경 요청 후 실제 변경까지의 대기 시간입니다. (단위: 초)",
-      "en": "Delay before executing a lane change after request. (Unit: sec)"
+      "ko": "차선변경 준비 상태에서 시작을 기다리는 시간입니다(단위 초). 0은 추가 대기 없음입니다. 시간이 지나도 토크·차선·사각지대 등의 조건이 충족되지 않으면 차선변경을 시작하지 않습니다.",
+      "en": "Additional wait in lane-change preparation, in seconds. Zero adds no delay. Expiry does not bypass torque, lane or blind-spot conditions."
     }
   },
   {
@@ -1247,16 +1222,19 @@
     "special_texts": {
       "-1": { "ko": "BSD 무시", "en": "Ignore BSD" },
       "0": { "ko": "BSD 감지", "en": "BSD Detect" },
-      "1": { "ko": "조향 차단", "en": "Block Steering" }
+      "1": { "ko": "BSD 중 토크 재개도 차단", "en": "Block BSD Nudge Override" }
     },
     "description": {
-      "ko": "사각지대(BSD) 감지 시 차선 변경 동작 방식을 설정합니다.",
-      "en": "Controls lane change behavior when Blind Spot Detection (BSD) is triggered."
+      "ko": "순정 사각지대 신호 처리 방식입니다. -1은 BSD 신호를 무시합니다. 0은 BSD 감지 시 기다리지만 운전자 토크로 시작할 수 있고, 1은 BSD 대기 중 운전자 토크로 시작하는 것도 막습니다. 차선·도로경계·객체 등 다른 조건은 별도로 유지됩니다.",
+      "en": "Stock blind-spot handling. -1 ignores BSD. With 0, BSD delays initiation but a driver nudge may start the change; 1 also blocks that nudge override while BSD is pending. Other lane, edge and object conditions remain separate."
     }
   },
   {
     "group": "Curv/Safety/Nav",
-    "title": { "ko": "곡선 감속 최소 속도", "en": "Curve Speed Lower Limit" },
+    "title": {
+      "ko": "곡선 감속 최소 속도",
+      "en": "Curve Speed Lower Limit"
+    },
     "param": "AutoCurveSpeedLowerLimit",
     "min_value": 30,
     "max_value": 200,
@@ -1264,13 +1242,16 @@
     "decimal_places": 0,
     "value_type": "INT",
     "description": {
-      "ko": "곡선 접근 시 감속할 때 유지되는 최소 속도를 설정합니다.",
-      "en": "Sets the minimum speed maintained when slowing down for curves."
+      "ko": "커브 감속 계산의 속도 하한입니다(단위 km/h). 커브 때문에 계산하는 제한 속도만 이 값 아래로 낮추지 않습니다. 앞차·신호·카메라 등 다른 이유로 차량은 더 느리게 주행하거나 정지할 수 있습니다.",
+      "en": "Lower bound of the curve-derived speed cap, in km/h. Only the curve calculation is bounded by this value. Leads, signals, cameras and other constraints can still require lower speeds or a stop."
     }
   },
   {
     "group": "Curv/Safety/Nav",
-    "title": { "ko": "곡선 자동 감속 비율", "en": "Auto Curve Control Ratio" },
+    "title": {
+      "ko": "곡선 자동 감속 비율",
+      "en": "Auto Curve Control Ratio"
+    },
     "param": "AutoCurveSpeedFactor",
     "min_value": 50,
     "max_value": 300,
@@ -1278,13 +1259,16 @@
     "decimal_places": 0,
     "value_type": "INT",
     "description": {
-      "ko": "곡선 감속 강도를 비율로 조절합니다.",
-      "en": "Adjusts curve deceleration strength by ratio."
+      "ko": "모델의 예상 회전율에 곱하는 커브 민감도입니다(단위 %, 100이 기준). 크게 하면 같은 궤적을 더 강한 커브로 계산해 허용 속도가 낮아지는 방향으로 작용합니다. 실제 제한에는 커브 속도 하한과 다른 감속 조건도 적용합니다.",
+      "en": "Curve sensitivity multiplier of predicted model yaw rate, in percent; 100 is the reference. Larger values interpret the same trajectory as a stronger curve and tend to lower the allowable speed. Curve-speed floors and other constraints still apply."
     }
   },
   {
     "group": "Curv/Safety/Nav",
-    "title": { "ko": "도로 제한 속도 오프셋", "en": "Road Speed Limit Offset" },
+    "title": {
+      "ko": "도로 제한 속도 오프셋",
+      "en": "Road Speed Limit Offset"
+    },
     "param": "AutoRoadSpeedLimitOffset",
     "min_value": -1,
     "max_value": 100,
@@ -1292,16 +1276,19 @@
     "decimal_places": 0,
     "value_type": "INT",
     "special_texts": {
-      "-1": { "ko": "사용 안 함", "en": "Not Used" }
+      "-1": { "ko": "가산 대신 안전비율 사용", "en": "Safety Factor Instead of Addition" }
     },
     "description": {
-      "ko": "도로 제한 속도에 추가로 적용할 오프셋 값입니다.",
-      "en": "Applies an offset to the detected road speed limit."
+      "ko": "도로 제한 속도에 더하는 설정 속도 오프셋입니다(단위 km/h). 0은 제한 속도 그대로, 10은 +10km/h입니다. -1은 가산 오프셋을 사용하지 않으며 도로속도 동기화에서는 안전 속도 비율로 대체하므로 자동 연동 전체를 끄는 값은 아닙니다. 카메라·방지턱·앞차 감속은 따로 계산합니다.",
+      "en": "Set-speed addition to the road limit, in km/h. Zero uses the limit and 10 adds 10 km/h. -1 disables the additive offset; road-limit synchronization substitutes the safety percentage, so it does not disable all automatic linkage. Camera, bump and lead constraints are separate."
     }
   },
   {
     "group": "Curv/Safety/Nav",
-    "title": { "ko": "도로 제한 속도 자동 보정 비율", "en": "Auto Road Speed Adjust Ratio" },
+    "title": {
+      "ko": "도로 제한 속도 자동 보정 비율",
+      "en": "Auto Road Speed Adjust Ratio"
+    },
     "param": "AutoRoadSpeedAdjust",
     "min_value": -1,
     "max_value": 100,
@@ -1311,17 +1298,20 @@
     "special_texts": {
       "-1": { "ko": "도로속도+오프셋", "en": "Roadlimitspeed" },
       "0": { "ko": "기존속도유지", "en": "Not change" },
-      "50": { "ko": "중간값", "en": "Median" },
-      "100": { "ko": "새로운속도", "en": "New roadspeed" }
+      "50": { "ko": "하향 변경 시 절반 반영", "en": "Half Blend on Limit Decrease" },
+      "100": { "ko": "하향 변경 시 새 도로속도", "en": "New Limit on Decrease" }
     },
     "description": {
-      "ko": "-1: 도로속도+오프셋, 0: 기존속도유지, 50: 중간값, 100: 새로운속도",
-      "en": "-1: set roadlimitspeed, 100: new roadspeed, 50: median, 0: not change"
+      "ko": "도로 제한 속도 변경 시 설정 속도 처리 방식입니다. -1은 새 도로속도+오프셋으로 동기화하며, 오프셋이 -1이면 안전 속도 비율을 사용합니다. 0은 이 보정 없음입니다. 양수는 제한 속도가 낮아질 때 기존 설정과 새 도로속도를 해당 비율(%)로 혼합하며, 앞차 기반 자동 속도 상승 기능의 조건도 충족해야 적용됩니다.",
+      "en": "Set-speed handling on road-limit changes. -1 synchronizes to the new limit plus offset, or the safety percentage when the offset is -1. Zero adds no adjustment. Positive values blend the setting toward a lower road limit by that percentage, subject to the lead-based automatic speed-up branch conditions."
     }
   },
   {
     "group": "Curv/Safety/Nav",
-    "title": { "ko": "과속 카메라 감속 완료 시점", "en": "Speed Camera Decel End" },
+    "title": {
+      "ko": "과속 카메라 감속 완료 시점",
+      "en": "Speed Camera Decel End"
+    },
     "param": "AutoNaviSpeedCtrlEnd",
     "min_value": 3,
     "max_value": 20,
@@ -1329,13 +1319,16 @@
     "decimal_places": 0,
     "value_type": "INT",
     "description": {
-      "ko": "감속을 완료하는 지점을 설정합니다. 값이 클수록 카메라 이전에 감속을 완료합니다.",
-      "en": "Sets where deceleration completes. Higher values finish deceleration farther from the camera."
+      "ko": "과속카메라 목표 속도를 미리 맞추기 위한 시간 여유입니다(단위 초). 차량 속도와 곱해 거리로 환산하므로 크게 하면 카메라보다 더 앞에서 감속을 완료하는 방향으로 작용합니다. 방지턱은 별도의 접근 시간과 감속 계산을 사용합니다.",
+      "en": "Time allowance for reaching a camera target speed early, in seconds. Converted to distance using vehicle speed; larger values tend to complete slowing farther before the camera. Bumps use separate approach-time/deceleration calculations."
     }
   },
   {
     "group": "Curv/Safety/Nav",
-    "title": { "ko": "내비 기반 감속 제어 모드", "en": "Navigation Speed Control Mode" },
+    "title": {
+      "ko": "내비 기반 감속 제어 모드",
+      "en": "Navigation Speed Control Mode"
+    },
     "param": "AutoNaviSpeedCtrlMode",
     "min_value": 0,
     "max_value": 3,
@@ -1347,11 +1340,18 @@
       "1": { "ko": "과속 카메라", "en": "Speed Camera" },
       "2": { "ko": "카메라 + 방지턱", "en": "Camera + Bump" },
       "3": { "ko": "카메라 + 방지턱 + 이동식", "en": "Cam + Bump + Mobile" }
+    },
+    "description": {
+      "ko": "내비 기반 속도 제한의 대상입니다. 0: 끄기, 1: 과속카메라, 2: 카메라와 방지턱, 3: 이동식 단속까지 포함. 유효한 위치·거리·제한 속도 정보가 있어야 해당 감속을 적용합니다.",
+      "en": "Navigation speed-control scope: 0 off; 1 cameras; 2 cameras and bumps; 3 also mobile enforcement. A constraint requires valid location, distance and target-speed data."
     }
   },
   {
     "group": "Curv/Safety/Nav",
-    "title": { "ko": "과속 카메라 감속률", "en": "Speed Camera Decel Rate" },
+    "title": {
+      "ko": "과속 카메라 감속률",
+      "en": "Speed Camera Decel Rate"
+    },
     "param": "AutoNaviSpeedDecelRate",
     "min_value": 0.1,
     "max_value": 20,
@@ -1359,39 +1359,60 @@
     "decimal_places": 1,
     "value_type": "FLOAT",
     "description": {
-      "ko": "값이 낮을수록 더 먼 거리에서 서서히 감속합니다. (m/s²)",
-      "en": "Lower values cause earlier and smoother deceleration. (m/s²)"
+      "ko": "내비 감속 곡선 계산에 사용하는 감속도 크기입니다(단위 m/s²). 작으면 더 멀리서 완만하게, 크면 더 가까이서 강하게 감속하는 곡선을 계산합니다. 방지턱은 이 값에 별도 보정·한계를 적용하므로 카메라와 동일한 곡선이 아닙니다.",
+      "en": "Deceleration magnitude used for navigation speed curves, in m/s². Smaller values produce earlier, gentler curves; larger values produce later, stronger curves. Bumps apply additional adjustments and bounds, rather than using the camera curve unchanged."
     }
   },
   {
     "group": "Curv/Safety/Nav",
-    "title": { "ko": "과속 카메라 안전 계수", "en": "Speed Camera Safety Factor" },
+    "title": {
+      "ko": "과속 카메라 안전 계수",
+      "en": "Speed Camera Safety Factor"
+    },
     "param": "AutoNaviSpeedSafetyFactor",
     "min_value": 80,
     "max_value": 120,
     "step": 1,
     "decimal_places": 0,
-    "value_type": "INT"
+    "value_type": "INT",
+    "description": {
+      "ko": "단속 제한 속도에 곱하는 목표 속도 비율입니다(단위 %). 100은 제한 속도 그대로, 102는 제한 속도의 1.02배입니다. 감속 거리 여유나 센서 신뢰도를 뜻하는 값은 아닙니다.",
+      "en": "Target-speed percentage applied to enforcement limits. 100 uses the limit; 102 uses 1.02 times the limit. This is not a distance buffer or sensor confidence setting."
+    }
   },
   {
     "group": "Curv/Safety/Nav",
-    "title": { "ko": "방지턱 접근 시간 거리", "en": "Speed Bump Time Distance" },
+    "title": {
+      "ko": "방지턱 접근 시간 거리",
+      "en": "Speed Bump Time Distance"
+    },
     "param": "AutoNaviSpeedBumpTime",
     "min_value": 1,
     "max_value": 50,
     "step": 1,
     "decimal_places": 0,
-    "value_type": "INT"
+    "value_type": "INT",
+    "description": {
+      "ko": "방지턱 목표 속도에 도달할 시간 여유를 계산하는 값입니다(단위 초). 거리로 환산하고 반응 지연·감속 한계와 함께 사용합니다. 크게 하면 더 앞에서 속도를 맞추는 방향이며 단순 감속 시작 타이머는 아닙니다.",
+      "en": "Time allowance for reaching the bump target speed, in seconds. Converted to distance and combined with response delay and deceleration bounds. Larger values tend to reach target speed earlier; this is not merely a brake-start timer."
+    }
   },
   {
     "group": "Curv/Safety/Nav",
-    "title": { "ko": "방지턱 통과 속도", "en": "Speed Bump Speed" },
+    "title": {
+      "ko": "방지턱 통과 속도",
+      "en": "Speed Bump Speed"
+    },
     "param": "AutoNaviSpeedBumpSpeed",
     "min_value": 10,
     "max_value": 100,
     "step": 5,
     "decimal_places": 0,
-    "value_type": "INT"
+    "value_type": "INT",
+    "description": {
+      "ko": "내비 방지턱 감속의 기본 통과 목표 속도입니다(단위 km/h). 학습이 켜져 있고 해당 위치에 기록이 있으면 위치별 학습 목표가 사용될 수 있습니다. 앞차 등 다른 제약이 더 낮으면 그 제약이 우선합니다.",
+      "en": "Base navigation bump-crossing target speed, in km/h. An enabled location-specific learning record may replace this target. Lower constraints, such as a lead vehicle, still take priority."
+    }
   },
   {
     "group": "Curv/Safety/Nav",
@@ -1402,8 +1423,8 @@
     "param": "BumpLearningEnabled",
     "value_type": "BOOL",
     "description": {
-      "ko": "방향별 충격 위치와 통과 속도 저장. 큰 충격에는 감속, 수동 감속 기록으로는 증속하지 않습니다.",
-      "en": "Remember directional impacts. Driver slowdowns never justify raising the target."
+      "ko": "방향별 방지턱 위치·통과 속도·충격을 로컬에 저장해 다음 접근 목표를 조절합니다. 큰 충격이나 수동 감속에는 목표를 낮추고, 조건을 만족한 반복적인 부드러운 통과·가속 페달 개입은 증속 후보로 사용합니다. 영상 모델을 실시간 재학습하는 기능은 아닙니다.",
+      "en": "Stores directional bump locations, crossing speeds and impacts locally to adjust future targets. Rough passes/manual slowing reduce the target; repeated eligible smooth passes or accelerator overrides can support increases. This does not retrain a vision model online."
     }
   },
   {
@@ -1413,7 +1434,11 @@
       "en": "Learned Bump Sound"
     },
     "param": "BumpLearningSound",
-    "value_type": "BOOL"
+    "value_type": "BOOL",
+    "description": {
+      "ko": "학습된 위치에 접근할 때 알림음을 허용합니다. 학습 기록 저장·목표 속도 조절을 켜고 끄는 설정은 아니며 BumpLearningEnabled와 별도로 소리만 제어합니다.",
+      "en": "Allows an approach sound for learned locations. Controls the sound separately from BumpLearningEnabled; it does not enable or disable record storage or target-speed adaptation."
+    }
   },
   {
     "group": "Curv/Safety/Nav",
@@ -1428,13 +1453,16 @@
     "step": 5,
     "decimal_places": 0,
     "description": {
-      "ko": "기본 통과 속도 대비 상한. 0: 증속 안 함. 자동 통과 3회 연속 부드러울 때 5km/h씩 증가.",
-      "en": "Cap above the default; 0 disables increases. Three smooth automatic passes per 5 km/h step."
+      "ko": "기본 방지턱 속도보다 학습으로 높일 수 있는 최대 증가량입니다(단위 km/h). 0은 기본 속도 초과 증속을 막습니다. 부드러운 통과 3회 또는 조건을 만족한 독립적인 페달 개입 3회 이상을 확인하며, 위치별 수동 상한과 학습 속도 상한 40km/h도 적용합니다.",
+      "en": "Maximum learned increase above the base bump speed, in km/h. Zero prevents increases above the base. Requires three smooth passes or at least three eligible independent accelerator overrides; the local manual cap and 40 km/h learned-speed ceiling also apply."
     }
   },
   {
     "group": "Curv/Safety/Nav",
-    "title": { "ko": "내비 카운트다운 표시 모드", "en": "Navigation Countdown Mode" },
+    "title": {
+      "ko": "내비 카운트다운 안내 범위",
+      "en": "Navigation Countdown Scope"
+    },
     "param": "AutoNaviCountDownMode",
     "min_value": 0,
     "max_value": 2,
@@ -1442,14 +1470,21 @@
     "decimal_places": 0,
     "value_type": "INT",
     "special_texts": {
-      "0": { "ko": "표시 안 함", "en": "Off" },
+      "0": { "ko": "카운트다운 안내 끄기", "en": "Countdown Off" },
       "1": { "ko": "TBT + 카메라", "en": "TBT + Camera" },
       "2": { "ko": "TBT + 카메라 + 방지턱", "en": "TBT + Cam + Bump" }
+    },
+    "description": {
+      "ko": "내비 접근 카운트다운 이벤트의 범위입니다. 0: 끄기, 1: TBT·단속 안내(방지턱 제외), 2: 방지턱도 포함. 속도 제한 제어의 활성 여부와는 별도이며 실제 표시·음성은 이벤트 처리에 따릅니다.",
+      "en": "Scope of navigation countdown events: 0 off; 1 TBT/enforcement excluding bumps; 2 includes bumps. Separate from speed-control enablement; rendering and audio depend on event handling."
     }
   },
   {
     "group": "Curv/Safety/Nav",
-    "title": { "ko": "회전 속도 제어 모드", "en": "Turn Speed Control Mode" },
+    "title": {
+      "ko": "회전 속도 제어 모드",
+      "en": "Turn Speed Control Mode"
+    },
     "param": "TurnSpeedControlMode",
     "min_value": 0,
     "max_value": 3,
@@ -1461,21 +1496,35 @@
       "1": { "ko": "비전 기반", "en": "Vision" },
       "2": { "ko": "비전 + 경로", "en": "Vision + Route" },
       "3": { "ko": "경로 기반", "en": "Route" }
+    },
+    "description": {
+      "ko": "커브 속도 제한에 사용할 입력입니다. 0: 끄기, 1: 비전 궤적, 2: 비전과 지도 경로, 3: 지도 경로. 경로·모델 정보가 유효해야 적용하며 TBT 회전 속도 제어와는 별도 설정입니다.",
+      "en": "Inputs for curve speed caps: 0 off; 1 vision trajectory; 2 vision and map route; 3 map route. Requires valid model/route data. Separate from TBT turn-speed control."
     }
   },
   {
     "group": "Curv/Safety/Nav",
-    "title": { "ko": "지도 회전 속도 계수", "en": "Map Turn Speed Factor" },
+    "title": {
+      "ko": "지도 회전 속도 계수",
+      "en": "Map Turn Speed Factor"
+    },
     "param": "MapTurnSpeedFactor",
     "min_value": 50,
     "max_value": 300,
     "step": 5,
     "decimal_places": 0,
-    "value_type": "INT"
+    "value_type": "INT",
+    "description": {
+      "ko": "지도 경로에서 계산한 커브 속도에 곱하는 비율입니다(단위 %, 100이 기준). 크게 하면 지도 기반 허용 속도가 높아집니다. 지도 경로 기반 모드를 사용하고 경로 정보가 있을 때 반영합니다.",
+      "en": "Percentage multiplier of map-route curve speed; 100 is the reference. Larger values raise the map-derived allowable speed. Applies when route-based control and valid route data are available."
+    }
   },
   {
     "group": "Curv/Safety/Nav",
-    "title": { "ko": "모델 회전 속도 계수", "en": "Model Turn Speed Factor" },
+    "title": {
+      "ko": "모델 회전 속도 예측 시간(초)",
+      "en": "Model Turn-Speed Look-ahead (s)"
+    },
     "param": "ModelTurnSpeedFactor",
     "min_value": 0,
     "max_value": 8,
@@ -1483,8 +1532,8 @@
     "decimal_places": 1,
     "value_type": "FLOAT",
     "description": {
-      "ko": "클수록 모델의 미래속도가 반영됩니다.(단위:초)",
-      "en": "Higher values place more weight on the model future speed prediction.(unit:sec)"
+      "ko": "모델의 미래 속도를 참고할 예측 시점입니다(단위 초). 0은 이 모델 회전 속도 제한을 사용하지 않습니다. 양수는 해당 시점의 모델 속도를 보간해 사용하며 속도 배율이 아닙니다.",
+      "en": "Look-ahead time for consulting the model future speed, in seconds. Zero disables this model turn-speed cap. Positive values interpolate speed at that future time; this is not a speed multiplier."
     }
   },
   {
@@ -1496,33 +1545,42 @@
     "param": "TbtBlinkerExperiment",
     "value_type": "BOOL",
     "description": {
-      "ko": "아이오닉 5 PE에서 내비 좌·우회전 안내에 맞춰 방향지시등을 켭니다. 처음 켠 뒤에는 C4를 재시작하세요. 끄기는 즉시 반영됩니다.",
-      "en": "Signals for navigation turns on Ioniq 5 PE. Restart C4 after enabling for the first time. Turning it off takes effect immediately."
+      "ko": "아이오닉 5 PE에서 내비 TBT 좌·우회전 정보로 SPAS 방향지시등 자동 점등을 시험합니다. 차선변경·추월 자동 조향 설정과는 별도입니다. 처음 활성화한 뒤 C4를 재시작해야 차량 송신 구성이 반영되며, 끄기는 실행 중에도 반영됩니다.",
+      "en": "Tests automatic SPAS turn indicators from navigation TBT left/right turns on Ioniq 5 PE. Separate from automatic lane-change/overtake steering. Restart C4 after first enabling to configure transmission; disabling is checked while running."
     }
   },
   {
     "group": "Curv/Safety/Nav",
-    "title": { "ko": "주행 중 방향지시등 시험", "en": "Moving Turn Signal Road Test" },
+    "title": {
+      "ko": "주행 중 방향지시등 시험",
+      "en": "Moving Turn Signal Road Test"
+    },
     "param": "MovingBlinkerRoadTest",
     "value_type": "BOOL",
     "description": {
-      "ko": "아이오닉 5 PE의 주행 중 앱 버튼 시험 및 별도 설정으로 켜는 추월 후보 깜빡이 시험의 송신을 허용합니다. TBT 실험 설정과 함께 켜고 C4를 재시작하세요.",
-      "en": "Allows moving app button tests and the separately enabled overtake-candidate signal test on Ioniq 5 PE. Enable with the TBT experiment and restart C4."
+      "ko": "지원 차량의 이동 중 기사에이전트 버튼 시험과 추월 후보 점등 시험의 송신을 허용합니다. TBT 자동 방향지시등 실험과 함께 켜고 처음에는 C4를 재시작해야 합니다. 이 설정 자체가 자동 차선변경을 실행하지는 않습니다.",
+      "en": "Permits supported moving-vehicle KisaAgent button tests and overtake-candidate indicator tests. Enable with the TBT indicator experiment and restart C4 for initial setup. This switch alone does not initiate automatic lane changes."
     }
   },
   {
     "group": "Curv/Safety/Nav",
-    "title": { "ko": "추월 후보 깜빡이 시험", "en": "Overtake Candidate Signal Test" },
+    "title": {
+      "ko": "추월 후보 깜빡이 시험",
+      "en": "Overtake Candidate Signal Test"
+    },
     "param": "OvertakeBlinkerSignalTest",
     "value_type": "BOOL",
     "description": {
-      "ko": "기본 OFF. 고속도로 추월 후보 조건이 확인되면 왼쪽 깜빡이를 최대 3초 켭니다. 자동 차선변경이나 추월 가속은 하지 않습니다. 실제 점등 확인 후 BLINKER TEST와 시작 음성이 나옵니다. TBT 자동 방향지시등(실험)과 주행 중 방향지시등 시험을 함께 켜고, 처음에는 C4를 재시작하세요. 이후 이 설정은 약 0.5초마다 반영됩니다. 핸들·페달·방향지시등 레버 개입 시 중단되며 같은 앞차에는 반복하지 않습니다.",
-      "en": "Default OFF. Pulses the left signal for up to 3 seconds after highway overtake-candidate confirmation. No automatic lane change or passing acceleration. Confirmed lamp feedback triggers BLINKER TEST and the start voice. Enable TBT Auto Turn Signals and Moving Turn Signal Road Test, then restart C4 initially. This switch is subsequently checked every 0.5 seconds. Steering, pedal or stalk intervention cancels the test; the same lead is not tested repeatedly."
+      "ko": "현재 KYD의 추월 후보 점등 시험입니다. 후보 조건을 확인하면 왼쪽 깜빡이를 최대 3초 켜며 자동 조향·추월 가속은 하지 않습니다. 실제 점등 확인 뒤 BLINKER TEST와 음성을 안내합니다. TBT·이동 중 시험 설정 및 최초 재시작이 필요하며, 이 스위치는 약 0.5초마다 확인합니다. 운전자 개입 시 중단하고 같은 앞차에는 반복하지 않습니다.",
+      "en": "Current KYD overtake-candidate indicator test. Requests the left indicator for up to three seconds, without automatic steering or overtaking acceleration. Confirmed illumination triggers BLINKER TEST and audio. Requires TBT/moving-test switches and initial restart; this switch is checked about every 0.5 seconds. Driver intervention cancels it, with no repeat for the same lead."
     }
   },
   {
     "group": "Curv/Safety/Nav",
-    "title": { "ko": "자동 회전 제어 모드", "en": "Auto Turn Control Mode" },
+    "title": {
+      "ko": "자동 회전 제어 모드",
+      "en": "Auto Turn Control Mode"
+    },
     "param": "AutoTurnControl",
     "min_value": 0,
     "max_value": 3,
@@ -1531,24 +1589,38 @@
     "value_type": "INT",
     "special_texts": {
       "0": { "ko": "사용 안 함", "en": "None" },
-      "1": { "ko": "차선 변경", "en": "Lane Change" },
-      "2": { "ko": "차선 변경 + 속도", "en": "LC + Speed" },
+      "1": { "ko": "횡방향 요청", "en": "Lateral Requests" },
+      "2": { "ko": "횡방향 요청 + 속도", "en": "Lateral Requests + Speed" },
       "3": { "ko": "속도 제어", "en": "Speed Only" }
+    },
+    "description": {
+      "ko": "TBT 회전 요청과 감속 사용 범위입니다. 0: 끄기, 1: 횡방향 회전 요청, 2: 횡방향 요청과 속도 제어, 3: 속도 제어만. 횡방향은 기존 desire·차선·운전자 개입 조건을 통과한 요청이며 교차로 회전 완료를 보장하지 않습니다.",
+      "en": "TBT turn-request/speed-control scope: 0 off; 1 lateral turn requests; 2 lateral requests and speed control; 3 speed control only. Lateral requests still pass desire, lane and driver-intervention gates; this is not guaranteed intersection-turn completion."
     }
   },
   {
     "group": "Curv/Safety/Nav",
-    "title": { "ko": "자동 회전 목표 속도", "en": "Auto Turn Speed" },
+    "title": {
+      "ko": "자동 회전 목표 속도",
+      "en": "Auto Turn Speed"
+    },
     "param": "AutoTurnControlSpeedTurn",
     "min_value": 0,
     "max_value": 100,
     "step": 5,
     "decimal_places": 0,
-    "value_type": "INT"
+    "value_type": "INT",
+    "description": {
+      "ko": "TBT 좌·우회전 속도 제어의 목표 속도입니다(단위 km/h). 회전 감속을 사용하는 AutoTurnControl 모드에서 반영하며 분기 안내는 별도로 도로속도를 사용합니다. 앞차·신호 등 더 낮은 제한은 우선합니다.",
+      "en": "Target speed for TBT left/right-turn slowing, in km/h. Applies in AutoTurnControl modes with speed control; fork guidance separately uses road speed. Lower lead/signal constraints retain priority."
+    }
   },
   {
     "group": "Curv/Safety/Nav",
-    "title": { "ko": "자동 회전 제어 종료 기준", "en": "Auto Turn Control End" },
+    "title": {
+      "ko": "TBT 목표속도 도달 여유(초)",
+      "en": "TBT Target-Speed Allowance (s)"
+    },
     "param": "AutoTurnControlTurnEnd",
     "min_value": 0,
     "max_value": 30,
@@ -1556,23 +1628,27 @@
     "decimal_places": 0,
     "value_type": "INT",
     "description": {
-      "ko": "속도 × 시간 기준으로 회전 제어 종료 시점을 계산합니다.",
-      "en": "Turn control end point calculated by speed × time."
+      "ko": "TBT 감속 목표를 미리 맞출 거리의 시간 계수입니다(단위 초). 회전 목표 속도 또는 분기 속도와 곱해 거리로 환산하고 남은 거리에서 뺍니다. 크게 하면 더 앞에서 목표 속도에 맞추는 방향이며 깜빡이 해제 타이머는 아닙니다.",
+      "en": "Time factor for the TBT target-speed allowance, in seconds. Multiplied by turn/fork speed, converted to distance and subtracted from remaining distance. Larger values tend to reach target speed earlier; this is not an indicator cancellation timer."
     }
   },
   {
     "group": "Curv/Safety/Nav",
-    "title": { "ko": "자동 지도 전환", "en": "Auto Map Change" },
+    "title": {
+      "ko": "자동 지도 전환",
+      "en": "Auto Map Change"
+    },
     "param": "AutoTurnMapChange",
     "min_value": 0,
     "max_value": 1,
     "step": 1,
     "decimal_places": 0,
-    "value_type": "INT"
+    "value_type": "INT",
+    "description": {
+      "ko": "TBT 회전 준비·해제 상태에 맞춰 연결 앱에 MAP/ROAD 화면 전환 명령을 보냅니다. 앱이 해당 명령을 지원해야 동작하며 차량 경로나 조향 방식을 바꾸는 설정은 아닙니다.",
+      "en": "Sends MAP/ROAD display commands to the connected app as TBT turn preparation starts/ends. Requires app support. Does not change the driving path or steering controller."
+    }
   },
-
-
-
   {
     "group": "DEV",
     "title": {
@@ -1582,8 +1658,8 @@
     "param": "PutPrebuiltOn",
     "value_type": "BOOL",
     "description": {
-      "ko": "프리빌드 파일을 생성하여 부팅 속도를 향상시킵니다. 활성화 시 캐시를 사용해 부팅이 빨라지며, 코드 수정 후 메뉴에서 업데이트 버튼을 누르거나 명령창에서 'gi'로 재부팅하면 자동으로 삭제 후 재컴파일됩니다.",
-      "en": "Creates a prebuilt file to speed up booting. When enabled, boot time is accelerated using cache. It is automatically removed and recompiled when you press the update button after code changes or reboot with the 'gi' command."
+      "ko": "부팅 스크립트에서 검증된 프리빌드 캐시 재사용을 허용합니다. 켜면 매번 전체 빌드하는 시간을 줄일 수 있고, 끄면 일반 소스 빌드 절차를 사용합니다. 실행 중 주행 계산에는 영향이 없으며 다음 부팅부터 적용합니다.",
+      "en": "Allows the boot script to reuse a validated prebuilt cache, reducing full-build time when available. Off uses the normal source-build path. Applies at next boot and does not affect running driving calculations."
     }
   },
   {
@@ -1595,91 +1671,8 @@
     "param": "KisaEnableLogger",
     "value_type": "BOOL",
     "description": {
-      "ko": "데이터 분석을 위해 주행 로그를 로컬에 기록합니다. 로그는 서버로 업로드되지 않습니다.",
-      "en": "Records driving logs locally for data analysis. Logs are not uploaded to the server."
-    }
-  },
-  {
-    "group": "DEV",
-    "title": {
-      "ko": "디버그 UI 표시",
-      "en": "Debug UI"
-    },
-    "param": "ShowDebugUI",
-    "value_type": "INT",
-    "min_value": 0,
-    "max_value": 3,
-    "step": 1,
-    "decimal_places": 0,
-    "special_texts": {
-      "0": {
-        "ko": "표시 안 함",
-        "en": "None"
-      },
-      "1": {
-        "ko": "디바이스 상태",
-        "en": "Dev Stat"
-      },
-      "2": {
-        "ko": "+ UI 메시지",
-        "en": "+ UI Msgs"
-      },
-      "3": {
-        "ko": "+ 디버그 메시지",
-        "en": "+ Debut Msgs"
-      }
-    },
-    "description": {
-      "ko": "장치 상태 및 차량 신호 관련 디버그 정보를 화면에 표시합니다.",
-      "en": "Displays device status, car signals and debug information on the screen."
-    }
-  },
-  {
-    "group": "DEV",
-    "title": {
-      "ko": "레이더 정보 표시",
-      "en": "Show Radar Info"
-    },
-    "param": "ShowRadarInfo",
-    "value_type": "INT",
-    "min_value": 0,
-    "max_value": 3,
-    "step": 1,
-    "decimal_places": 0,
-    "special_texts": {
-      "0": { "ko": "표시 안 함", "en": "None" },
-      "1": { "ko": "표시", "en": "Show" },
-      "2": { "ko": "상대 위치 추가", "en": "+ Relative Position" },
-      "3": { "ko": "정지 장애물 포함", "en": "+ Stopped Obstacle" }
-    },
-    "description": {
-      "ko": "레이더 감지 정보와 상대 위치, 정지 장애물 정보를 화면에 표시합니다.",
-      "en": "Displays radar detection data including relative position and stopped obstacles."
-    }
-  },
-  {
-    "group": "DEV",
-    "title": {
-      "ko": "플롯 표시 모드",
-      "en": "Show Plot Mode"
-    },
-    "param": "ShowPlotMode",
-    "value_type": "INT",
-    "min_value": 0,
-    "max_value": 5,
-    "step": 1,
-    "decimal_places": 0,
-    "special_texts": {
-      "0": { "ko": "표시 안 함", "en": "None" },
-      "1": { "ko": "가속도", "en": "Accel" },
-      "2": { "ko": "가속도 + 속도", "en": "Accel + Velocity" },
-      "3": { "ko": "모델", "en": "Model" },
-      "4": { "ko": "선행 차량", "en": "Lead" },
-      "5": { "ko": "선행 차량 2", "en": "Lead2" }
-    },
-    "description": {
-      "ko": "디버깅을 위한 차량 상태 및 모델 데이터를 그래프로 표시합니다.",
-      "en": "Displays graphs of vehicle state and model data for debugging."
+      "ko": "loggerd의 로컬 주행 로그 기록을 허용합니다. 꺼져 있으면 이후 분석에 필요한 로그가 저장되지 않을 수 있습니다. 서버 업로드 허용 여부를 정하는 스위치는 아니며 다른 녹화·업로드 기능은 각각의 설정을 따릅니다.",
+      "en": "Allows loggerd to record local driving logs. Disabling can leave later analysis without required data. This is not an upload-permission switch; other recording/upload functions follow their own settings."
     }
   }
 ]

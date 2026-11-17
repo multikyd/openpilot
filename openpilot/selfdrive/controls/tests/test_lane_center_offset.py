@@ -13,7 +13,7 @@ class TestLaneCenterOffset(unittest.TestCase):
   def setUp(self):
     self.values = {
       'LaneCenterOffset': -0.03, 'LeftEdgeOffset': 0.0, 'RightEdgeOffset': 0.0,
-      'CameraOffsetAdj': 0.04, 'AdjustLaneOffset': 0.0, 'LatMpcInputOffset': 0,
+      'CameraOffsetAdj': 0.04, 'AdjustLaneOffset': 0.0,
     }
     params = SimpleNamespace(get=lambda key, **kwargs: self.values[key])
     with patch.object(lane_module, 'Params', lambda: params):
@@ -74,8 +74,10 @@ class TestLaneCenterOffset(unittest.TestCase):
   def test_parameter_disable_and_bound(self):
     self.lp.lane_center_offset = 0.0
     self.assertEqual(self.settle()[-1], 0.0)
-    self.lp.lane_center_offset = -1.0
-    self.assertAlmostEqual(self.settle()[-1], -0.05, places=7)
+    for value, expected in [(-1.0, -0.1), (1.0, 0.1)]:
+      with self.subTest(value=value):
+        self.lp.lane_center_offset = value
+        self.assertAlmostEqual(self.settle(frames=300)[-1], expected, places=7)
 
   def test_invalid_input_does_not_poison_filter(self):
     self.settle()

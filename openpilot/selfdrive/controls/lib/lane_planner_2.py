@@ -240,7 +240,7 @@ class LanePlanner:
     if not enabled:
       return 0.0
     confidence = np.interp(self.d_prob, [0.3, 0.8], [0.0, 1.0])
-    # A reliable 3 m lane has room for the bounded (at most 5 cm) preference.
+    # A reliable 3 m lane has room for the bounded (at most 10 cm) preference.
     # Keep fading it out below 3 m and disable it at 2.8 m or narrower.
     width_factor = np.interp(self.lane_width, [2.8, 3.0], [0.0, 1.0])
     return float(filtered * confidence * width_factor)
