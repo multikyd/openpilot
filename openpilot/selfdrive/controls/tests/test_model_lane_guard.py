@@ -2,6 +2,7 @@ import copy
 import math
 import unittest
 from types import SimpleNamespace as NS
+from unittest.mock import Mock
 
 import numpy as np
 
@@ -351,7 +352,7 @@ class TestLanePositionGuard(unittest.TestCase):
     self.assertEqual(self.h.accel,0.)
     self.setUp();self.assertEqual(self.tick(preference=None),[self.k])
 
-  def test_lane_callback_is_applied_before_filter_without_accumulation(self):
+  def test_lane_filter_retains_planner_target_without_extra_adjustment(self):
     import ast
     from pathlib import Path
     tree=ast.parse((Path(__file__).parents[1]/'controlsd.py').read_text(encoding='utf8'))
@@ -359,15 +360,77 @@ class TestLanePositionGuard(unittest.TestCase):
     env=dict(np=np,DT_CTRL=.01,get_lag_adjusted_curvature=lambda *args:.008)
     exec(compile(ast.Module(body=[f],type_ignores=[]),'actual_lane_command','exec'),env)
     fn=env['lane_curve_command'];previous=.008
-    calls=[]
-    def adjust(k):
-      calls.append(k)
-      return k-.0005
     for _ in range(500):
-      previous,_=fn(None,17.,[],[],[],.4,.1,previous,False,curvature_adjust=adjust)
-    self.assertAlmostEqual(previous,.0075,places=8)
-    self.assertEqual(len(calls),500)
-    self.assertTrue(all(k==.008 for k in calls))
+      previous,_=fn(None,17.,[],[],[],.4,.1,previous,False)
+    self.assertAlmostEqual(previous,.008,places=8)
+
+
+class TestPositionGuardRouting(unittest.TestCase):
+  """Execute the actual control-selection block without device bindings."""
+  def setUp(self):
+    import ast
+    from pathlib import Path
+    tree=ast.parse((Path(__file__).parents[1]/'controlsd.py').read_text(encoding='utf8'))
+    controls=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='Controls')
+    method=next(n for n in controls.body if isinstance(n,ast.FunctionDef) and n.name=='state_control')
+    helper=next(n for n in method.body if isinstance(n,ast.FunctionDef) and n.name=='position_curvature')
+    start=method.body.index(helper)
+    block=method.body[start:start+4]  # helper, controller selection, guard resets
+    self.code=compile(ast.Module(body=block,type_ignores=[]),'actual_control_selection','exec')
+    self.position=NS(update=Mock(return_value=.003),reset=Mock())
+    self.boundary=NS(update=Mock(return_value=.004),reset=Mock())
+    sm={'lateralManeuverPlan':NS(desiredCurvature=.006)}
+    class Messages(dict):
+      valid={'lateralManeuverPlan':False}
+      logMonoTime={'modelV2':10_000_000_000,'carState':10_000_000_000}
+      def all_checks(self, services):
+        return True
+    self.controls=NS(lane_position_guard=self.position,model_lane_guard=self.boundary,
+                    sm=Messages(sm),lanefull_mode_enabled=True,curvature=.001,
+                    CP=None,lat_smooth_seconds=.1,desired_curvature=.002,
+                    lane_center_preference=-.03,camera_offset=.04)
+    self.env=dict(self=self.controls,CC=NS(latActive=True),
+                  CS=NS(vEgo=17.,steeringPressed=False,leftBlinker=False,rightBlinker=False,
+                        leftBlindspot=False,rightBlindspot=False),
+                  model_v2=NS(action=NS(desiredCurvature=.004),
+                              meta=NS(laneChangeDirection=0,laneChangeState=0)),
+                  lat_plan=NS(curvatures=[.005],psis=[],distances=[]),
+                  lane_curve_command=Mock(return_value=(.005,.1)),
+                  steer_actuator_delay=.4,position_now=10.,position_guard_used=False,
+                  model_lane_guard_used=False,effective_lat_smoothing=.1,
+                  LaneChangeDirection=NS(left=1,right=2),LaneChangeState=NS(laneChangeStarting=1),
+                  time=NS(monotonic=lambda:10.),smooth_value=lambda value,previous,tau:value)
+
+  def run_selection(self):
+    self.env.update(position_guard_used=False,model_lane_guard_used=False)
+    exec(self.code,self.env)
+
+  def test_lane_mode_uses_planner_target_and_clears_model_correction(self):
+    self.run_selection()
+    self.assertEqual(self.env['new_desired_curvature'],.005)
+    self.position.update.assert_not_called()
+    self.position.reset.assert_called_once()
+    self.boundary.update.assert_not_called()
+    self.boundary.reset.assert_called_once()
+
+  def test_model_mode_retains_position_and_boundary_corrections(self):
+    self.controls.lanefull_mode_enabled=False
+    self.run_selection()
+    self.assertEqual(self.env['new_desired_curvature'],.003)
+    self.position.update.assert_called_once()
+    self.boundary.update.assert_called_once()
+    self.position.reset.assert_not_called()
+    self.boundary.reset.assert_not_called()
+    self.env['lane_curve_command'].assert_not_called()
+
+  def test_return_to_lane_mode_drops_previous_guard_state(self):
+    self.controls.lanefull_mode_enabled=False
+    self.run_selection()
+    self.controls.lanefull_mode_enabled=True
+    self.run_selection()
+    self.assertEqual(self.env['new_desired_curvature'],.005)
+    self.position.update.assert_called_once()
+    self.position.reset.assert_called_once()
 
 
 if __name__ == '__main__':

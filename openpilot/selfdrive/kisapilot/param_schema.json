@@ -251,8 +251,8 @@
       "0": { "ko": "수동 선호 없음", "en": "No Manual Preference" }
     },
     "description": {
-      "ko": "차선 중심에 더하는 수동 위치 선호입니다(단위 m). 음수는 왼쪽, 양수는 오른쪽이며 레인모드에서 커브·차선변경 시 줄어듭니다. 현재 모델모드에서는 음수 설정에 한해 일정 속도·차선 조건에서 왼쪽 복귀 보정에도 사용합니다. 0은 이 수동 선호만 해제하며 자동 위치·경계 보정은 남습니다.",
-      "en": "Manual lane-centre preference in metres: negative left, positive right. It fades during curves and lane changes in lane mode. In current model mode, only negative settings also enable conditional left-recovery correction. Zero disables this manual preference, while automatic positioning/boundary guards remain active."
+      "ko": "차선 중심에 더하는 수동 위치 선호입니다(단위 m). 음수는 왼쪽, 양수는 오른쪽이며 레인모드에서 커브·차선변경 시 줄어듭니다. 레인모드에서는 레인플래너만 위치를 보정하며 추가 LanePositionGuard는 사용하지 않습니다. 모델모드에서는 음수 설정에 한해 일정 속도·차선 조건에서 왼쪽 복귀 보정에도 사용합니다. 0은 이 수동 선호만 해제하며 자동 위치·경계 보정은 남습니다.",
+      "en": "Manual lane-centre preference in metres: negative left, positive right. It fades during curves and lane changes in lane mode. Lane mode uses planner positioning without an additional LanePositionGuard. In model mode, only negative settings also enable conditional left-recovery correction. Zero disables this manual preference, while automatic positioning/boundary guards remain active."
     }
   },
   {

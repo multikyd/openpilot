@@ -36,7 +36,7 @@ ACTUATOR_FIELDS = tuple(car.CarControl.Actuators.schema.fields.keys())
 
 
 def lane_curve_command(CP, v_ego, psis, curvatures, distances, actuator_delay,
-                       smoothing_seconds, previous_curvature, steering_pressed, curvature_adjust=None):
+                       smoothing_seconds, previous_curvature, steering_pressed):
   # Preview compensation must use the same smoothing time as the final filter.
   curvature = get_lag_adjusted_curvature(CP, v_ego, psis, curvatures,
                                         actuator_delay + smoothing_seconds, distances)
@@ -49,8 +49,6 @@ def lane_curve_command(CP, v_ego, psis, curvatures, distances, actuator_delay,
     tau -= turn * entry * (smoothing_seconds - 0.15)
     curvature = get_lag_adjusted_curvature(CP, v_ego, psis, curvatures,
                                           actuator_delay + tau, distances)
-  if curvature_adjust is not None:
-    curvature = curvature_adjust(curvature)
   alpha = 1 - np.exp(-DT_CTRL / tau) if tau > 0 else 1.0
   return float(alpha * curvature + (1 - alpha) * previous_curvature), tau
 
@@ -260,11 +258,11 @@ class Controls:
       if len(lat_plan.curvatures) == 0:
         new_desired_curvature = self.curvature
       else:
-        position_guard_used = True
+        # The lane planner already applies lane-centre and position preferences.
+        # Do not add the model-mode left recovery on top of that planned path.
         new_desired_curvature, effective_lat_smoothing = lane_curve_command(
           self.CP, CS.vEgo, lat_plan.psis, lat_plan.curvatures, lat_plan.distances,
-          steer_actuator_delay, self.lat_smooth_seconds, self.desired_curvature, CS.steeringPressed,
-          curvature_adjust=position_curvature)
+          steer_actuator_delay, self.lat_smooth_seconds, self.desired_curvature, CS.steeringPressed)
     else:
       # Constrain the model action before smoothing; adding a correction after
       # this filter would feed it back as a new baseline every control tick.

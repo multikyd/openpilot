@@ -165,7 +165,7 @@ class ModelLaneGuard:
 
 
 class LanePositionGuard:
-  """Bounded left recovery from measured lane position, before command filtering."""
+  """Model-mode left recovery before filtering; lane plans own their positioning."""
   def __init__(self):
     self.reset()
 
