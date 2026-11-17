@@ -16,6 +16,8 @@ import openpilot.cereal.messaging as messaging
 from openpilot.selfdrive.kisapilot.bump_learning import BumpMemory, BumpPassage
 from openpilot.selfdrive.kisapilot.bump_approach import BumpApproach
 from openpilot.selfdrive.kisapilot.tbt_blinker import TbtBlinker
+from openpilot.selfdrive.kisapilot.turn_progress import TurnProgress
+from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.kisapilot.signal_memory import SignalMemory, GREEN, blank as blank_signal
 from openpilot.selfdrive.kisapilot.manual_stop_line import ManualStopLineMemory
@@ -209,6 +211,7 @@ class CarrotServ:
 
 
     self.atc_paused = False
+    self.turn_progress = TurnProgress()
     self.atc_activate_count = 0
     self.gas_override_speed = 0
     self.gas_pressed_state = False
@@ -827,6 +830,33 @@ class CarrotServ:
 
     return new_lat, new_lon
 
+  def _turn_progress_speed(self, sm, now, target):
+    def fresh(service):
+      return sm.valid[service] and 0. <= now-sm.recv_time[service] < .25
+    services = ('carState', 'controlsState', 'modelV2', 'carControl')
+    if not all(fresh(service) for service in services):
+      self.turn_progress.reset()
+      return target
+    cs, model = sm['carState'], sm['modelV2']
+    if len(model.orientationRate.z) != ModelConstants.IDX_N or len(model.velocity.x) != ModelConstants.IDX_N:
+      self.turn_progress.reset()
+      return target
+    def preview(seconds):
+      yaw = float(np.interp(seconds, ModelConstants.T_IDXS, model.orientationRate.z))
+      speed = float(np.interp(seconds, ModelConstants.T_IDXS, model.velocity.x))
+      return yaw/max(abs(speed), 3.)
+    highway = self.navi_highway_stamp is not None and 0. <= now-self.navi_highway_stamp < 2.5
+    extra = self.turn_progress.update(
+      now=now, enabled=(self.autoTurnControl in (2, 3) and sm['carControl'].longActive and
+                        not highway and not (cs.gasPressed or cs.brakePressed) and
+                        0. <= now-self.tbt_blinker_stamp < 2.5),
+      code=self.xTurnInfo, distance=self.xDistToTurn, speed=cs.vEgo,
+      angle=cs.steeringAngleDeg, curvature=sm['controlsState'].curvature,
+      preview=preview(1.), far_preview=preview(2.))
+    if extra > 0.:
+      self.debugText += f" turn45={math.degrees(self.turn_progress.heading):.0f}/{extra*3.6:.1f}"
+    return target+extra*3.6 if target < 200. else target
+
   def update_auto_turn(self, v_ego_kph, sm, x_turn_info, x_dist_to_turn, check_steer=False):
     turn_speed = self.autoTurnControlSpeedTurn
     fork_speed = self.nRoadLimitSpeed
@@ -1226,6 +1256,9 @@ class CarrotServ:
     ### TBT 속도제어
     atc_desired, self.atcType, self.atcSpeed, self.atcDist = self.update_auto_turn(v_ego*3.6, sm, self.xTurnInfo, self.xDistToTurn, True)
     atc_desired_next, _, _, _ = self.update_auto_turn(v_ego*3.6, sm, self.xTurnInfoNext, self.xDistToTurnNext, False)
+    # Relax only this maneuver's TBT cap. The next turn, camera, bump, route,
+    # model-curve and road caps are still selected independently below.
+    atc_desired = self._turn_progress_speed(sm, bump_now, atc_desired)
 
     if self.nSdiType  >= 0: # or self.active_carrot > 0:
       pass

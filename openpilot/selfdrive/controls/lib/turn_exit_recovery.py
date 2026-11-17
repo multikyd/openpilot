@@ -1,5 +1,6 @@
-"""Brief cruise recovery after a confirmed tight turn, before normal safety caps."""
+"""Progressive mid-turn/exit recovery before the normal safety constraints."""
 import math
+from openpilot.selfdrive.kisapilot.turn_progress import TurnProgress
 
 
 def _interp(x, xp, fp):
@@ -13,9 +14,11 @@ def _interp(x, xp, fp):
 class TurnExitRecovery:
   def __init__(self):
     self.last_time = None
+    self.progress = TurnProgress()
     self.reset()
 
   def reset(self):
+    self.progress.reset()
     self.turn_confirm = self.exit_confirm = 0.
     self.peak_angle = self.peak_curve = 0.
     self.last_turn_time = None
@@ -35,7 +38,7 @@ class TurnExitRecovery:
     return True
 
   def update(self, *, now, enabled, v_ego, steering_angle, curvature, preview, far_preview,
-             normal_max, target_speed, leads):
+             normal_max, target_speed, leads, turn_code=0, turn_distance=0., nav_fresh=False):
     previous_time, self.last_time = self.last_time, now
     dt = 0. if previous_time is None else now-previous_time
     values = (now, v_ego, steering_angle, curvature, preview, far_preview, normal_max, target_speed)
@@ -43,6 +46,20 @@ class TurnExitRecovery:
         not 1. <= v_ego <= 60./3.6 or normal_max <= 0.):
       self.reset()
       return normal_max
+
+    self.progress.update(now=now, enabled=nav_fresh, code=turn_code, distance=turn_distance,
+                         speed=v_ego, angle=steering_angle, curvature=curvature,
+                         preview=preview, far_preview=far_preview)
+    if (self.until is None and self.progress.strength > 0. and
+        (abs(steering_angle) > 40. or abs(curvature)*v_ego**2 > .8 or abs(preview)*v_ego**2 > .8) and
+        target_speed-v_ego >= .2 and
+        self.clear_leads(leads, v_ego)):
+      # Mid-turn assistance stays smaller than full exit recovery. The ordinary
+      # planner still applies lateral-acceleration and navigation speed caps.
+      self.strength = self.progress.strength*.5
+      return normal_max + min(.2, self.strength*.4)
+    if self.until is None:
+      self.strength = 0.
 
     angle = abs(steering_angle)
     turning = (v_ego <= 12. and angle >= 60. and abs(preview)*v_ego**2 >= .4)

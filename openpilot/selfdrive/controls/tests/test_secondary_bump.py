@@ -31,6 +31,7 @@ def instance():
   h.bump_display=None;h.bump_memory=NS(position=None);h.bump_passage=NS(matches=MagicMock(return_value=False),event=None)
   h.autoTurnControl=0;h.xTurnInfo=h.xTurnInfoNext=-1;h.xDistToTurn=h.xDistToTurnNext=1000
   h.update_auto_turn=lambda *a:(250.,'none',0,0)
+  h._turn_progress_speed=lambda sm,now,target:target
   h._update_sdi()
   return h
 

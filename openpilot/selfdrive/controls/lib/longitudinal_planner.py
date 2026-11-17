@@ -240,6 +240,7 @@ class LongitudinalPlanner:
     preview_valid = (len(sm['modelV2'].orientationRate.z) == ModelConstants.IDX_N and
                      len(sm['modelV2'].velocity.x) == ModelConstants.IDX_N)
     normal_accel = carrot.get_carrot_accel(v_ego)
+    turn_nav = sm['carrotMan']
     recovery_accel = self.turn_exit_recovery.update(
       now=now, enabled=(self.CP.openpilotLongitudinalControl and self.mpc.mode == 'acc' and not reset_state and
                        sm['selfdriveState'].enabled and not force_slow_decel and not self.output_should_stop and
@@ -251,11 +252,15 @@ class LongitudinalPlanner:
                          ['carState', 'radarState', 'modelV2', 'controlsState', 'selfdriveState'])),
       v_ego=v_ego, steering_angle=cs.steeringAngleDeg, curvature=sm['controlsState'].curvature,
       preview=curvature_future, far_preview=curvature_far, normal_max=normal_accel,
-      target_speed=v_cruise, leads=(sm['radarState'].leadOne, sm['radarState'].leadTwo))
+      target_speed=v_cruise, leads=(sm['radarState'].leadOne, sm['radarState'].leadTwo),
+      turn_code=turn_nav.xTurnInfo, turn_distance=turn_nav.xDistToTurn,
+      nav_fresh=(sm.all_checks(['carrotMan']) and turn_nav.naviConnected and not turn_nav.naviHighway and
+                 0. <= now-sm.logMonoTime['carrotMan']*1e-9 <= .5))
     recovery_active = self.turn_exit_recovery.strength > 0.
     if recovery_active != self._turn_exit_active:
       cloudlog.event('turn_exit_recovery', active=recovery_active, v_ego=float(v_ego),
-                     normal_accel=float(normal_accel), recovery_accel=float(recovery_accel))
+                     normal_accel=float(normal_accel), recovery_accel=float(recovery_accel),
+                     turn_progress_deg=float(np.degrees(self.turn_exit_recovery.progress.heading)))
       self._turn_exit_active = recovery_active
     launch_base_accel = recovery_accel
     recovery_accel = self.launch_follow.update(

@@ -2,6 +2,7 @@ import importlib.util
 from pathlib import Path
 from types import SimpleNamespace as NS
 import unittest
+import numpy as np
 
 spec = importlib.util.spec_from_file_location('turn_exit_helper', Path(__file__).parents[1]/'lib/turn_exit_recovery.py')
 helper = importlib.util.module_from_spec(spec)
@@ -156,19 +157,21 @@ class TestPlannerRecoveryIntegration(unittest.TestCase):
     class SM(dict):
       def all_checks(self,*args,**kwargs): return self.valid_checks
     sm = self.sm = SM(carState=NS(gasPressed=False,brakePressed=False,steeringPressed=True,steeringAngleDeg=15.,leftBlinker=False,rightBlinker=False),
+                      carrotMan=NS(xTurnInfo=0,xDistToTurn=0,naviConnected=False,naviHighway=False),
                       controlsState=NS(curvature=.004,desiredCurvature=.004),selfdriveState=NS(enabled=True),
                       radarState=NS(leadOne=lead(),leadTwo=lead()),
                       modelV2=NS(orientationRate=NS(z=[0.]*33),velocity=NS(x=[0.]*33)))
-    sm.valid_checks = True;sm.logMonoTime={n:10_000_000_000 for n in ('carState','radarState','modelV2')}
+    sm.valid_checks = True;sm.logMonoTime={n:10_000_000_000 for n in ('carState','radarState','modelV2','carrotMan')}
     self.carrot = NS(desireState=0.,myDrivingMode=NS(value=3),xState=0,
                      signal_follow=NS(strength=0.),
                      get_carrot_accel=lambda speed:1.)
     recovery = MagicMock();recovery.update.return_value=1.5;recovery.strength=.8
+    recovery.progress=NS(heading=0.)
     self.planner = NS(CP=NS(openpilotLongitudinalControl=True),mpc=NS(mode='acc',t_follow=1.5),dt=.05,overtake_active=False,
                       launch_follow=NS(update=lambda **kw:kw['normal_max'],extra=0.),_launch_follow_active=False,
                       overtake_acceleration=NS(update=lambda value,*args:value),
                       turn_exit_recovery=recovery,_turn_exit_active=False,output_should_stop=False)
-    self.env = dict(self=self.planner,sm=sm,carrot=self.carrot,reset_state=False,force_slow_decel=False,
+    self.env = dict(np=np,self=self.planner,sm=sm,carrot=self.carrot,reset_state=False,force_slow_decel=False,
                     v_ego=6.,v_cruise=15.,ModelConstants=NS(IDX_N=33),
                     XState=NS(e2eStop=1,e2eStopped=2,e2ePrepare=3),cloudlog=MagicMock(),
                     get_future_curvature=lambda *args,**kwargs:.004,A_CRUISE_MIN=-2.,ACCEL_MIN=-3.5,ACCEL_MAX=2.,
@@ -181,6 +184,16 @@ class TestPlannerRecoveryIntegration(unittest.TestCase):
   def test_lateral_acceleration_cap_still_follows_recovery(self):
     self.assertTrue(self.enabled())
     self.assertEqual(self.env['accel_limits_turns'],[-2.,.9])
+
+  def test_stale_navigation_disables_heading_progress_but_not_normal_exit(self):
+    self.sm['carrotMan'].naviConnected=True
+    self.sm['carrotMan'].xTurnInfo=2
+    self.sm['carrotMan'].xDistToTurn=10
+    self.assertTrue(self.enabled())
+    self.assertTrue(self.planner.turn_exit_recovery.update.call_args.kwargs['nav_fresh'])
+    self.sm.logMonoTime['carrotMan']=9_000_000_000
+    self.assertTrue(self.enabled())
+    self.assertFalse(self.planner.turn_exit_recovery.update.call_args.kwargs['nav_fresh'])
 
   def test_signal_stop_pedal_and_eco_gates(self):
     cases = [(self.carrot.signal_follow,'strength',.2),
