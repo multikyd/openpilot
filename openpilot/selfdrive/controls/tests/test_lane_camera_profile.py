@@ -44,6 +44,14 @@ class TestLaneCameraProfile(unittest.TestCase):
           self.assertEqual(self.p.lane_position_class, kind)
           self.assertAlmostEqual(self.p.effective_camera_offset, expected)
 
+  def test_single_reference_preserves_profile_with_weak_right_line(self):
+    self.geometry('single')
+    self.p.l_prob=.9;self.p.r_prob=.25
+    self.p.single_lane_reference.supported=True
+    self.settle()
+    self.assertEqual(self.p.lane_position_class,'single')
+    self.assertAlmostEqual(self.p.effective_camera_offset,.03)
+
   def test_oncoming_lane_is_not_counted_as_same_direction_neighbor(self):
     self.geometry('single')
     self.settle()

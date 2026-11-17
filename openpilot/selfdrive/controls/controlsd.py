@@ -254,6 +254,14 @@ class Controls:
         enabled=(self.sm.all_checks(['modelV2','carState']) and
                  0. <= position_now-self.sm.logMonoTime['carState']*1e-9 <= .1))
 
+    # Observe the single-lane reference in both modes so a right-line dropout
+    # at a mode change does not discard the last confirmed corridor width.
+    self.model_narrow_road_guard.single_lane.update(
+      model_v2, CS, model_v2.action.desiredCurvature,
+      self.sm.logMonoTime['modelV2']*1e-9, position_now,
+      enabled=(CC.latActive and not self.sm['carrotMan'].naviHighway and
+               self.sm.all_checks(['modelV2', 'carState']) and
+               0. <= position_now-self.sm.logMonoTime['carState']*1e-9 <= .1))
     if not CC.latActive:
       new_desired_curvature = self.curvature
     elif self.sm.valid['lateralManeuverPlan']:
@@ -286,7 +294,7 @@ class Controls:
                  self.sm.all_checks(['modelV2', 'carState']) and
                  0. <= guard_now-self.sm.logMonoTime['carState']*1e-9 <= .1),
         actuator_delay=steer_actuator_delay)
-      if not self.model_narrow_road_guard.active:
+      if not self.model_narrow_road_guard.active and not self.model_narrow_road_guard.single_lane.supported:
         position_guard_used = True
         guarded_curvature = position_curvature(model_v2.action.desiredCurvature, guarded_curvature)
       # Reduce filter lag only once the model has started the requested maneuver.
@@ -310,7 +318,7 @@ class Controls:
     if not model_lane_guard_used:
       self.model_lane_guard.reset()
     if not self.narrow_guard_used:
-      self.model_narrow_road_guard.reset()
+      self.model_narrow_road_guard.reset(reset_reference=not CC.latActive)
 
     self.desired_curvature, curvature_limited = clip_curvature(CS.vEgo, self.desired_curvature, new_desired_curvature, lp.roll)
     lat_delay = self.sm["lateralDelay"].lateralDelay + effective_lat_smoothing

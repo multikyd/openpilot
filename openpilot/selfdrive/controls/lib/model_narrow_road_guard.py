@@ -7,14 +7,18 @@ import math
 from types import SimpleNamespace
 
 import numpy as np
+from openpilot.selfdrive.controls.lib.single_lane_reference import SingleLaneReference
 
 
 class ModelNarrowRoadGuard:
   def __init__(self):
     self.bias = SimpleNamespace(shift=0., confirm=0.)
+    self.single_lane = SingleLaneReference()
     self.reset()
 
-  def reset(self, reason='off'):
+  def reset(self, reason='off', reset_reference=True):
+    if reset_reference:
+      self.single_lane.reset()
     self.bias.shift = self.bias.confirm = 0.
     self.stamp = self.reliable_stamp = self.geometry = None
     self.accel = 0.
@@ -62,6 +66,17 @@ class ModelNarrowRoadGuard:
       self.reset()
       dt = .05
     self.stamp = stamp
+    single_shift = self.single_lane.update(model, cs, curvature, stamp, now, enabled=enabled)
+    if self.single_lane.supported:
+      self.bias.shift = single_shift
+      self.bias.confirm = self.single_lane.confirm
+      lookahead = float(np.clip(cs.vEgo*(np.clip(actuator_delay, .1, .6)+.8), 6., 15.))
+      target = min(.15, 2.*single_shift*cs.vEgo**2/lookahead**2)
+      change = (1.-math.exp(-dt/.5))*(target-self.accel)
+      self.accel += float(np.clip(change, -.15*dt, .15*dt))
+      self.accel = min(self.accel, 2.*self.single_lane.room*cs.vEgo**2/lookahead**2)
+      self.reason = self.single_lane.reason
+      return self.result(curvature, guarded, cs.vEgo)
     try:
       probs = np.asarray(model.laneLineProbs, dtype=float)
       stds = np.asarray(model.laneLineStds, dtype=float)
@@ -125,6 +140,6 @@ class ModelNarrowRoadGuard:
         self.accel = 0.
       self.reason = ('tracking' if self.active else 'confirming') if reliable and not jumping else 'holding'
     except (AttributeError, IndexError, TypeError, ValueError) as exc:
-      self.reset(str(exc))
+      self.reset(str(exc), reset_reference=False)
       return guarded
     return self.result(curvature, guarded, cs.vEgo)

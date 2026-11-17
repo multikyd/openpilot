@@ -1,4 +1,5 @@
 import math
+import time
 import numpy as np
 from openpilot.cereal import log
 from openpilot.common.filter_simple import FirstOrderFilter
@@ -6,6 +7,7 @@ from openpilot.common.realtime import DT_MDL
 # from openpilot.common.swaglog import cloudlog
 # from openpilot.common.logger import sLogger
 from openpilot.common.params import Params
+from openpilot.selfdrive.controls.lib.single_lane_reference import SingleLaneReference
 from openpilot.selfdrive.controls.lib.narrow_road_bias import NarrowRoadBias, LaneBoundaryGuard, LaneCenterRecovery
 
 TRAJECTORY_SIZE = 33
@@ -89,6 +91,8 @@ class LanePlanner:
     self.narrow_right_ready = False
     self.narrow_road_model = None
     self.narrow_road_bias = NarrowRoadBias()
+    self.single_lane_reference = SingleLaneReference()
+    self.single_lane_highway = False
     self.boundary_guard = LaneBoundaryGuard()
     self.center_recovery = LaneCenterRecovery()
     self.boundary_shift = 0.
@@ -259,7 +263,8 @@ class LanePlanner:
     if valid:
       outer_left, outer_right, std_left, std_right, edge_left, edge_right, lane_left, lane_right = geometry
       width = lane_right-lane_left
-      valid = 2.6 < width < 4.2 and min(self.l_prob, self.r_prob) >= .75
+      single_reference = self.single_lane_reference.supported
+      valid = ((2.6 < width < 4.2 and min(self.l_prob, self.r_prob) >= .75) or single_reference)
     if observing and valid:
       left_close = 0. <= std_left < .6 and -.1 <= lane_left-edge_left <= 1.8
       right_close = 0. <= std_right < .6 and -.1 <= edge_right-lane_right <= 1.8
@@ -269,7 +274,9 @@ class LanePlanner:
       left_code = getattr(CS, 'leftLaneLine', 0)
       left_yellow = np.isfinite(left_code) and 20 <= left_code < 30
       left_white = np.isfinite(left_code) and 10 <= left_code < 20
-      if (right_close and not right_neighbor and self.lane_width_right < 1.8 and
+      if single_reference:
+        candidate = 'single'
+      elif (right_close and not right_neighbor and self.lane_width_right < 1.8 and
           ((left_yellow and outer_right < .2) or
            (left_close and self.lane_width_left < 1.8 and max(outer_left, outer_right) < .2))):
         candidate = 'single'
@@ -461,6 +468,11 @@ class LanePlanner:
     self.lane_path_weight = next_lane_weight
 
 
+    reference_model = self.narrow_road_model
+    reference_stamp = getattr(reference_model, 'timestampEof', 0)*1e-9
+    self.single_lane_reference.update(
+      reference_model, CS, self.lane_center_curvature, reference_stamp, time.monotonic(),
+      enabled=(self.narrow_right_ready and not self.single_lane_highway))
     lane_center_offset = self._get_lane_center_offset(CS, laneline_active)
     position_offset = self._get_lane_position_offset(CS, laneline_active)
     calibration_offset = 2.0 * (self.path_offset + self.path_offset2)
@@ -489,6 +501,10 @@ class LanePlanner:
     self.narrow_right_shift = self.narrow_road_bias.update(
       self.narrow_road_model, CS, base_path, self.narrow_road_curvature, requested_shift,
       enabled=self.narrow_right_ready and self.lane_position_ready and self.lane_change_multiplier>.5)
+    if laneline_active and self.single_lane_reference.supported:
+      # Re-evaluate against the final calibrated lane path, not the raw model path.
+      # The shared reference shift is an alternative, never an additive second bias.
+      self.narrow_right_shift = max(self.narrow_right_shift, self.single_lane_reference.for_path(base_path))
     path_xyz[:, 1] = base_path[:,1] + self.narrow_right_shift
     self.boundary_shift = self.boundary_guard.update(
       self.narrow_road_model, CS, path_xyz,

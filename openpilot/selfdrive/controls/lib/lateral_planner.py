@@ -160,6 +160,7 @@ class LateralPlanner:
       measured_curvature, self.t_idxs, self.plan_yaw_rate, self.v_plan, preview_horizon=.75)
     self.LP.narrow_right_ready = bool(sm['carControl'].latActive and
                                       sm.all_checks(service_list=['carState', 'modelV2', 'carControl']))
+    self.LP.single_lane_highway = bool(sm['carrotMan'].naviHighway)
     self.path_xyz, self.lanelines_active = self.LP.get_d_path(sm['carState'], v_ego_car, self.t_idxs, self.path_xyz, self.curve_speed)
 
     # Keep heading references consistent with the blended path during release.
