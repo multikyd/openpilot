@@ -1025,6 +1025,24 @@ def health():
     })
 
 
+_vehicle_diagnostics = None
+_vehicle_diagnostics_init_lock = threading.Lock()
+
+
+@app.route("/diagnostics/vehicle", methods=["GET"])
+def vehicle_diagnostics():
+    global _vehicle_diagnostics
+    try:
+        from openpilot.selfdrive.kisapilot.vehicle_diagnostics import VehicleDiagnostics
+        with _vehicle_diagnostics_init_lock:
+            if _vehicle_diagnostics is None:
+                _vehicle_diagnostics = VehicleDiagnostics()
+        return jsonify(_vehicle_diagnostics.read(params))
+    except Exception:
+        return jsonify({"protocol": 1, "read_only": True, "status": "unavailable",
+                        "reason": "C4 vehicle telemetry unavailable"}), 503
+
+
 @app.route("/ping", methods=["GET"])
 def ping():
     global client_connected, last_seen
