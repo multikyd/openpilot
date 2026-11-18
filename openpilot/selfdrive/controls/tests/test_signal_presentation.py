@@ -92,16 +92,16 @@ class TestSignalPresentation(unittest.TestCase):
   def test_unknown_direction_keeps_both_labelled_live_times(self):
     self.assertEqual(countdown_rows(display()), [('S', 2, '61'), ('L', 1, '65')])
 
-  def test_selected_left_uses_left_time(self):
-    self.assertEqual(countdown_rows(display(movement='left')), [('', 1, '65')])
+  def test_selected_left_keeps_other_received_direction(self):
+    self.assertEqual(countdown_rows(display(movement='left')), [('S', 2, '61'), ('L', 1, '65')])
 
   def test_observed_uses_straight_time(self):
-    self.assertEqual(countdown_rows(display(movement='observed')), [('', 2, '61')])
+    self.assertEqual(countdown_rows(display(movement='observed')), [('S', 2, '61'), ('L', 1, '65')])
 
   def test_half_second_advance_changes_only_tmap_text(self):
     value=display(movement='straight',straightState=1,straightRemain=10.4)
     original=vars(value).copy()
-    self.assertEqual(countdown_rows(value),[('',1,'10')])
+    self.assertEqual(countdown_rows(value)[0],('S',1,'10'))
     self.assertEqual(signal_lamps(value),(1,0,0))
     self.assertEqual(vars(value),original)
     value.source='VISION'
@@ -109,10 +109,22 @@ class TestSignalPresentation(unittest.TestCase):
 
   def test_advanced_zero_does_not_change_lamp_state_or_invent_missing_time(self):
     value=display(movement='straight',straightState=1,straightRemain=.3)
-    self.assertEqual(countdown_rows(value),[('',1,'0')])
+    self.assertEqual(countdown_rows(value)[0],('S',1,'0'))
     self.assertEqual(signal_lamps(value),(1,0,0))
     value.straightRemain=0.
-    self.assertEqual(countdown_rows(value),[('',1,'--')])
+    self.assertEqual(countdown_rows(value)[0],('S',1,'--'))
+
+  def test_straight_and_left_red_wait_times_are_independent(self):
+    self.assertEqual(countdown_rows(display(movement='left', straightState=1, straightRemain=17.,
+                                            leftState=1, leftRemain=35.)), [('S', 1, '17'), ('L', 1, '35')])
+
+  def test_green_remaining_time_does_not_replace_left_red_wait(self):
+    self.assertEqual(countdown_rows(display(movement='left', straightState=2, straightRemain=8.,
+                                            leftState=1, leftRemain=35.)), [('S', 2, '8'), ('L', 1, '35')])
+
+  def test_missing_left_is_not_inferred_from_straight_phase(self):
+    self.assertEqual(countdown_rows(display(movement='left', straightState=1, straightRemain=17.,
+                                            leftState=0, leftRemain=0.)), [('S', 1, '17')])
 
   def test_three_digit_values_and_missing_timer(self):
     self.assertEqual(countdown_rows(display(leftRemain=100., straightRemain=0.)),

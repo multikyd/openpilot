@@ -35,9 +35,14 @@ def signal_lamps(display):
 
 
 def countdown_rows(display):
-  """Unknown movement retains labelled live timers instead of discarding them."""
+  """Navigation retains each received direction, including red wait and green remaining time."""
   directions = (('straight', 'S'), ('left', 'L'), ('right', 'R'))
   advance = TMAP_COUNTDOWN_ADVANCE if display.source == 'TMAP' else 0.
+  if display.source == 'TMAP':
+    rows = [(label, getattr(display, direction+'State', 0),
+             timer_text(getattr(display, direction+'Remain', 0.), advance))
+            for direction, label in directions if getattr(display, direction+'State', 0) in (1, 2, 3)]
+    return rows or [('', 0, '--')]
   selected = 'straight' if display.movement == 'observed' else display.movement
   if selected in ('straight', 'left', 'right'):
     return [('', getattr(display, selected+'State', 0), timer_text(getattr(display, selected+'Remain', 0.), advance))]

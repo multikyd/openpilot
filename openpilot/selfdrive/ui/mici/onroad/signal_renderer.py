@@ -70,7 +70,18 @@ def draw_signal_panel(rect, font, display):
   if live and mode not in ('OFF','FLASH') and rows[0][0]:
     row_height=(height-10)/len(rows)
     for i,(label,state,value) in enumerate(rows):
-      text(f'{label} {value}',x+113,y+5+i*row_height,width-121,
+      # Draw arrows as lines so the directional rows do not depend on font glyph coverage.
+      cx, cy = x+124, y+5+(i+.5)*row_height
+      if label == 'S':
+        lines = (((0,7),(0,-7)), ((0,-7),(-5,-2)), ((0,-7),(5,-2)))
+      else:
+        flip = -1 if label == 'R' else 1
+        lines = tuple(((flip*a[0],a[1]),(flip*b[0],b[1]))
+                      for a,b in (((7,0),(-7,0)),((-7,0),(-2,-5)),((-7,0),(-2,5))))
+      for a,b in lines:
+        rl.draw_line_ex(rl.Vector2(x+(cx+a[0]-x)*scale,y+(cy+a[1]-y)*scale),
+                        rl.Vector2(x+(cx+b[0]-x)*scale,y+(cy+b[1]-y)*scale),2*scale,state_color(state))
+      text(value,x+135,y+5+i*row_height,width-143,
            min(48,row_height),state_color(state),max_height=row_height)
   else:
     text(value,x+113,y+5,width-121,64,color,max_height=height-10)
