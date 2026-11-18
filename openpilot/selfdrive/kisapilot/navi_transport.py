@@ -4,6 +4,7 @@ import math
 import socket
 import threading
 import time
+from openpilot.selfdrive.kisapilot.signal_follow import directional_signal, signal_from_sinf, usable_signal
 
 DISCOVERY_PORTS = (7705, 17705, 17706)
 FRESH_SECONDS = 4.0
@@ -14,6 +15,7 @@ class NaviSourceMux:
   def __init__(self, dispatch, changed, received=lambda *a: None, clock=time.monotonic):
     self.dispatch, self.changed, self.received, self.clock = dispatch, changed, received, clock
     self.clients, self.selected, self.lock = {}, None, threading.RLock()
+    self.signal_source, self.signal_original_at = None, float('-inf')
 
   def open(self, key, addr):
     with self.lock:
@@ -39,8 +41,8 @@ class NaviSourceMux:
     c = self.clients.get(target)
     self.changed(c['source'] if c else None, c['addr'] if c else None)
     if c:
-      # Replay only this app, position before signals; never reuse stale signals.
-      for kind in ('rgdata', 'route', 'ssinf', 'sinf', 'complexCrossroad'):
+      # Signals have their own live arbitration; a UI/app switch must not replay old phases.
+      for kind in ('rgdata', 'route', 'complexCrossroad'):
         cached = c['cache'].get(kind)
         if cached and (kind == 'route' or now-cached[0] <= FRESH_SECONDS):
           self.dispatch(cached[1])
@@ -53,6 +55,27 @@ class NaviSourceMux:
       return math.isfinite(lat) and math.isfinite(lon) and abs(lat)<=90 and abs(lon)<=180 and (lat!=0 or lon!=0)
     except (KeyError, TypeError, ValueError, OverflowError):
       return False
+
+  def _signal(self, key, packet, kind, now):
+    value = packet[kind]
+    if not isinstance(value, dict):
+      return
+    data = signal_from_sinf(value) if kind == 'sinf' else value
+    if not usable_signal(directional_signal(data, now, {}, {})):
+      return
+    update = packet.get('signal_update', {})
+    update = update if isinstance(update, dict) else {}
+    if update.get('status') == 'phase_expired':
+      return
+    local = update.get('kind') == 'local_countdown'
+    # An older extrapolated phase from the other provider must not overwrite a
+    # phase that has just arrived. A new original observation can always replace it.
+    if local and key != self.signal_source and now-self.signal_original_at <= FRESH_SECONDS:
+      return
+    self.signal_source = key
+    if not local:
+      self.signal_original_at = now
+    self.dispatch(packet)
 
   def feed(self, key, obj):
     if not isinstance(obj, dict):
@@ -86,15 +109,19 @@ class NaviSourceMux:
           if not isinstance(obj[alias],dict) or not self._valid_rg(obj[alias]):
             continue
           c['rg_at'] = now
-        packet = {k:v for k,v in obj.items() if k in ('source','bridge_version','timestamp_ms','raw_rgdata','raw_naver','navi_state')}
+        packet = {k:v for k,v in obj.items() if k in ('source','bridge_version','timestamp_ms','raw_rgdata','raw_naver','raw_ssinf','raw_sinf','signal_update','navi_state')}
         packet[kind] = obj[alias]
         c['cache'][kind] = (now,packet)
         outgoing[kind] = packet
       switched = self._select(now)
+      for kind in ('ssinf', 'sinf'):
+        if kind in outgoing:
+          self._signal(key, outgoing[kind], kind, now)
       if key == self.selected:
         if not switched:
-          for packet in outgoing.values():
-            self.dispatch(packet)
+          for kind, packet in outgoing.items():
+            if kind not in ('ssinf', 'sinf'):
+              self.dispatch(packet)
         if 'rgdata' in outgoing:
           self.received(c['source'],outgoing['rgdata'])
 

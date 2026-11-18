@@ -951,6 +951,7 @@ class CarrotMan:
     now = time.monotonic()
     navigation, physical_gps = self._signal_context(now)
     candidate = directional_signal(data, now, navigation, physical_gps)
+    candidate['provider'] = data.get('_signal_provider', 'legacy')
     from openpilot.selfdrive.kisapilot.signal_timing import display_timing
     candidate.update(display_timing(data.get('_source_timestamp_ms'), time.time()))
     if not usable_signal(candidate):
@@ -1029,8 +1030,11 @@ class CarrotMan:
     if not usable_signal(directional_signal(signal_from_sinf(d), time.monotonic(), {}, {})):
       return
     # Prefer a recent direction-specific ssinf, but support legacy sinf-only feeds.
-    if time.monotonic() - getattr(self, "_ssinf_time", -100.0) > 1.5:
-      self._put_directional_signal(signal_from_sinf(d))
+    provider = d.get('_signal_provider', 'legacy')
+    if time.monotonic() - getattr(self, "_ssinf_times", {}).get(provider, -100.0) > 1.5:
+      detail = signal_from_sinf(d)
+      detail['_signal_provider'] = provider
+      self._put_directional_signal(detail)
     location = d.get("location", {})
     lat = None
     lon = None
@@ -1055,6 +1059,9 @@ class CarrotMan:
     if not self._put_directional_signal(d):
       return
     self._ssinf_time = time.monotonic()
+    if not hasattr(self, '_ssinf_times'):
+      self._ssinf_times = {}
+    self._ssinf_times[d.get('_signal_provider', 'legacy')] = self._ssinf_time
     d['lat'], d['lon'] = normalized_position(d.get('lat'), d.get('lon'))
 
     green_checks = (
@@ -1525,7 +1532,7 @@ class CarrotMan:
       print(f"[NAVI ssinf RX] {json.dumps(obj['ssinf'], ensure_ascii=False)}", flush=True)
       payload = obj["ssinf"]
       if isinstance(payload, dict):
-        payload = dict(payload, _source_timestamp_ms=event_time_ms)
+        payload = dict(payload, _source_timestamp_ms=event_time_ms, _signal_provider=obj.get('source', 'legacy'))
       self._safe_dispatch_handler("ssinf", self.handle_traffic_light_detail, payload)
       handled = True
 
@@ -1533,7 +1540,7 @@ class CarrotMan:
       print(f"[NAVI sinf RX] {json.dumps(obj['sinf'], ensure_ascii=False)}", flush=True)
       payload = obj["sinf"]
       if isinstance(payload, dict):
-        payload = dict(payload, _source_timestamp_ms=event_time_ms)
+        payload = dict(payload, _source_timestamp_ms=event_time_ms, _signal_provider=obj.get('source', 'legacy'))
       self._safe_dispatch_handler("sinf", self.handle_traffic_light, payload)
       handled = True
 
@@ -1556,14 +1563,11 @@ class CarrotMan:
       return None
 
   def _navi_source_changed(self, source, addr):
-    # Clear the previous app before applying the selected app's position/signal cache.
+    # Route/TBT follow the selected app; the latest valid signal is independent.
     self.remote_addr = addr
-    self._directional_signal = None
     self._last_complex_crossroad = {}
     self.params_memory.remove(NAVI_IMAGE_PARAM)
     self.handle_route([])
-    self.params_memory.remove("TrafficLight")
-    self.params_memory.remove("TrafficLightContext")
     serv = self.carrot_serv
     serv.navi_highway_stamp = None
     serv.navigation_packet_stamp = None
