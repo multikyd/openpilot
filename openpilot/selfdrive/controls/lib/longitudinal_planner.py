@@ -16,6 +16,7 @@ from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.params import Params
+from openpilot.selfdrive.controls.lib.bump_brake_entry import BumpBrakeEntry
 from openpilot.selfdrive.controls.lib.cutin_anticipation import CutInAnticipation
 from openpilot.selfdrive.controls.lib.lead_gap_reserve import LeadGapReserve, NormalStopGap, apply_lead_gap_cap, brake_light_accel_cap
 from openpilot.selfdrive.controls.lib.turn_exit_recovery import TurnExitRecovery
@@ -103,6 +104,8 @@ class LongitudinalPlanner:
     self.a_desired = init_a
     self.v_desired_filter = FirstOrderFilter(init_v, 2.0, self.dt)
     self.prev_accel_clip = [ACCEL_MIN, ACCEL_MAX]
+    self.bump_brake_entry = BumpBrakeEntry()
+    self._bump_entry_limited = False
     self.output_a_target = 0.0
     self.output_v_target_now = 0.0
     self.output_j_target_now = 0.0
@@ -406,6 +409,33 @@ class LongitudinalPlanner:
     fresh = all(0. <= now-sm.logMonoTime[k]*1e-9 <= age for k, age in
                 (('carState', .1), ('radarState', .2), ('modelV2', .2)))
     cs = sm['carState']
+    nav = sm['carrotMan']
+    bump_active = nav.desiredSource == 'bump'
+    before_bump_entry = output_a_target
+    output_a_target = self.bump_brake_entry.update(
+      now, nav.bumpDistance, min(nav.bumpTarget, nav.desiredSpeed)*CV.KPH_TO_MS,
+      cs.vEgo, output_a_target, self.output_a_target, cs.aEgo,
+      active=bump_active,
+      enabled=(self.CP.openpilotLongitudinalControl and self.mpc.mode == 'acc' and
+               self.mpc.source == log.LongitudinalPlan.LongitudinalPlanSource.cruise and not reset_state and not force_slow_decel and
+               not self.output_should_stop and not self.fcw and fresh and
+               not (cs.gasPressed or cs.brakePressed) and
+               not (sm['radarState'].leadOne.present or sm['radarState'].leadTwo.present) and
+               sm.all_checks(['carState', 'radarState', 'modelV2', 'carrotMan', 'carControl']) and
+               sm['carControl'].longActive and 0. <= now-sm.logMonoTime['carrotMan']*1e-9 <= .3),
+      max_decel=-accel_limits_turns[0])
+    output_j_target = self.j_desired_trajectory[0]
+    if output_a_target > before_bump_entry+1e-6:
+      # Keep the PID speed reference consistent with the softened acceleration.
+      output_v_target_now = max(output_v_target_now, max(0., cs.vEgo+min(0., output_a_target)*self.dt))
+      output_j_target = (output_a_target-self.output_a_target)/self.dt
+    bump_entry_limited = output_a_target > before_bump_entry+1e-6
+    if bump_entry_limited != self._bump_entry_limited:
+      cloudlog.event('bump_brake_entry', active=bump_entry_limited, distance=int(nav.bumpDistance),
+                     speed=float(cs.vEgo), requested_accel=float(before_bump_entry),
+                     applied_accel=float(output_a_target))
+      self._bump_entry_limited = bump_entry_limited
+    # Lead-gap, stopping and brake-light caps below always take priority.
     gap_cap = self.lead_gap_reserve.update(
       sm['radarState'].leadOne, cs.vEgo, self.mpc.t_follow, carrot.stop_distance,
       sm.logMonoTime['radarState']*1e-9, now,
@@ -418,7 +448,7 @@ class LongitudinalPlanner:
       previous_accel=self.output_a_target, plan_dt=self.dt)
     before_gap_a = output_a_target
     output_a_target, output_v_target_now, output_j_target = apply_lead_gap_cap(
-      output_a_target, output_v_target_now, self.j_desired_trajectory[0], gap_cap,
+      output_a_target, output_v_target_now, output_j_target, gap_cap,
       cs.vEgo, action_t, self.output_a_target, self.dt)
     # Keep the command/velocity consistent even while MPC acceleration unwinds.
     self.log_follow_assistance(now, sm['radarState'].leadOne, gap_cap, before_gap_a, output_a_target)
