@@ -283,5 +283,12 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"TrafficLight", {CLEAR_ON_MANAGER_START, STRING}},
     {"TrafficLightContext", {CLEAR_ON_MANAGER_START, STRING}},
     {"KisaBookmarkTransferStatus", {CLEAR_ON_MANAGER_START | DONT_LOG, STRING}},
+    {"KisaBookmarkUploadEnabled", {PERSISTENT | DONT_LOG, BOOL, "0"}},
+    {"KisaBookmarkSftpHost", {PERSISTENT | DONT_LOG, STRING, ""}},
+    {"KisaBookmarkSftpPort", {PERSISTENT | DONT_LOG, INT, "22"}},
+    {"KisaBookmarkSftpUser", {PERSISTENT | DONT_LOG, STRING, ""}},
+    {"KisaBookmarkSftpRemoteDir", {PERSISTENT | DONT_LOG, STRING, ""}},
+    {"KisaBookmarkSftpKeyName", {PERSISTENT | DONT_LOG, STRING, ""}},
+    {"KisaBookmarkSftpRateKbps", {PERSISTENT | DONT_LOG, INT, "4096"}},
     {"LeadDangerFactor", {PERSISTENT, FLOAT, "0.75"}},
 };

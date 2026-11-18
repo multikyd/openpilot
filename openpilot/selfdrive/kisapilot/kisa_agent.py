@@ -49,6 +49,12 @@ PARAM_SCHEMA_PATH = "/data/openpilot/openpilot/selfdrive/kisapilot/param_schema.
 CMD_SCHEMA_PATH = "/data/openpilot/openpilot/selfdrive/kisapilot/cmd_schema.json"
 
 app = Flask(__name__)
+bookmark_server = None
+
+
+def protected_key_path(path, ancestors=False):
+    from openpilot.selfdrive.kisapilot.bookmark_upload_api import private_path
+    return private_path(path, ancestors)
 
 client_connected = False
 last_seen = 0.0
@@ -180,6 +186,8 @@ def get_item_details(item_path):
 @app.route('/files', methods=['GET'])
 def list_files():
     path = request.args.get('path', '/data/openpilot')
+    if protected_key_path(path):
+        return jsonify({"error": "Managed private keys are not browsable"}), 403
     
     if not os.path.isdir(path):
         return jsonify({"error": "Path is not a valid directory"}), 404
@@ -199,6 +207,8 @@ def list_files():
 def file_delete():
     data = request.get_json(silent=True) or {}
     path = data.get("path")
+    if protected_key_path(path, ancestors=True):
+        return jsonify({"error": "Managed private keys are protected"}), 403
 
     if not path or not os.path.exists(path):
         return jsonify({"error": "File or directory not found"}), 404
@@ -218,6 +228,8 @@ def file_delete():
 def file_rename():
     data = request.get_json(silent=True) or {}
     old_path = data.get("old_path")
+    if protected_key_path(old_path, ancestors=True):
+        return jsonify({"error": "Managed private keys are protected"}), 403
     new_name = data.get("new_name")
 
     if not all([old_path, new_name]) or not os.path.exists(old_path):
@@ -226,6 +238,8 @@ def file_rename():
     try:
         directory = os.path.dirname(old_path)
         new_path = os.path.join(directory, new_name)
+        if protected_key_path(new_path, ancestors=True):
+            return jsonify({"error": "Managed private keys are protected"}), 403
 
         os.rename(old_path, new_path)
         print(f"Renamed: {old_path} -> {new_path}")
@@ -237,6 +251,8 @@ def file_rename():
 @app.route("/file/explorer_download", methods=["GET"])
 def file_download():
     file_path = request.args.get("path")
+    if protected_key_path(file_path):
+        return "Private key download is disabled", 403
 
     if not file_path or not os.path.exists(file_path) or not os.path.isfile(file_path):
         return "File not found or is not a file", 404
@@ -252,7 +268,11 @@ def file_download():
 def file_copy():
     data = request.get_json(silent=True) or {}
     source_path = data.get("source_path")
+    if protected_key_path(source_path, ancestors=True):
+        return jsonify({"error": "Private key copy is disabled"}), 403
     destination_folder = data.get("destination_path")
+    if protected_key_path(destination_folder):
+        return jsonify({"error": "Managed private keys are protected"}), 403
 
     if not all([source_path, destination_folder]):
         return jsonify({"error": "Source or destination path is missing"}), 400
@@ -311,29 +331,13 @@ def list_saved_bookmarks():
 
 @app.route('/bookmarks/auto', methods=['GET'])
 def automatic_bookmark_status():
-    from openpilot.selfdrive.kisapilot.bookmark_export import auto_bookmarks
-    try:
-        onroad, recording = bookmark_recording_context()
-        return jsonify(auto_bookmarks('/data/media/0/realdata', onroad, recording=recording))
-    except FileNotFoundError as e:
-        return jsonify({"error": str(e)}), 404
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    # Legacy APKs must not download in parallel with the C4-owned server queue.
+    return jsonify({'bookmarks': [], 'transport': 'sftp', 'format': 'kisa-bookmark-auto-v1'})
 
 
 @app.route('/bookmarks/auto/status', methods=['POST'])
 def automatic_bookmark_transfer_status():
-    from openpilot.selfdrive.kisapilot.bookmark_status import sanitize_report
-    if request.content_length is None or request.content_length > 2048:
-        return jsonify({"error": "Invalid status size"}), 400
-    try:
-        report = sanitize_report(request.get_json(silent=True), time.monotonic())
-        Params('/dev/shm/params').put('KisaBookmarkTransferStatus', json.dumps(report))
-        return jsonify({"ok": True})
-    except (ValueError, TypeError) as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    return jsonify({"ok": True, "ignored": "server-owned transfer status"})
 
 
 @app.route('/bookmarks/export', methods=['POST'])
@@ -1546,10 +1550,19 @@ def udp_broadcast_loop():
 # Main
 # =========================
 def main():
+    global bookmark_server
+    if params is not None:
+        from openpilot.selfdrive.kisapilot.bookmark_upload_api import UploadApi
+        bookmark_server = UploadApi(app, params, Params('/dev/shm/params'))
+        bookmark_server.start()
     t = threading.Thread(target=udp_broadcast_loop, daemon=True)
     t.start()
 
-    app.run(host="0.0.0.0", port=HTTP_PORT, threaded=True)
+    try:
+        app.run(host="0.0.0.0", port=HTTP_PORT, threaded=True)
+    finally:
+        if bookmark_server is not None:
+            bookmark_server.stop()
 
 
 if __name__ == "__main__":

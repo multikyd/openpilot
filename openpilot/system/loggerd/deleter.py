@@ -54,9 +54,13 @@ def deleter_step() -> tuple[bool, str | None]:
 
   dirs = listdir_by_creation(Paths.log_root())
   preserved_dirs = get_preserved_segments(dirs)
+  from openpilot.selfdrive.kisapilot.bookmark_upload import pending_segments
+  upload_pending = pending_segments(Paths.log_root())
 
   # remove the earliest directory we can
   for delete_dir in sorted(dirs, key=lambda d: (d in DELETE_LAST, d in preserved_dirs)):
+    if delete_dir == 'bookmark_uploads' or delete_dir in upload_pending:
+      continue
     delete_path = os.path.join(Paths.log_root(), delete_dir)
 
     if any(name.endswith(".lock") for name in os.listdir(delete_path)):
