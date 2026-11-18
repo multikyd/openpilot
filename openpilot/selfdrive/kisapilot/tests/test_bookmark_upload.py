@@ -189,4 +189,18 @@ class TestSftpContract(unittest.TestCase):
       self.assertEqual(status_text(dict(state=state,target='server',pending=2,ts=10.),10.)[0],expected)
 
 
+
+class TestPasswordTransport(unittest.TestCase):
+  def test_password_batchmode_precedes_batch_flag_and_secret_not_in_command(self):
+    from openpilot.selfdrive.kisapilot.bookmark_sftp import read_config,password_path
+    with tempfile.TemporaryDirectory() as directory:
+      keys=Path(directory);(keys/'known_hosts').write_text('trusted')
+      config=read_config(Params());config.update(auth_mode='password',key_name='')
+      password_path(config,keys).write_text('synthetic-secret')
+      with patch('openpilot.selfdrive.kisapilot.bookmark_sftp.shutil.which',side_effect=lambda name:name):
+        args=SftpClient(config,keys).command()
+      self.assertLess(args.index('-oBatchMode=no'),args.index('-b'))
+      self.assertNotIn('synthetic-secret',' '.join(args))
+      self.assertNotIn('-i',args)
+
 if __name__=='__main__':unittest.main()

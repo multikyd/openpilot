@@ -14,7 +14,8 @@ import time
 KEY_DIR = Path('/data/params/kisa_sftp')
 FIELDS = {'host': 'KisaBookmarkSftpHost', 'port': 'KisaBookmarkSftpPort',
           'user': 'KisaBookmarkSftpUser', 'remote_dir': 'KisaBookmarkSftpRemoteDir',
-          'key_name': 'KisaBookmarkSftpKeyName', 'rate_kbps': 'KisaBookmarkSftpRateKbps'}
+          'key_name': 'KisaBookmarkSftpKeyName', 'rate_kbps': 'KisaBookmarkSftpRateKbps',
+          'auth_mode': 'KisaBookmarkSftpAuthMode'}
 
 
 class TransferError(Exception):
@@ -51,17 +52,20 @@ def read_config(params):
   for name, default in (('port', 22), ('rate_kbps', 4096)):
     try: config[name] = int(config[name] or default)
     except ValueError: config[name] = default
+  config['auth_mode'] = config['auth_mode'] or 'key'
   config['enabled'] = params.get_bool('KisaBookmarkUploadEnabled')
   return config
 
 
 def validate_config(config, complete=True):
   result = {name: config.get(name, '') for name in FIELDS}
+  result['auth_mode'] = result['auth_mode'] or 'key'
+  if result['auth_mode'] not in ('key', 'password'):raise TransferError('INVALID_AUTH_MODE')
   for name in ('host', 'user', 'remote_dir', 'key_name'):
     value = result[name]
     if not isinstance(value, str) or len(value) > 512 or any(ord(c) < 32 for c in value):
       raise TransferError('INVALID_'+name.upper())
-    if complete and not value:
+    if complete and not value and (name != 'key_name' or result['auth_mode'] == 'key'):
       raise TransferError('MISSING_'+name.upper())
   if result['host'] and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9.:-]*', result['host']):
     raise TransferError('INVALID_HOST')
@@ -85,6 +89,14 @@ def validate_config(config, complete=True):
   return result
 
 
+def save_target(params):
+  # Preserve an already configured server uploader across the initial migration.
+  if params.get_bool('KisaBookmarkUploadEnabled'):
+    return 'server'
+  value=text(params.get('KisaBookmarkSaveTarget'))
+  return value if value in ('phone','server') else 'phone'
+
+
 def destination_id(config):
   return hashlib.sha256(json.dumps([config[k] for k in ('host', 'port', 'user', 'remote_dir')]).encode()).hexdigest()[:20]
 
@@ -102,6 +114,20 @@ def error_code(stderr):
   return 'SFTP_FAILED'
 
 
+def password_path(config, directory=KEY_DIR):
+  identity = hashlib.sha256(json.dumps([config[k] for k in ('host','port','user')]).encode()).hexdigest()[:24]
+  return Path(directory)/('password-'+identity)
+
+
+ASKPASS = """#!/usr/bin/env python3
+import os
+from pathlib import Path
+path = Path(os.environ['KISA_SFTP_PASSWORD_FILE'])
+if path.is_symlink():raise SystemExit(1)
+print(path.read_text(encoding='utf8'), end='')
+"""
+
+
 class SftpClient:
   def __init__(self, config, key_dir=KEY_DIR, cancel=None, run=None):
     self.config = validate_config(config)
@@ -111,17 +137,26 @@ class SftpClient:
 
   def command(self):
     c = self.config
-    key, hosts = self.key_dir/c['key_name'], self.key_dir/'known_hosts'
-    if not key.is_file() or key.is_symlink(): raise TransferError('KEY_MISSING')
+    hosts = self.key_dir/'known_hosts'
     if not hosts.is_file() or hosts.is_symlink(): raise TransferError('HOST_KEY_REQUIRED')
     binary = shutil.which('sftp')
     if not binary: raise TransferError('SFTP_CLIENT_MISSING')
     host = '['+c['host']+']' if ':' in c['host'] else c['host']
-    command = [binary, '-F', os.devnull, '-b', '-', '-f', '-P', str(c['port']), '-l', str(c['rate_kbps']),
-               '-i', str(key), '-oBatchMode=yes', '-oIdentitiesOnly=yes', '-oPasswordAuthentication=no',
-               '-oKbdInteractiveAuthentication=no', '-oStrictHostKeyChecking=yes',
-               '-oUserKnownHostsFile='+str(hosts), '-oConnectTimeout=12',
-               '-oServerAliveInterval=10', '-oServerAliveCountMax=3', c['user']+'@'+host]
+    command = [binary, '-F', os.devnull, '-oBatchMode='+('no' if c['auth_mode']=='password' else 'yes'), '-b', '-', '-f', '-P', str(c['port']), '-l', str(c['rate_kbps']),
+               '-oStrictHostKeyChecking=yes', '-oUserKnownHostsFile='+str(hosts),
+               '-oConnectTimeout=12', '-oServerAliveInterval=10', '-oServerAliveCountMax=3']
+    if c['auth_mode'] == 'key':
+      key = self.key_dir/c['key_name']
+      if not key.is_file() or key.is_symlink():raise TransferError('KEY_MISSING')
+      command += ['-i', str(key), '-oBatchMode=yes', '-oIdentitiesOnly=yes',
+                  '-oPasswordAuthentication=no', '-oKbdInteractiveAuthentication=no']
+    else:
+      password = password_path(c, self.key_dir)
+      if not password.is_file() or password.is_symlink():raise TransferError('PASSWORD_REQUIRED')
+      command += ['-oBatchMode=no', '-oNumberOfPasswordPrompts=1', '-oPubkeyAuthentication=no',
+                  '-oPreferredAuthentications=password', '-oPasswordAuthentication=yes',
+                  '-oKbdInteractiveAuthentication=no']
+    command += [c['user']+'@'+host]
     nice = shutil.which('nice') if os.name != 'nt' else None
     return ([nice, '-n', '15'] if nice else [])+command
 
@@ -130,6 +165,12 @@ class SftpClient:
     if self.runner:
       return self.runner(self.command(), payload, timeout)
     env=dict(os.environ, LC_ALL='C')
+    if self.config['auth_mode'] == 'password':
+      helper = self.key_dir/'transport.askpass'
+      atomic_write(helper, ASKPASS.encode('utf8'))
+      os.chmod(helper, 0o700)
+      env.update(SSH_ASKPASS=str(helper), SSH_ASKPASS_REQUIRE='force', DISPLAY='kisa:0',
+                 KISA_SFTP_PASSWORD_FILE=str(password_path(self.config, self.key_dir)))
     process=subprocess.Popen(self.command(), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                              stderr=subprocess.PIPE, text=True, encoding='utf8', errors='replace', env=env)
     start=time.monotonic()
@@ -171,12 +212,15 @@ class SftpClient:
     if partial is not None and partial>size: raise TransferError('REMOTE_CONFLICT')
     # reput resumes this immutable, content-addressed ZIP. rename executes only
     # after reput succeeds; a power loss never exposes a partial final ZIP.
-    code, _, err=self.batch(['-@mkdir '+quote(self.config['remote_dir']),
-                            '@reput '+quote(local.as_posix())+' '+quote(final+'.part'),
+    code, _, err=self.batch(self.prepare_directory()+['@reput '+quote(local.as_posix())+' '+quote(final+'.part'),
                             '@rename '+quote(final+'.part')+' '+quote(final)])
     if code: raise TransferError(error_code(err))
     if self.stat(final) != size: raise TransferError('REMOTE_SIZE')
     return 'saved'
+
+  def prepare_directory(self):
+    parts = PurePosixPath(self.config['remote_dir']).parts[1:]
+    return ['-@mkdir '+quote('/'+'/'.join(parts[:i])) for i in range(1,len(parts)+1)]
 
   def test_connection(self):
     # Actually test write permission without writing log/video data.
@@ -185,8 +229,7 @@ class SftpClient:
     fd, name=tempfile.mkstemp()
     try:
       with os.fdopen(fd,'wb') as f: f.write(b'kisa-sftp-test\n')
-      code, _, err=self.batch(['-@mkdir '+quote(self.config['remote_dir']),
-                              '@cd '+quote(self.config['remote_dir']),
+      code, _, err=self.batch(self.prepare_directory()+['@cd '+quote(self.config['remote_dir']),
                               '@put '+quote(Path(name).as_posix())+' '+quote(probe), '@rm '+quote(probe)], 30)
       if code: raise TransferError(error_code(err))
     finally:

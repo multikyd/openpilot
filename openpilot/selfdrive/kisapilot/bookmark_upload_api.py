@@ -6,7 +6,7 @@ import time
 
 from flask import jsonify, request
 
-from openpilot.selfdrive.kisapilot.bookmark_sftp import FIELDS, KEY_DIR, SftpClient, TransferError, read_config, validate_config
+from openpilot.selfdrive.kisapilot.bookmark_sftp import FIELDS, KEY_DIR, SftpClient, TransferError, read_config, validate_config, password_path, save_target, destination_id
 from openpilot.selfdrive.kisapilot.bookmark_upload import BookmarkUploader
 from openpilot.selfdrive.kisapilot.bookmark_upload_keys import UploadKeys
 
@@ -27,7 +27,7 @@ class UploadApi:
     self.test_result={'state':'idle'}
     self.test_lock=threading.Lock()
     def publish(report):
-      if shared_params is not None:
+      if shared_params is not None and save_target(params)=='server':
         shared_params.put('KisaBookmarkTransferStatus',json.dumps(dict(report,ts=time.monotonic())))
     self.worker=BookmarkUploader(root,params,publish,key_dir=key_dir)
     def guarded(function):
@@ -41,7 +41,10 @@ class UploadApi:
     @app.route('/bookmarks/server/config',methods=['GET','POST'])
     @guarded
     def server_config():
-      if request.method=='GET':return jsonify(read_config(params))
+      if request.method=='GET':
+        config=read_config(params)
+        return jsonify(dict(config,save_target=save_target(params),password_configured=password_path(config,self.keys.directory).is_file(),
+                            auth_modes=['key','password']))
       if request.content_length is None or request.content_length>8192:raise TransferError('INVALID_CONFIG')
       body=request.get_json(silent=True)
       if not isinstance(body,dict):raise TransferError('INVALID_CONFIG')
@@ -49,13 +52,34 @@ class UploadApi:
       config=validate_config(body,complete=bool(body.get('enabled')))
       if config['enabled']:
         names={key['name'] for key in self.keys.inventory()}
-        if config['key_name'] not in names:raise TransferError('KEY_MISSING')
+        if config['auth_mode']=='key' and config['key_name'] not in names:raise TransferError('KEY_MISSING')
+        if config['auth_mode']=='password' and not password_path(config,self.keys.directory).is_file():
+          raise TransferError('PASSWORD_REQUIRED')
         if not (self.keys.directory/'known_hosts').is_file():raise TransferError('HOST_KEY_REQUIRED')
       # Disable before updating fields, so no worker can use a mixed destination.
       params.put_bool('KisaBookmarkUploadEnabled',False,block=True)
       for field,key in FIELDS.items():params.put(key,config[field],block=True)
+      if config['enabled']:params.put('KisaBookmarkSaveTarget','server',block=True)
       params.put_bool('KisaBookmarkUploadEnabled',config['enabled'],block=True)
       return jsonify({'ok':True})
+
+    @app.route('/bookmarks/server/target',methods=['POST'])
+    @guarded
+    def server_target():
+      body=request.get_json(silent=True) or {}
+      target=body.get('target')
+      if target not in ('phone','server'):raise TransferError('INVALID_SAVE_TARGET')
+      # Cancel the in-flight server transfer, retaining its immutable ZIP and retry state.
+      params.put_bool('KisaBookmarkUploadEnabled',False,block=True)
+      self.worker.cancel.set()
+      params.put('KisaBookmarkSaveTarget',target,block=True)
+      deadline=time.monotonic()+3.
+      while self.worker.summary()['uploading'] and time.monotonic()<deadline:time.sleep(.05)
+      if self.worker.summary()['uploading']:raise TransferError('SWITCH_BUSY')
+      with self.worker.lock:
+        pending=sorted({j['bookmark'] for j in self.worker.state['jobs'].values()
+                        if j['state']!='done' and j['destination']==destination_id(read_config(params))})
+      return jsonify({'ok':True,'save_target':target,'pending_bookmarks':pending if target=='phone' else []})
 
     @app.route('/bookmarks/server/status',methods=['GET'])
     @guarded
@@ -68,13 +92,24 @@ class UploadApi:
 
     @app.route('/bookmarks/server/key-upload/public',methods=['GET'])
     @guarded
-    def key_upload_public():return jsonify(self.keys.public_key())
+    def key_upload_public():
+      purpose=request.args.get('purpose','key')
+      if purpose not in ('key','password'):raise TransferError('INVALID_AUTH_MODE')
+      binding=password_path(read_config(params),self.keys.directory).name if purpose=='password' else ''
+      return jsonify(self.keys.public_key(purpose,binding))
 
     @app.route('/bookmarks/server/key-upload',methods=['POST'])
     @guarded
     def key_upload():
       if request.content_length is None or request.content_length>65536:raise TransferError('INVALID_KEY_UPLOAD')
       return jsonify(self.keys.receive(request.get_json(silent=True)))
+
+    @app.route('/bookmarks/server/password',methods=['POST'])
+    @guarded
+    def server_password():
+      if request.content_length is None or request.content_length>65536:raise TransferError('INVALID_KEY_UPLOAD')
+      if self.worker.summary()['uploading']:raise TransferError('TRANSFER_BUSY')
+      return jsonify(self.keys.receive_password(request.get_json(silent=True),read_config(params)))
 
     @app.route('/bookmarks/server/host-key',methods=['POST'])
     @guarded

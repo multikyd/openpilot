@@ -10,7 +10,7 @@ import subprocess
 import threading
 import time
 
-from openpilot.selfdrive.kisapilot.bookmark_sftp import KEY_DIR, TransferError, atomic_write, validate_config
+from openpilot.selfdrive.kisapilot.bookmark_sftp import KEY_DIR, TransferError, atomic_write, validate_config, password_path
 
 
 class UploadKeys:
@@ -29,12 +29,12 @@ class UploadKeys:
     self.setup()
     keys=[]
     for path in self.directory.iterdir():
-      if path.name.startswith(('transport.','known_hosts')) or path.suffix in ('.tmp','.pub') or path.is_symlink() or not path.is_file():continue
+      if path.name.startswith(('transport.','known_hosts','password-')) or path.suffix in ('.tmp','.pub') or path.is_symlink() or not path.is_file():continue
       with path.open('rb') as file:header=file.read(100)
       if b'PRIVATE KEY-----' in header:keys.append({'name':path.name})
     return sorted(keys,key=lambda item:item['name'])
 
-  def public_key(self):
+  def public_key(self, purpose="key", binding=""):
     self.setup()
     binary=shutil.which('openssl')
     if not binary:raise TransferError('KEY_CRYPTO_UNAVAILABLE')
@@ -49,21 +49,19 @@ class UploadKeys:
                             stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,timeout=10)
       if result.returncode:raise TransferError('KEY_CRYPTO_UNAVAILABLE')
       now=time.monotonic()
-      self.nonces={k:v for k,v in self.nonces.items() if v>now}
+      self.nonces={k:v for k,v in self.nonces.items() if v[0]>now}
       if len(self.nonces)>16:raise TransferError('BUSY')
       nonce=secrets.token_urlsafe(24)
-      self.nonces[nonce]=now+120
+      self.nonces[nonce]=(now+120,purpose,binding)
       return {'public_key':base64.b64encode(result.stdout).decode(), 'nonce':nonce,
               'fingerprint':'SHA256:'+base64.b64encode(hashlib.sha256(result.stdout).digest()).decode().rstrip('=')}
 
-  def receive(self, body):
+  def decrypt_upload(self, body, purpose='key', binding=''):
     if not isinstance(body,dict):raise TransferError('INVALID_KEY_UPLOAD')
     with self.lock:
-      expiry=self.nonces.pop(body.get('nonce',''),0)
-    if expiry<time.monotonic():raise TransferError('KEY_UPLOAD_EXPIRED')
-    name=body.get('name','key.pem')
-    if not isinstance(name,str) or not re.fullmatch(r'[A-Za-z0-9_. -]{1,100}',name) or name.startswith('.'):
-      raise TransferError('INVALID_KEY_NAME')
+      expiry, expected, destination=self.nonces.pop(body.get('nonce',''),(0,None,None))
+    if expiry<time.monotonic() or expected!=purpose or destination!=binding:
+      raise TransferError('KEY_UPLOAD_EXPIRED')
     chunks=body.get('chunks')
     if not isinstance(chunks,list) or not 1<=len(chunks)<=90:raise TransferError('INVALID_KEY_UPLOAD')
     binary=shutil.which('openssl')
@@ -79,7 +77,19 @@ class UploadKeys:
               input=cipher,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,timeout=10)
         if result.returncode:raise TransferError('INVALID_KEY_UPLOAD')
         plain.extend(result.stdout)
-      if len(plain)>16384 or b'PRIVATE KEY-----' not in plain[:100] or b'ENCRYPTED' in plain[:200]:
+      if len(plain)>16384:raise TransferError('INVALID_KEY_UPLOAD')
+      return plain
+    except Exception:
+      plain[:]=b'\0'*len(plain)
+      raise
+
+  def receive(self, body):
+    plain=self.decrypt_upload(body)
+    try:
+      name=body.get('name','key.pem')
+      if not isinstance(name,str) or not re.fullmatch(r'[A-Za-z0-9_. -]{1,100}',name) or name.startswith('.'):
+        raise TransferError('INVALID_KEY_NAME')
+      if b'PRIVATE KEY-----' not in plain[:100] or b'ENCRYPTED' in plain[:200]:
         raise TransferError('UNSUPPORTED_KEY')
       keyname=secrets.token_hex(4)+'-'+name
       path=self.directory/keyname
@@ -94,8 +104,19 @@ class UploadKeys:
         path.unlink(missing_ok=True)
         raise TransferError('UNSUPPORTED_OR_ENCRYPTED_KEY')
       return {'name':keyname}
-    finally:
-      plain[:]=b'\0'*len(plain)
+    finally:plain[:]=b'\0'*len(plain)
+
+  def receive_password(self, body, config):
+    path=password_path(validate_config(config,complete=False),self.directory)
+    plain=self.decrypt_upload(body,'password',path.name)
+    try:
+      if not 1<=len(plain)<=1024 or any(c in plain for c in (0,10,13)):
+        raise TransferError('INVALID_PASSWORD')
+      try:plain.decode('utf8')
+      except UnicodeDecodeError:raise TransferError('INVALID_PASSWORD') from None
+      atomic_write(path,plain)
+      return {'configured':True}
+    finally:plain[:]=b'\0'*len(plain)
 
   def scan_host(self, config):
     config=validate_config(config,complete=False)

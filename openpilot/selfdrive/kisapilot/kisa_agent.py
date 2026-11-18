@@ -331,13 +331,35 @@ def list_saved_bookmarks():
 
 @app.route('/bookmarks/auto', methods=['GET'])
 def automatic_bookmark_status():
-    # Legacy APKs must not download in parallel with the C4-owned server queue.
-    return jsonify({'bookmarks': [], 'transport': 'sftp', 'format': 'kisa-bookmark-auto-v1'})
+    from openpilot.selfdrive.kisapilot.bookmark_sftp import save_target
+    if save_target(params)=='server':
+        return jsonify({'bookmarks': [], 'transport': 'sftp', 'format': 'kisa-bookmark-auto-v1'})
+    from openpilot.selfdrive.kisapilot.bookmark_export import auto_bookmarks
+    try:
+        onroad, recording = bookmark_recording_context()
+        return jsonify(auto_bookmarks('/data/media/0/realdata', onroad, recording=recording))
+    except FileNotFoundError as e:
+        return jsonify({"error": str(e)}), 404
+    except Exception:
+        return jsonify({"error": "BOOKMARK_SCAN_FAILED"}), 500
 
 
 @app.route('/bookmarks/auto/status', methods=['POST'])
 def automatic_bookmark_transfer_status():
-    return jsonify({"ok": True, "ignored": "server-owned transfer status"})
+    from openpilot.selfdrive.kisapilot.bookmark_sftp import save_target
+    if save_target(params)=='server':
+        return jsonify({"ok": True, "ignored": "server-owned transfer status"})
+    from openpilot.selfdrive.kisapilot.bookmark_status import sanitize_report
+    if request.content_length is None or request.content_length > 2048:
+        return jsonify({"error": "Invalid status size"}), 400
+    try:
+        report = sanitize_report(request.get_json(silent=True), time.monotonic())
+        Params('/dev/shm/params').put('KisaBookmarkTransferStatus', json.dumps(report))
+        return jsonify({"ok": True})
+    except (ValueError, TypeError):
+        return jsonify({"error": "INVALID_STATUS"}), 400
+    except Exception:
+        return jsonify({"error": "STATUS_WRITE_FAILED"}), 500
 
 
 @app.route('/bookmarks/export', methods=['POST'])

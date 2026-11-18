@@ -85,7 +85,8 @@ class TestUploadApi(unittest.TestCase):
     source=(Path(__file__).parents[1]/'kisa_agent.py').read_text(encoding='utf8')
     tree=ast.parse(source)
     names={'automatic_bookmark_status','automatic_bookmark_transfer_status'}
-    env=dict(app=self.app,jsonify=jsonify)
+    self.params.put_bool("KisaBookmarkUploadEnabled",True)
+    env=dict(app=self.app,jsonify=jsonify,params=self.params)
     exec(compile(ast.Module(body=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in names],type_ignores=[]),'actual_legacy_routes','exec'),env)
     self.assertEqual(self.client.get('/bookmarks/auto').json['bookmarks'],[])
     self.assertIn('ignored',self.client.post('/bookmarks/auto/status',json={'state':'saved'}).json)
@@ -106,7 +107,60 @@ class TestUploadApi(unittest.TestCase):
     self.assertEqual(app.test_client().get('/bookmarks/server/config').status_code,200)
 
 
+  def test_switch_to_phone_retains_failed_server_jobs_and_disables_upload(self):
+    from openpilot.selfdrive.kisapilot.bookmark_sftp import destination_id, read_config
+    job={'bookmark':'route--4','state':'retry','destination':destination_id(read_config(self.params))}
+    self.api.worker.state['jobs']['pending']=job.copy()
+    result=self.client.post('/bookmarks/server/target',json={'target':'phone'})
+    self.assertEqual(result.status_code,200)
+    self.assertEqual(result.json['pending_bookmarks'],['route--4'])
+    self.assertFalse(self.params.get_bool('KisaBookmarkUploadEnabled'))
+    self.assertEqual(self.api.worker.state['jobs']['pending'],job)
+    self.assertEqual(self.client.get('/bookmarks/server/config').json['save_target'],'phone')
+    self.assertTrue(self.api.worker.cancel.is_set())
+
+  def test_password_mode_needs_bound_password_but_no_private_key(self):
+    from openpilot.selfdrive.kisapilot.bookmark_sftp import password_path
+    body=self.client.get('/bookmarks/server/config').json
+    body.update(auth_mode='password',key_name='',enabled=True)
+    self.assertEqual(self.client.post('/bookmarks/server/config',json=body).json['error'],'PASSWORD_REQUIRED')
+    password_path(body,self.keys).write_text('synthetic-password')
+    (self.keys/'known_hosts').write_text('trusted')
+    self.assertEqual(self.client.post('/bookmarks/server/config',json=body).status_code,200)
+    self.assertNotIn('synthetic-password',self.client.get('/bookmarks/server/config').get_data(as_text=True))
+    self.assertTrue(self.client.get('/bookmarks/server/config').json['password_configured'])
+    body['host']='another.invalid'
+    self.assertEqual(self.client.post('/bookmarks/server/config',json=body).json['error'],'PASSWORD_REQUIRED')
+
+  def test_key_nonce_cannot_be_used_for_password(self):
+    self.api.keys.nonces['test-nonce']=(time.monotonic()+120,'key','')
+    response=self.client.post('/bookmarks/server/password',json={'nonce':'test-nonce','chunks':['unused']})
+    self.assertEqual(response.json['error'],'KEY_UPLOAD_EXPIRED')
+
+
 class TestEncryptedKeyUpload(unittest.TestCase):
+  def test_encrypted_password_is_account_bound_one_time_and_not_listed(self):
+    from cryptography.hazmat.primitives import serialization,hashes
+    from cryptography.hazmat.primitives.asymmetric import padding
+    from openpilot.selfdrive.kisapilot.bookmark_sftp import read_config,password_path
+    binary=str(Path('C:/Program Files/Git/mingw64/bin/openssl.exe')) if os.name=='nt' else shutil.which('openssl')
+    with tempfile.TemporaryDirectory() as folder:
+      manager=UploadKeys(folder);config=read_config(Params());binding=password_path(config,folder).name
+      original=shutil.which
+      with patch('openpilot.selfdrive.kisapilot.bookmark_upload_keys.shutil.which',side_effect=lambda name:binary if name=='openssl' else original(name)):
+        public=manager.public_key('password',binding)
+        key=serialization.load_der_public_key(base64.b64decode(public['public_key']))
+        secret=b'fixture-password-not-for-use'
+        cipher=key.encrypt(secret,padding.OAEP(mgf=padding.MGF1(hashes.SHA256()),algorithm=hashes.SHA256(),label=None))
+        body={'nonce':public['nonce'],'chunks':[base64.b64encode(cipher).decode()]}
+        self.assertEqual(manager.receive_password(body,config),{'configured':True})
+        self.assertEqual(password_path(config,folder).read_bytes(),secret)
+        self.assertEqual(manager.inventory(),[])
+        with self.assertRaisesRegex(TransferError,'KEY_UPLOAD_EXPIRED'):manager.receive_password(body,config)
+        public=manager.public_key('password',binding);body['nonce']=public['nonce']
+        config['user']='another'
+        with self.assertRaisesRegex(TransferError,'KEY_UPLOAD_EXPIRED'):manager.receive_password(body,config)
+
   def test_real_openssl_oaep_upload_is_one_time_and_does_not_return_private_key(self):
     binary=shutil.which('openssl')
     if not binary:

@@ -289,6 +289,8 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"KisaBookmarkSftpUser", {PERSISTENT | DONT_LOG, STRING, ""}},
     {"KisaBookmarkSftpRemoteDir", {PERSISTENT | DONT_LOG, STRING, ""}},
     {"KisaBookmarkSftpKeyName", {PERSISTENT | DONT_LOG, STRING, ""}},
+    {"KisaBookmarkSftpAuthMode", {PERSISTENT | DONT_LOG, STRING, "key"}},
+    {"KisaBookmarkSaveTarget", {PERSISTENT | DONT_LOG, STRING, "phone"}},
     {"KisaBookmarkSftpRateKbps", {PERSISTENT | DONT_LOG, INT, "4096"}},
     {"LeadDangerFactor", {PERSISTENT, FLOAT, "0.75"}},
 };

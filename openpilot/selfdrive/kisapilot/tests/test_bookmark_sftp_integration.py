@@ -109,9 +109,10 @@ class TestNativeSftp(unittest.TestCase):
       SftpClient(self.config,self.keys).test_connection()
 
   def test_real_test_creates_target_folder_and_removes_only_probe(self):
+    self.config['remote_dir']='/home/kyd/realdata'
     SftpClient(self.config,self.keys).test_connection()
-    self.assertTrue((self.remote/'incoming').is_dir())
-    self.assertEqual(list((self.remote/'incoming').iterdir()),[])
+    self.assertTrue((self.remote/'home/kyd/realdata').is_dir())
+    self.assertEqual(list((self.remote/'home/kyd/realdata').iterdir()),[])
 
 
 if __name__=='__main__':unittest.main()
