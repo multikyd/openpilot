@@ -512,6 +512,18 @@ def _make_ccnc_values(values, CS, lat_active, frame, hud_control, lane_line = Tr
     apply_one('LR_DETECT', 'LR_DETECT_DISTANCE')
     apply_one('RR_DETECT', 'RR_DETECT_DISTANCE')
 
+def ccnc_lane_color(packed, visible, departure, ready, ready_valid, frame):
+  """Keep departure/centre-line priority; mirror fresh OEM readiness as green."""
+  if departure:
+    return 4 if (frame // 50) % 2 == 0 else 1
+  if not visible:
+    return 0
+  color = 4 if packed // 10 == 2 else 2
+  if packed // 10 == 2 or packed % 10 in (3, 8):
+    return color
+  return 6 if ready_valid and ready else color
+
+
 def create_ccnc_messages(CP, packer, CAN, frame, CC, CS, hud_control, disp_angle, left_lane_warning, right_lane_warning, enable_corner_radar):
   ret = []
   md = CS.MD
@@ -627,18 +639,13 @@ def create_ccnc_messages(CP, packer, CAN, frame, CC, CS, hud_control, disp_angle
         values["LANELINE_CURVATURE"] = (min(abs(curvature), 15) + (-1 if curvature < 0 else 0)) if lat_active else 0
         values["LANELINE_CURVATURE_DIRECTION"] = 1 if curvature < 0 and lat_active else 0
 
-        # lane_color = 6 if lat_active else 2 
-        #lane_color = 2 # 6: green, 2: white, 4: yellow
-        lane_color = 2 if CS.out.leftLaneLine < 20 else 4
-        if hud_control.leftLaneDepart:
-          values["LANELINE_LEFT"] = 4 if (frame // 50) % 2 == 0 else 1
-        else:
-          values["LANELINE_LEFT"] = lane_color if hud_control.leftLaneVisible else 0
-        lane_color = 2 if CS.out.rightLaneLine < 20 else 4
-        if hud_control.rightLaneDepart:
-          values["LANELINE_RIGHT"] = 4 if (frame // 50) % 2 == 0 else 1
-        else:
-          values["LANELINE_RIGHT"] = lane_color if hud_control.rightLaneVisible else 0
+        ready_valid = bool(CS.out.oemLaneChangeStateValid)
+        values["LANELINE_LEFT"] = ccnc_lane_color(
+          CS.out.leftLaneLine, hud_control.leftLaneVisible, hud_control.leftLaneDepart,
+          CS.out.leftOemLaneChangeReady, ready_valid, frame)
+        values["LANELINE_RIGHT"] = ccnc_lane_color(
+          CS.out.rightLaneLine, hud_control.rightLaneVisible, hud_control.rightLaneDepart,
+          CS.out.rightOemLaneChangeReady, ready_valid, frame)
         #values["LANELINE_LEFT_POSITION"] = 15
         #values["LANELINE_RIGHT_POSITION"] = 15
 
