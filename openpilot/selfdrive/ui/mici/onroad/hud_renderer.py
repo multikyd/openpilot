@@ -274,6 +274,10 @@ class HudRenderer(Widget):
     connected = fresh and getattr(sm['carrotMan'], 'naviConnected', False)
     highway = connected and sm['carrotMan'].naviHighway
     badges = [("NAV", 48, connected)]
+    source = getattr(sm["carrotMan"], "naviSource", "") if connected else ""
+    source_letter = {"tmap": "T", "naver-map": "N"}.get(source)
+    if source_letter:
+      badges.append((source_letter, 28, True))
     if highway:
       badges.append(("HWay", 64, True))
     gap = 4
@@ -284,8 +288,12 @@ class HudRenderer(Widget):
       measured = measure_text_cached(self._font_bold, text, size)
       size *= min(1., (badge_width-6)/max(1., measured.x))
       width = measure_text_cached(self._font_bold, text, size).x
-      rl.draw_rectangle_rounded(rl.Rectangle(x, rect.y+HEADER_TOP, badge_width, 40), .2, 8, rl.Color(0, 0, 0, 190))
-      color = rl.Color(100, 235, 150, 255) if active else rl.Color(135, 145, 155, 255)
+      if text in ("N", "T"):
+        fill = rl.Color(0, 150, 75, 255) if text == "N" else rl.Color(40, 120, 230, 255)
+        rl.draw_circle_v(rl.Vector2(x+badge_width/2, rect.y+HEADER_TOP+20), 14, fill)
+      else:
+        rl.draw_rectangle_rounded(rl.Rectangle(x, rect.y+HEADER_TOP, badge_width, 40), .2, 8, rl.Color(0, 0, 0, 190))
+      color = rl.WHITE if text in ("N", "T") else rl.Color(100, 235, 150, 255) if active else rl.Color(135, 145, 155, 255)
       rl.draw_text_ex(self._font_bold, text, rl.Vector2(x+(badge_width-width)/2, rect.y+11), size, 0, color)
       x += badge_width + gap
 

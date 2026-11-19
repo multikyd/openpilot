@@ -1569,6 +1569,7 @@ class CarrotMan:
     self.params_memory.remove(NAVI_IMAGE_PARAM)
     self.handle_route([])
     serv = self.carrot_serv
+    serv.navi_source = source if source in ("tmap", "naver-map") else ""
     serv.navi_highway_stamp = None
     serv.navigation_packet_stamp = None
     serv.active_count = serv.active_sdi_count = 0

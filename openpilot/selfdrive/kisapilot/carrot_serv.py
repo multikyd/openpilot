@@ -1447,6 +1447,7 @@ class CarrotServ:
     msg.carrotMan.activeCarrot = self.active_carrot
     navigation_stamp = getattr(self, 'navigation_packet_stamp', None)
     msg.carrotMan.naviConnected = navigation_stamp is not None and 0. <= time.monotonic()-navigation_stamp < 3.
+    msg.carrotMan.naviSource = getattr(self, "navi_source", "") if msg.carrotMan.naviConnected else ""
     msg.carrotMan.nRoadLimitSpeed = int(self.nRoadLimitSpeed)
     msg.carrotMan.roadLimitSpeedRaw = int(self.road_limit_raw)
     limit_stamp = self.road_limit_stamp
