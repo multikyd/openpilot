@@ -226,7 +226,8 @@ class HudRenderer(Widget):
         if fresh_plan and getattr(ui_state.sm['longitudinalPlan'], 'overtakeAdvised', False):
           draw_overtake_advice(rect, self._font_bold)
       else:
-        draw_signal_panel(rect, self._font_bold, nav.signalDisplay)
+        draw_signal_panel(rect, self._font_bold, nav.signalDisplay,
+                          stopped=ui_state.sm['carState'].standstill)
     if self._can_draw_top_icons and not self.setspeed_changed:
       self._draw_car_stat(rect)
       if ui_state.bumpTarget <= 0 and ui_state.bumpLearningText:

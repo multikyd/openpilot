@@ -3,10 +3,10 @@ import math
 import pyray as rl
 from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.selfdrive.ui.mici.onroad.hud_layout import signal_box
-from openpilot.selfdrive.ui.mici.onroad.signal_presentation import signal_lamps, countdown_rows, signal_panel_visible, signal_source_label
+from openpilot.selfdrive.ui.mici.onroad.signal_presentation import signal_lamps, countdown_rows, next_green_wait, signal_panel_visible, signal_source_label
 
 
-def draw_signal_panel(rect, font, display):
+def draw_signal_panel(rect, font, display, stopped=False):
   if rect.width < 440 or not signal_panel_visible(display):
     return
   x, y, width, height = signal_box(rect.x, rect.y, rect.width)
@@ -39,6 +39,8 @@ def draw_signal_panel(rect, font, display):
   def state_color(state):
     return red if state==1 else green if state==2 else amber if state==3 else rl.WHITE
 
+  _, state, value = countdown_rows(display)[0]
+  waiting = next_green_wait(display, stopped, state, value)
   lamps=signal_lamps(display)
   for i,state in enumerate(lamps):
     cx,cy=x+21+i*36,y+height/2
@@ -54,10 +56,7 @@ def draw_signal_panel(rect, font, display):
 
   direction={'straight':'STRAIGHT','left':'LEFT','right':'RIGHT','observed':'OBS','other':'DIR ?'}.get(display.movement,'DIR ?')
   mode=display.operatingMode
-  rows=countdown_rows(display)
-  state=rows[0][1]
-  color=state_color(state) if live else amber
-  value=rows[0][2]
+  color=green if waiting else state_color(state) if live else amber
   location=getattr(display,'locationKind','')
   distance='NO RANGE' if location=='unknown' else f'{"QUEUE" if location=="queue" else "PT"} ~{display.distance:.0f}m' if location in ('stop','queue') else f'~{display.distance:.0f}m' if location=='candidate' else f'{display.distance:.0f}m'
   detail=f'{signal_source_label(source)} / {direction} / {distance}'
@@ -67,24 +66,7 @@ def draw_signal_panel(rect, font, display):
     value=f'~{round((display.estimateLow+display.estimateHigh)/2)}'
     detail=f'EST {"WAIT" if mode=="WAIT" else "RED" if display.predictionState==1 else "GREEN"} / {direction} / {distance}'
     text(f'{math.floor(display.estimateLow)}-{math.ceil(display.estimateHigh)}s',x,y+height+23,width,22,amber)
-  if live and mode not in ('OFF','FLASH') and rows[0][0]:
-    row_height=(height-10)/len(rows)
-    for i,(label,state,value) in enumerate(rows):
-      # Draw arrows as lines so the directional rows do not depend on font glyph coverage.
-      cx, cy = x+124, y+5+(i+.5)*row_height
-      if label == 'S':
-        lines = (((0,7),(0,-7)), ((0,-7),(-5,-2)), ((0,-7),(5,-2)))
-      else:
-        flip = -1 if label == 'R' else 1
-        lines = tuple(((flip*a[0],a[1]),(flip*b[0],b[1]))
-                      for a,b in (((7,0),(-7,0)),((-7,0),(-2,-5)),((-7,0),(-2,5))))
-      for a,b in lines:
-        rl.draw_line_ex(rl.Vector2(x+(cx+a[0]-x)*scale,y+(cy+a[1]-y)*scale),
-                        rl.Vector2(x+(cx+b[0]-x)*scale,y+(cy+b[1]-y)*scale),2*scale,state_color(state))
-      text(value,x+135,y+5+i*row_height,width-143,
-           min(48,row_height),state_color(state),max_height=row_height)
-  else:
-    text(value,x+113,y+5,width-121,64,color,max_height=height-10)
+  text(value,x+113,y+5,width-121,64,color,max_height=height-10)
   text(detail,x+10,y+height+4,width-20,20,amber if source=='EST' else rl.WHITE)
 
 

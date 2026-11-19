@@ -35,24 +35,19 @@ def signal_lamps(display):
 
 
 def countdown_rows(display):
-  """Navigation retains each received direction, including red wait and green remaining time."""
-  directions = (('straight', 'S'), ('left', 'L'), ('right', 'R'))
+  """Show only the route movement's received countdown."""
+  movement = 'straight' if display.movement == 'observed' else display.movement
+  if movement not in ('straight', 'left', 'right'):
+    return [('', 0, '--')]
   advance = TMAP_COUNTDOWN_ADVANCE if display.source == 'TMAP' else 0.
-  if display.source == 'TMAP':
-    rows = [(label, getattr(display, direction+'State', 0),
-             timer_text(getattr(display, direction+'Remain', 0.), advance))
-            for direction, label in directions if getattr(display, direction+'State', 0) in (1, 2, 3)]
-    return rows or [('', 0, '--')]
-  selected = 'straight' if display.movement == 'observed' else display.movement
-  if selected in ('straight', 'left', 'right'):
-    return [('', getattr(display, selected+'State', 0), timer_text(getattr(display, selected+'Remain', 0.), advance))]
-  if display.source in ('TMAP', 'VISION'):
-    rows = [(label, getattr(display, direction+'State', 0),
-             timer_text(getattr(display, direction+'Remain', 0.), advance))
-            for direction, label in directions if getattr(display, direction+'State', 0) in (1, 2, 3)]
-    if rows:
-      return rows
-  return [('', 0, '--')]
+  state = getattr(display, movement+'State', 0)
+  remain = getattr(display, movement+'Remain', 0.)
+  return [('', state, timer_text(remain, advance) if state in (1, 2, 3) else '--')]
+
+
+def next_green_wait(display, stopped, state, value):
+  return (stopped and display.source == 'TMAP' and display.movement in ('straight', 'left', 'right') and
+          display.operatingMode not in ('OFF', 'FLASH') and state == 1 and value.isdecimal())
 
 
 def signal_source_label(source):

@@ -20,7 +20,7 @@ class TestAdviceHUD(unittest.TestCase):
       valid = {'carrotMan': True, 'longitudinalPlan': plan_valid}
       alive = {'carrotMan': True, 'longitudinalPlan': True}
       recv_time = {'carrotMan': 10.-nav_age, 'longitudinalPlan': 10.-plan_age}
-    sm = SM(carrotMan=NS(naviHighway=highway, signalDisplay='signal'),
+    sm = SM(carState=NS(standstill=False), carrotMan=NS(naviHighway=highway, signalDisplay='signal'),
             longitudinalPlan=NS() if old_schema else NS(overtakeAdvised=recommended))
     tree = ast.parse((ROOT/'hud_renderer.py').read_text(encoding='utf8'))
     cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'HudRenderer')
