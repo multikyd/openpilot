@@ -148,9 +148,9 @@ function launch {
   # The boot agent can show build logs before manager.py starts.
   KISA_BOOT_AGENT_PID=""
   if [ -f /AGNOS ]; then
-    if python3 -c 'from flask import Flask' 2>/dev/null ||
-       { timeout 60s python3 -m pip install --disable-pip-version-check --retries 1 --timeout 10 flask &&
-         python3 -c 'from flask import Flask'; }; then
+    if python3 -m openpilot.selfdrive.kisapilot.agent_flask check 2>/dev/null ||
+       { timeout 60s python3 -m openpilot.selfdrive.kisapilot.agent_flask install &&
+         python3 -m openpilot.selfdrive.kisapilot.agent_flask check; }; then
       python3 "$DIR/openpilot/selfdrive/kisapilot/kisa_agent.py" &
       KISA_BOOT_AGENT_PID=$!
     else

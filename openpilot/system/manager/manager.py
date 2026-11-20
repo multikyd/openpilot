@@ -27,6 +27,7 @@ import importlib.util
 class KisaAgentFlaskSetup:
   RETRY_SECONDS = 30
   INSTALL_TIMEOUT_SECONDS = 60
+  COMMAND = [sys.executable, "-m", "openpilot.selfdrive.kisapilot.agent_flask"]
 
   def __init__(self):
     self.installer: subprocess.Popen | None = None
@@ -47,8 +48,7 @@ class KisaAgentFlaskSetup:
       return False
 
     try:
-      verify = subprocess.run([sys.executable, "-c", "from flask import Flask"],
-                              stderr=subprocess.DEVNULL, timeout=3)
+      verify = subprocess.run([*self.COMMAND, "check"], stderr=subprocess.DEVNULL, timeout=3)
       self.ready = verify.returncode == 0
     except (OSError, subprocess.SubprocessError):
       pass
@@ -61,8 +61,7 @@ class KisaAgentFlaskSetup:
       return False
 
     try:
-      self.installer = subprocess.Popen([sys.executable, "-m", "pip", "install", "--disable-pip-version-check",
-                                         "--retries", "1", "--timeout", "10", "flask"])
+      self.installer = subprocess.Popen([*self.COMMAND, "install"])
       self.next_action_at = now + self.INSTALL_TIMEOUT_SECONDS
     except OSError as e:
       cloudlog.warning(f"KisaAgent Flask installer did not start: {e}")

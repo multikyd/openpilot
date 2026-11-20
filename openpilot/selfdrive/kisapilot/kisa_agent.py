@@ -23,11 +23,14 @@ import ipaddress
 import requests
 import shutil
 
+from openpilot.selfdrive.kisapilot.agent_flask import add_package_path
+
 import logging
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
 
-from flask import Flask, request, jsonify, send_from_directory, Response, render_template_string, send_file
+add_package_path()
+from flask import Flask, request, jsonify, send_from_directory, Response, render_template_string, send_file  # noqa: E402
 
 try:
     from openpilot.common.params import Params, ParamKeyType
