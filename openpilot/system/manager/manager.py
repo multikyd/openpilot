@@ -10,7 +10,7 @@ import subprocess
 from openpilot.cereal import log
 import openpilot.cereal.messaging as messaging
 from openpilot.common.utils import atomic_write
-from openpilot.common.params import Params, ParamKeyFlag, ParamKeyType
+from openpilot.common.params import Params, ParamKeyFlag
 from openpilot.common.text_window import TextWindow
 from openpilot.common.hardware import HARDWARE
 from openpilot.system.manager.helpers import unblock_stdout, save_bootlog
@@ -20,7 +20,6 @@ from openpilot.system.athena.registration import register, UNREGISTERED_DONGLE_I
 from openpilot.common.swaglog import cloudlog, add_file_handler
 from openpilot.common.version import get_build_metadata
 from openpilot.common.hardware.hw import Paths
-from openpilot.selfdrive.kisapilot.param_migration import RENAMED_PARAMS, migrate_parameters
 
 import importlib.util
 
@@ -30,7 +29,6 @@ def manager_init() -> None:
   build_metadata = get_build_metadata()
 
   params = Params()
-  migrate_parameters(params)
   params.clear_all(ParamKeyFlag.CLEAR_ON_MANAGER_START)
   params.clear_all(ParamKeyFlag.CLEAR_ON_ONROAD_TRANSITION)
   params.clear_all(ParamKeyFlag.CLEAR_ON_OFFROAD_TRANSITION)
@@ -46,29 +44,6 @@ def manager_init() -> None:
     default_value = params.get_default_value(k)
     if default_value is not None and params.get(k) is None:
       params.put(k, default_value, block=True)
-
-  # kisapilot user params
-  if os.path.isfile('/data/User_Params.txt'):
-    with open("/data/User_Params.txt", "r") as f:
-      for line in f:
-        try:
-          key, val_str = line.strip().split(":")
-          key = RENAMED_PARAMS.get(key, key)
-          param_type = params.get_type(key)
-          if param_type == ParamKeyType.BOOL:
-            params.put_bool(key, True if val_str == "1" else False, block=True)
-          else:
-            if param_type == ParamKeyType.INT:
-              val = int(val_str)
-            elif param_type == ParamKeyType.FLOAT:
-              val = float(val_str)
-            else:
-              val = val_str
-            params.put(key, val, block=True)
-        except Exception as e:
-          print(f"Failed to put param '{line.strip()}': {e}")
-
-      os.remove('/data/User_Params.txt')
 
   # Create folders needed for msgq
   try:
@@ -116,10 +91,16 @@ def manager_init() -> None:
   if os.path.isfile('/data/log/error.txt'):
     os.remove('/data/log/error.txt')
 
-  if importlib.util.find_spec("flask") is None:
-    print("flask Installing...")
-    os.system("pip install flask")
-    print("flask Installed!")
+  if managed_processes["kisa_agent"].enabled:
+    flask_check = [sys.executable, "-c", "from flask import Flask"]
+    try:
+      if subprocess.run(flask_check, stderr=subprocess.DEVNULL).returncode != 0:
+        subprocess.run([sys.executable, "-m", "pip", "install", "--disable-pip-version-check",
+                        "--retries", "1", "--timeout", "10", "flask"], check=True, timeout=60)
+        subprocess.run(flask_check, check=True)
+    except (OSError, subprocess.SubprocessError) as e:
+      cloudlog.warning(f"KisaAgent disabled for this boot: Flask is unavailable ({e})")
+      managed_processes["kisa_agent"].enabled = False
   if importlib.util.find_spec("shapely") is None:
     print("shapely Installing...")
     os.system("pip install shapely")

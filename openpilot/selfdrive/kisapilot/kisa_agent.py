@@ -28,7 +28,6 @@ log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
 
 from flask import Flask, request, jsonify, send_from_directory, Response, render_template_string, send_file
-from openpilot.selfdrive.kisapilot.param_migration import RENAMED_PARAMS
 
 try:
     from openpilot.common.params import Params, ParamKeyType
@@ -94,7 +93,7 @@ def video_to_img(input_path, output_path):
                 "ffmpeg",
                 "-skip_frame", "nokey",
                 "-i", input_path,
-                "-vf", f"select=gte(n\,{frame_to_extract}),scale=640:-1",
+                "-vf", rf"select=gte(n\,{frame_to_extract}),scale=640:-1",
                 "-frames:v", "1",
                 "-vsync", "0",
                 "-an", "-sn", "-dn",
@@ -1107,9 +1106,6 @@ def param_set():
 
     if not isinstance(key, str) or not key:
         return jsonify({"error": "missing param"}), 400
-
-    if data.get("restoreBackup") is True:
-        key = RENAMED_PARAMS.get(key, key)
 
     if key == "KisaRebootRequest":
         return jsonify({"error": "Reserved reboot coordination parameter"}), 400

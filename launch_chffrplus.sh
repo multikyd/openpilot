@@ -145,9 +145,18 @@ function launch {
   # write tmux scrollback to a file
   tmux capture-pane -pq -S-1000 > /tmp/launch_log
 
-    # kisa agent start
-    python3 /data/openpilot/openpilot/selfdrive/kisapilot/kisa_agent.py &
-    KISA_BOOT_AGENT_PID=$!
+  # The boot agent can show build logs before manager.py starts.
+  KISA_BOOT_AGENT_PID=""
+  if [ -f /AGNOS ]; then
+    if python3 -c 'from flask import Flask' 2>/dev/null ||
+       { timeout 60s python3 -m pip install --disable-pip-version-check --retries 1 --timeout 10 flask &&
+         python3 -c 'from flask import Flask'; }; then
+      python3 "$DIR/openpilot/selfdrive/kisapilot/kisa_agent.py" &
+      KISA_BOOT_AGENT_PID=$!
+    else
+      echo "Flask unavailable; manager will retry KisaAgent setup after the build"
+    fi
+  fi
 
   # start manager
   cd openpilot/system/manager
