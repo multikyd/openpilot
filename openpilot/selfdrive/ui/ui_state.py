@@ -247,8 +247,6 @@ class UIState:
       for callback in self._on_body_changed_callbacks:
         callback()
 
-    # Update recording audio state
-    self.recording_audio = self._record_audio_enabled and self.started
 
     # Kisa states update
     if self.sm.updated["controlsState"]:
