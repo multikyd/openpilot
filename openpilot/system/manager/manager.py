@@ -23,6 +23,60 @@ from openpilot.common.hardware.hw import Paths
 
 import importlib.util
 
+
+class KisaAgentFlaskSetup:
+  RETRY_SECONDS = 30
+  INSTALL_TIMEOUT_SECONDS = 60
+
+  def __init__(self):
+    self.installer: subprocess.Popen | None = None
+    self.next_action_at = 0.0
+    self.ready = False
+
+  def update(self) -> bool:
+    if self.ready:
+      return True
+
+    now = time.monotonic()
+    install_finished = self.installer is not None
+    if self.installer is not None:
+      if self.installer.poll() is None and now < self.next_action_at:
+        return False
+      self.close()
+    elif now < self.next_action_at:
+      return False
+
+    try:
+      verify = subprocess.run([sys.executable, "-c", "from flask import Flask"],
+                              stderr=subprocess.DEVNULL, timeout=3)
+      self.ready = verify.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+      pass
+    if self.ready:
+      return True
+
+    if install_finished:
+      cloudlog.warning(f"KisaAgent Flask unavailable after install attempt; retrying in {self.RETRY_SECONDS}s")
+      self.next_action_at = now + self.RETRY_SECONDS
+      return False
+
+    try:
+      self.installer = subprocess.Popen([sys.executable, "-m", "pip", "install", "--disable-pip-version-check",
+                                         "--retries", "1", "--timeout", "10", "flask"])
+      self.next_action_at = now + self.INSTALL_TIMEOUT_SECONDS
+    except OSError as e:
+      cloudlog.warning(f"KisaAgent Flask installer did not start: {e}")
+      self.next_action_at = now + self.RETRY_SECONDS
+    return False
+
+  def close(self) -> None:
+    if self.installer is not None:
+      if self.installer.poll() is None:
+        self.installer.kill()
+      self.installer.wait()
+      self.installer = None
+
+
 def manager_init() -> None:
   #save_bootlog()
 
@@ -91,16 +145,6 @@ def manager_init() -> None:
   if os.path.isfile('/data/log/error.txt'):
     os.remove('/data/log/error.txt')
 
-  if managed_processes["kisa_agent"].enabled:
-    flask_check = [sys.executable, "-c", "from flask import Flask"]
-    try:
-      if subprocess.run(flask_check, stderr=subprocess.DEVNULL).returncode != 0:
-        subprocess.run([sys.executable, "-m", "pip", "install", "--disable-pip-version-check",
-                        "--retries", "1", "--timeout", "10", "flask"], check=True, timeout=60)
-        subprocess.run(flask_check, check=True)
-    except (OSError, subprocess.SubprocessError) as e:
-      cloudlog.warning(f"KisaAgent disabled for this boot: Flask is unavailable ({e})")
-      managed_processes["kisa_agent"].enabled = False
   if importlib.util.find_spec("shapely") is None:
     print("shapely Installing...")
     os.system("pip install shapely")
@@ -123,7 +167,7 @@ def manager_cleanup() -> None:
   cloudlog.info("everything is dead")
 
 
-def manager_thread() -> None:
+def manager_thread(kisa_flask: KisaAgentFlaskSetup) -> None:
   cloudlog.bind(daemon="manager")
   cloudlog.info("manager start")
   cloudlog.info({"environ": os.environ})
@@ -136,12 +180,15 @@ def manager_thread() -> None:
   if os.getenv("NOBOARD") is not None:
     ignore.append("pandad")
   ignore += [x for x in os.getenv("BLOCK", "").split(",") if len(x) > 0]
+  needs_kisa_flask = managed_processes["kisa_agent"].enabled and "kisa_agent" not in ignore
+  waiting_for_flask = [*ignore, "kisa_agent"]
 
   sm = messaging.SubMaster(['deviceState', 'carParams', 'pandaStates'], poll='deviceState')
   pm = messaging.PubMaster(['managerState'])
 
   params.put_bool("IsOffroad", True, block=True)
-  ensure_running(managed_processes.values(), False, params=params, CP=sm['carParams'], not_run=ignore)
+  not_run = waiting_for_flask if needs_kisa_flask and not kisa_flask.update() else ignore
+  ensure_running(managed_processes.values(), False, params=params, CP=sm['carParams'], not_run=not_run)
 
   started_prev = False
   ignition_prev = False
@@ -169,7 +216,8 @@ def manager_thread() -> None:
 
     from openpilot.selfdrive.kisapilot.auto_crash_capture import capture_service
     capture_service().set_onroad(started or not sm.all_checks(['deviceState']))
-    ensure_running(managed_processes.values(), started, params=params, CP=sm['carParams'], not_run=ignore)
+    not_run = waiting_for_flask if needs_kisa_flask and not kisa_flask.update() else ignore
+    ensure_running(managed_processes.values(), started, params=params, CP=sm['carParams'], not_run=not_run)
 
     running = ' '.join("{}{}\u001b[0m".format("\u001b[32m" if p.proc.is_alive() else "\u001b[31m", p.name)
                        for p in managed_processes.values() if p.proc)
@@ -218,12 +266,14 @@ def main() -> None:
   # SystemExit on sigterm
   signal.signal(signal.SIGTERM, lambda signum, frame: sys.exit(1))
 
+  kisa_flask = KisaAgentFlaskSetup()
   try:
-    manager_thread()
+    manager_thread(kisa_flask)
   except Exception:
     traceback.print_exc()
     cloudlog.exception("crash")
   finally:
+    kisa_flask.close()
     from openpilot.selfdrive.kisapilot.auto_crash_capture import capture_service
     capture_service().close()
     manager_cleanup()
