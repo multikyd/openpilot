@@ -32,7 +32,7 @@ class PanelTest(unittest.TestCase):
   @classmethod
   def setUpClass(cls):
     ray=MagicMock();ray.Rectangle=lambda x,y,w,h:SimpleNamespace(x=x,y=y,width=w,height=h);ray.Vector2=lambda x,y:SimpleNamespace(x=x,y=y)
-    dependencies={'pyray':ray,'openpilot.selfdrive.ui.mici.onroad':SimpleNamespace(SIDE_PANEL_WIDTH=80),
+    dependencies={'raylib_nb':ray,'openpilot.selfdrive.ui.mici.onroad':SimpleNamespace(SIDE_PANEL_WIDTH=80),
       'openpilot.selfdrive.ui.mici.onroad.lead_brake_state':state_module,
       'openpilot.selfdrive.ui.mici.onroad.hud_layout':layout,
       'openpilot.system.ui.lib.application':SimpleNamespace(gui_app=SimpleNamespace(font=lambda *a:None),FontWeight=SimpleNamespace(MEDIUM=1,BOLD=2),FONT_SCALE=1.16,font_fallback=lambda f:f),

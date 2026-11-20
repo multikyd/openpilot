@@ -1,3 +1,4 @@
+# KYD UI: Lead/brake display values and freshness rules.
 """Presentation state for the C4 mici lead/brake side panel; no control output."""
 from dataclasses import dataclass
 import math

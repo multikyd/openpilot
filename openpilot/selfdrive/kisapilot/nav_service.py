@@ -32,7 +32,8 @@ from openpilot.common.hardware import PC, COMMA_HARDWARE
 from openpilot.common.constants import CV
 
 from openpilot.selfdrive.kisapilot.nav_guidance import GuidanceProcessor
-from openpilot.selfdrive.kisapilot.nav_transport import DISCOVERY_PORTS, NaviSourceMux, NaviTcpServer
+from openpilot.selfdrive.kisapilot.nav_source import NaviSourceMux
+from openpilot.selfdrive.kisapilot.nav_transport import DISCOVERY_PORTS, NaviTcpServer
 
 from openpilot.common.gps import get_gps_location_service
 
@@ -944,7 +945,7 @@ class NavigationService:
       {"ts": now, "navigation": navigation, "gps": gps}))
 
   def _put_directional_signal(self, data):
-    from openpilot.selfdrive.kisapilot.signal_follow import directional_signal, usable_signal
+    from openpilot.selfdrive.kisapilot.nav_signal_input import directional_signal, usable_signal
     now = time.monotonic()
     navigation, physical_gps = self._signal_context(now)
     candidate = directional_signal(data, now, navigation, physical_gps)
@@ -1023,7 +1024,7 @@ class NavigationService:
     if lamp is None:
       return
 
-    from openpilot.selfdrive.kisapilot.signal_follow import normalized_position, signal_from_sinf, directional_signal, usable_signal
+    from openpilot.selfdrive.kisapilot.nav_signal_input import normalized_position, signal_from_sinf, directional_signal, usable_signal
     if not usable_signal(directional_signal(signal_from_sinf(d), time.monotonic(), {}, {})):
       return
     # Prefer a recent direction-specific ssinf, but support legacy sinf-only feeds.
@@ -1050,7 +1051,7 @@ class NavigationService:
     if not isinstance(d, dict):
       return
 
-    from openpilot.selfdrive.kisapilot.signal_follow import normalized_position
+    from openpilot.selfdrive.kisapilot.nav_signal_input import normalized_position
     d = dict(d)
     # A malformed ssinf must not suppress a valid sinf fallback.
     if not self._put_directional_signal(d):

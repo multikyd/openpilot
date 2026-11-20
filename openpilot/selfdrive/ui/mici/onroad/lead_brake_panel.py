@@ -1,6 +1,7 @@
+# KYD UI: Right sidebar current speed, camera offset, and lead/brake display.
 """C4 mici's former confidence-ball space, showing observation-only lead status."""
 import time
-import pyray as rl
+import raylib_nb as rl
 from openpilot.selfdrive.ui.mici.onroad import SIDE_PANEL_WIDTH
 from openpilot.selfdrive.ui.mici.onroad.lead_brake_state import lead_brake_state
 from openpilot.system.ui.lib.application import gui_app, FontWeight, FONT_SCALE, font_fallback
@@ -34,8 +35,9 @@ class LeadBrakePanel:
     top_offset = 0.
     # Raylib positions text by its line box. Compensate glyph bearing so the
     # visible digit tops align with the signal/offset box, including 3 digits.
-    if getattr(effective, 'baseSize', 0) > 0:
-      glyphs = [rl.get_glyph_info(effective, ord(ch)) for ch in value]
+    get_glyph_info = getattr(rl, 'get_glyph_info', None)
+    if get_glyph_info is not None and getattr(effective, 'baseSize', 0) > 0:
+      glyphs = [get_glyph_info(effective, ord(ch)) for ch in value]
       top = min(g.offsetY for g in glyphs)
       bottom = max(g.offsetY+g.image.height for g in glyphs)
       ink_height = (bottom-top)*size*FONT_SCALE/effective.baseSize

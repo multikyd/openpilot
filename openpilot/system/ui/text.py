@@ -3,7 +3,7 @@ import re
 import sys
 import subprocess
 import time
-import pyray as rl
+import raylib_nb as rl
 from openpilot.common.hardware import HARDWARE, PC
 from openpilot.system.ui.lib.application import BIG_UI, gui_app
 from openpilot.system.ui.lib.scroll_panel import GuiScrollPanel

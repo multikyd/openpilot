@@ -1,7 +1,9 @@
+from __future__ import annotations
+
 import math
 import re
 import time
-import pyray as rl
+import raylib_nb as rl
 from dataclasses import dataclass
 from openpilot.common.constants import CV
 from openpilot.selfdrive.ui.mici.onroad.torque_bar import TorqueBar
@@ -13,7 +15,6 @@ from openpilot.selfdrive.ui.mici.onroad.signal_renderer import draw_signal_panel
 from openpilot.selfdrive.ui.mici.onroad.bookmark_transfer import BookmarkTransferBanner
 from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus, ChestnutState
 from openpilot.system.ui.lib.application import gui_app, FontWeight
-from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.widgets import Widget
 from openpilot.common.filter_simple import FirstOrderFilter
@@ -47,6 +48,7 @@ FONT_SIZES = FontSizes()
 COLORS = Colors()
 
 
+# KYD UI: Show the current navigation turn intent with the local HUD icons.
 class TurnIntent(Widget):
   FADE_IN_ANGLE = 30  # degrees
 
@@ -104,6 +106,7 @@ class TurnIntent(Widget):
       self._turn_intent_rotation_filter.update(0)
 
 
+# KYD UI: Compose the KYD assets and display state around the stock alert and torque-bar interfaces.
 class HudRenderer(Widget):
   def __init__(self):
     super().__init__()
@@ -158,6 +161,10 @@ class HudRenderer(Widget):
     """Set the wheel icon to critical or normal state."""
     self._show_wheel_critical = critical
 
+  # KYD UI: expose the Nightly alert hook on the local HUD.
+  def set_torque_bar_hidden(self, hidden: bool):
+    self._torque_bar.set_hidden(hidden)
+
   def set_can_draw_top_icons(self, can_draw_top_icons: bool):
     """Set whether to draw the top part of the HUD."""
     self._can_draw_top_icons = can_draw_top_icons
@@ -166,6 +173,7 @@ class HudRenderer(Widget):
     # whether we're drawing any top icons currently
     return bool(self._set_speed_alpha_filter.x > 1e-2)
 
+  # KYD UI: Use the local cruise, speed, and camera-offset display state.
   def _update_state(self) -> None:
     """Update HUD state based on car state and controls state."""
     sm = ui_state.sm
@@ -201,6 +209,7 @@ class HudRenderer(Widget):
     speed_conversion = CV.MS_TO_KPH if ui_state.is_metric else CV.MS_TO_MPH
     self.speed = max(0.0, v_ego * speed_conversion)
 
+  # KYD UI: Draw the local signal, bookmark, TPMS, gap bars and road notices.
   def _render(self, rect: rl.Rectangle) -> None:
     """Render HUD elements to the screen."""
 
@@ -247,6 +256,7 @@ class HudRenderer(Widget):
         rl.draw_text_ex(self._font_bold, text, rl.Vector2(rect.x+252-width/2, rect.y+198), size, 0,
                         rl.Color(255, 220, 70, 255))
 
+  # KYD UI: Read the displayed camera offset from the recorded lateral plan.
   def _update_camera_offset(self, sm) -> None:
     # Parse planner telemetry only on a new plan, never once per rendered frame.
     frame = sm.recv_frame['lateralPlan']
@@ -265,6 +275,7 @@ class HudRenderer(Widget):
       except ValueError:
         self._camera_offset_text = "--"
 
+  # KYD UI: Show NAV, an N/T provider badge, and HWay when present.
   def _draw_navigation_status(self, rect: rl.Rectangle) -> None:
     if not self._can_draw_top_icons or not ui_state.started or rect.width < 440:
       return
@@ -298,6 +309,7 @@ class HudRenderer(Widget):
       rl.draw_text_ex(self._font_bold, text, rl.Vector2(x+(badge_width-width)/2, rect.y+11), size, 0, color)
       x += badge_width + gap
 
+  # KYD UI: Place the active model indicator in the local HUD.
   def _draw_model_source(self, rect: rl.Rectangle) -> None:
     loading = ui_state.chestnut_state == ChestnutState.LOADING
     if loading:
@@ -324,6 +336,7 @@ class HudRenderer(Widget):
                      rect.y + rect.height - 14 - (self._txt_wheel.height + icon.height) / 2)
     rl.draw_texture_ex(icon, pos, 0.0, 1.0, rl.Color(255, 255, 255, int(255 * opacity * alpha)))
 
+  # KYD UI: Anchor the steering indicator in the lower-left notice position.
   def _draw_steering_wheel(self, rect: rl.Rectangle) -> None:
     wheel_txt = self._txt_wheel_critical if self._show_wheel_critical else self._txt_wheel
 
@@ -366,6 +379,7 @@ class HudRenderer(Widget):
       exclamation_pos_y = pos_y - self._txt_exclamation_point.height / 2
       rl.draw_texture_ex(self._txt_exclamation_point, rl.Vector2(exclamation_pos_x, exclamation_pos_y), 0.0, 1.0, rl.WHITE)
 
+  # KYD UI: Use KYD cruise settings for the temporary set-speed overlay.
   def _draw_set_speed(self, rect: rl.Rectangle) -> None:
     """Draw the MAX speed indicator box."""
     alpha = self._set_speed_alpha_filter.update(0 < rl.get_time() - self._set_speed_changed_time < SET_SPEED_PERSISTENCE and
@@ -428,6 +442,7 @@ class HudRenderer(Widget):
       )
 
   # 536 X 240
+  # KYD UI: Draw current speed and camera offset above the right-side brake panel.
   def draw_current_speed_sidebar(self, rect: rl.Rectangle) -> None:
     """Draw the current vehicle speed and unit."""
     s = ui_state
@@ -464,6 +479,7 @@ class HudRenderer(Widget):
     sidebar = rl.Rectangle(rect.x+rect.width-SIDE_PANEL_WIDTH, rect.y, SIDE_PANEL_WIDTH, rect.height)
     LeadBrakePanel.draw_speed(sidebar, self.speed, s.is_metric, speed_color, offset_text=self._camera_offset_text)
 
+  # KYD UI: Draw the larger camera or bump speed and distance in the lower-left notice.
   def _draw_lower_left(self, rect: rl.Rectangle) -> None:
     s = ui_state
     sm = s.sm
@@ -480,29 +496,36 @@ class HudRenderer(Widget):
     if h < 48:
       self._draw_steering_wheel(rect)
       return
-    scale = min(1., h/90)
+    scale = h/89
     cx = rect.x+LEFT_CENTER
     rl.draw_rectangle_rounded(rl.Rectangle(x,y,w,h), .12, 8, rl.Color(0,0,0,190))
-    def text(value, top, size, color, available=None, centered=False):
+
+    def text(value, center_x, center_y, size, color, max_width, max_height):
       size *= scale
       measured = measure_text_cached(self._font_bold, value, size)
-      size *= min(1., ((w-8) if available is None else available*scale)/max(1., measured.x))
+      size *= min(1., max_width/max(1., measured.x), max_height*scale/max(1., measured.y))
       measured = measure_text_cached(self._font_bold, value, size)
-      rl.draw_text_ex(self._font_bold, value, rl.Vector2(cx-measured.x/2, y+top*scale-(measured.y/2 if centered else 0)), size, 0, color)
+      position = rl.Vector2(center_x-measured.x/2, y+center_y*scale-measured.y/2)
+      rl.draw_text_ex(self._font_bold, value, position, size, 0, color)
+
     target = round(notice.speed*(1 if s.is_metric else KM_TO_MILE))
     if notice.kind == 'CAM':
-      radius = 29*scale
-      rl.draw_circle(int(cx), int(y+30*scale), radius, rl.RED)
-      rl.draw_circle(int(cx), int(y+30*scale), radius*.79, rl.WHITE)
-      text(str(target), 30, 40, rl.BLACK, available=42, centered=True)
+      radius = 28*scale
+      rl.draw_circle(int(cx), int(y+29*scale), radius, rl.RED)
+      rl.draw_circle(int(cx), int(y+29*scale), radius*.83, rl.WHITE)
+      text(str(target), cx, 29, 46, rl.BLACK, 46*scale, 48)
     else:
       image = self.img_speed_bump
+      icon_size = 22*scale
       rl.draw_texture_pro(image, rl.Rectangle(0,0,image.width,image.height),
-                          rl.Rectangle(cx-24*scale,y,48*scale,24*scale), rl.Vector2(0,0), 0, rl.WHITE)
-      text(str(target), 22, 36, rl.Color(255,220,70,255))
+                          rl.Rectangle(x+4, y+18*scale, icon_size, icon_size), rl.Vector2(0,0), 0, rl.WHITE)
+      speed_left = x+6+icon_size
+      speed_width = x+w-4-speed_left
+      text(str(target), speed_left+speed_width/2, 29, 49, rl.Color(255,220,70,255), speed_width, 52)
     distance = f'{notice.distance:.0f}m' if notice.distance < 1000 else f'{notice.distance/1000:.1f}km'
-    text(distance, 60, 24, rl.WHITE)
+    text(distance, cx, 73, 30, rl.WHITE, w-8, 30)
 
+  # KYD UI: Draw the left-side ego vehicle, TPMS, brake lamps and four gap slots.
   def _draw_car_stat(self, rect: rl.Rectangle) -> None:
     """Draw KisaPilot-style CAR Status."""
     s = ui_state
@@ -584,7 +607,6 @@ class HudRenderer(Widget):
       font_size = 9
       color = rl.Color(0, 255, 0, 230)
       lines = center_text.split("\n")
-      line_height = font_size
       for i, line in enumerate(lines):
         tsz = measure_text_cached(font, line, font_size).x
         rl.draw_text_ex(font, line, rl.Vector2(x_center-tsz/2, icon_y+60+i*10), font_size, 0, color)

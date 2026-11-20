@@ -2,7 +2,6 @@
 
 #include <future>
 #include <map>
-#include <mutex>
 #include <optional>
 #include <string>
 #include <tuple>
@@ -86,8 +85,6 @@ private:
   std::string params_prefix;
 
   // for nonblocking write
-  std::mutex async_mutex;
-  bool async_running = false;
   std::future<void> future;
   SafeQueue<std::pair<std::string, std::string>> queue;
 };

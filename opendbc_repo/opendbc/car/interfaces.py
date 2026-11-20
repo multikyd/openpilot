@@ -8,7 +8,7 @@ from typing import Any
 from collections.abc import Callable
 from functools import cache
 
-from opendbc.car import DT_CTRL, apply_hysteresis, gen_empty_fingerprint, scale_rot_inertia, scale_tire_stiffness, STD_CARGO_KG
+from opendbc.car import DT_CTRL, apply_hysteresis, gen_empty_fingerprint, scale_rot_inertia_per_mass, scale_tire_stiffness_per_mass
 from opendbc.car import structs
 from opendbc.car.can_definitions import CanData, CanRecvCallable, CanSendCallable
 from opendbc.car.common.basedir import BASEDIR
@@ -79,81 +79,70 @@ def get_torque_params():
   return torque_params
 
 class MyTrack:
+  """Filter the history belonging to one radar track ID."""
+
   def __init__(self, track_id: int, radar_point, dt: float):
     self.track_id = track_id
-    self.cnt = 0
-    self.dRel = radar_point.dRel
-    self.vRel = radar_point.vRel
-    self.yRel = radar_point.yRel
-    self.yvRel = radar_point.yvRel
-    self.vLead = radar_point.vLead
-    self.v_lead_filtered_last = self.vLead
-    self.aLead = 0.0
-    self.jLead = 0.0
     self.dt = dt
-    self.vLead_avg = FirstOrderFilter(self.vLead, 0.1, self.dt)
-    self.aLead_avg = FirstOrderFilter(self.aLead, 0.15, self.dt)
-    self.jLead_avg = FirstOrderFilter(self.jLead, 0.4, self.dt)
-    self.yRel_avg = FirstOrderFilter(self.yRel, 0.1, self.dt)
-    self.yvRel_avg = FirstOrderFilter(self.yvRel, 0.1, self.dt)
     self.cnt = 0
+    self.vLead_avg = FirstOrderFilter(radar_point.vLead, 0.1, dt)
+    self.aLead_avg = FirstOrderFilter(0.0, 0.15, dt)
+    self.jLead_avg = FirstOrderFilter(0.0, 0.4, dt)
+    self.yRel_avg = FirstOrderFilter(radar_point.yRel, 0.1, dt)
+    self.yvRel_avg = FirstOrderFilter(radar_point.yvRel, 0.1, dt)
+    self.init_point(radar_point)
 
-  def init_point(self, radar_point):
-    self.dRel = radar_point.dRel
-    self.vRel = radar_point.vRel
-    self.yRel = radar_point.yRel
-    self.yvRel = radar_point.yvRel
-    self.vLead = radar_point.vLead
-    self.v_lead_filtered_last = self.vLead
-    self.aLead = 0.0
-    self.jLead = 0.0
-    self.vLead_avg.x = self.vLead
-    self.aLead_avg.x = self.aLead
-    self.jLead_avg.x = self.jLead
-    self.yRel_avg.x = self.yRel
-    self.yvRel_avg.x = self.yvRel
-        
   def update(self, radar_point, a_ego):
     if not radar_point.measured:
       if self.cnt > 0:
         self.init_point(radar_point)
       self.cnt = 0
-    elif self.cnt < 1:
+      return
+
+    if self.cnt == 0:
       self.init_point(radar_point)
-      self.cnt += 1
-    else:      
-      self.vLead = radar_point.vLead
-      self.yRel = self.yRel_avg.update(radar_point.yRel)
-      self.yvRel = self.yvRel_avg.update(radar_point.yvRel)
+    else:
+      self._filter_measurement(radar_point)
+    self.cnt += 1
 
-      if True:
-        v_lead_filtered = self.vLead_avg.update(self.vLead)
-        pseudo_stop = abs(v_lead_filtered) < 0.3 and abs(self.vLead - v_lead_filtered) < 0.05
-        a_raw = (v_lead_filtered - self.v_lead_filtered_last) / self.dt
-        self.v_lead_filtered_last = v_lead_filtered
+  def write_estimates(self, radar_point):
+    radar_point.aLead = float(self.aLead) if self.cnt >= 6 else 0
+    radar_point.jLead = float(self.jLead) if self.cnt >= 6 else 0
+    radar_point.yRel = float(self.yRel)
+    radar_point.yvRel = float(self.yvRel)
 
-        self.noisy = abs(a_raw - self.aLead) > 3.0
-        if self.noisy:
-          self.cnt = 0
-        
-        a_lead = self.aLead_avg.update(np.clip(a_raw, -10.0, 5.0) if not pseudo_stop else 0.0)
+  def init_point(self, radar_point):
+    self.dRel = radar_point.dRel
+    self.vRel = radar_point.vRel
+    self.vLead = self.vLead_avg.x = radar_point.vLead
+    self.yRel = self.yRel_avg.x = radar_point.yRel
+    self.yvRel = self.yvRel_avg.x = radar_point.yvRel
+    self.v_lead_filtered_last = self.vLead
+    self.aLead = self.aLead_avg.x = 0.0
+    self.jLead = self.jLead_avg.x = 0.0
 
-        j_lead = (a_lead - self.aLead) / self.dt
-        self.aLead = a_lead
-        self.jLead = self.jLead_avg.update(j_lead if self.cnt > 2 else 0.0)
-      else:
-        a_lead = radar_point.aRel + a_ego
-        j_lead = (a_lead - self.aLead) / self.dt
-        self.aLead = a_lead
-        self.jLead = self.jLead_avg.update(j_lead if self.cnt > 2 else 0.0)
+  def _filter_measurement(self, radar_point):
+    self.dRel = radar_point.dRel
+    self.vRel = radar_point.vRel
+    self.vLead = radar_point.vLead
+    self.yRel = self.yRel_avg.update(radar_point.yRel)
+    self.yvRel = self.yvRel_avg.update(radar_point.yvRel)
 
-      # Store latest values
-      self.dRel = radar_point.dRel
-      self.vRel = radar_point.vRel
+    filtered_speed = self.vLead_avg.update(self.vLead)
+    near_stop = abs(filtered_speed) < 0.3 and abs(self.vLead - filtered_speed) < 0.05
+    raw_accel = (filtered_speed - self.v_lead_filtered_last) / self.dt
+    self.v_lead_filtered_last = filtered_speed
 
-      self.cnt += 1
+    self.noisy = abs(raw_accel - self.aLead) > 3.0
+    if self.noisy:
+      self.cnt = 0
 
-# generic car and radar interfaces
+    accel = self.aLead_avg.update(0.0 if near_stop else np.clip(raw_accel, -10.0, 5.0))
+    jerk = (accel - self.aLead) / self.dt
+    self.aLead = accel
+    self.jLead = self.jLead_avg.update(jerk if self.cnt > 2 else 0.0)
+
+
 class RadarInterfaceBase(ABC):
   def __init__(self, CP: structs.CarParams):
     self.CP = CP
@@ -162,16 +151,39 @@ class RadarInterfaceBase(ABC):
     self.pts: dict[int, structs.RadarData.RadarPoint] = {}
     self.track_id: int = 0
     self.frame = 0
-    delay = CP.radarDelay
-    self.v_ego_hist = deque([0.0], maxlen=int(round(delay / DT_CTRL)) + 1)
+
+    history_length = int(round(CP.radarDelay / DT_CTRL)) + 1
+    self.v_ego_hist = deque([0.0], maxlen=history_length)
+    self.a_ego_hist = deque([0.0], maxlen=history_length)
     self.v_ego = 0.0
-    self.a_ego_hist = deque([0.0], maxlen=int(round(delay / DT_CTRL)) + 1)
     self.a_ego = 0.0
+
     self.last_timestamp = None
     self.dt = None
-
     self.init_samples = []
     self.init_done = False
+
+  def update_with_ego_motion(self, v_ego, a_ego, rcv_time, can_packets: list[tuple[int, list[CanData]]]) -> structs.RadarDataT | None:
+    self.v_ego_hist.append(v_ego)
+    self.a_ego_hist.append(a_ego)
+    self.v_ego = self.v_ego_hist[0]
+    self.a_ego = self.a_ego_hist[0]
+    radar_data = self.update(can_packets)
+    if radar_data is None:
+      return None
+
+    if not self.init_done:
+      self.estimate_dt(rcv_time)
+      return None
+
+    self._refresh_tracks()
+    return radar_data
+
+  def update(self, can_packets: list[tuple[int, list[CanData]]]) -> structs.RadarDataT | None:
+    self.frame += 1
+    if self.frame % 5 == 0:  # default radar rate is 20 Hz
+      return structs.RadarData()
+    return None
 
   def estimate_dt(self, rcv_time):
     if self.CP.radarTimeStep > 0.0:
@@ -179,65 +191,23 @@ class RadarInterfaceBase(ABC):
       self.init_done = True
       print(f"Using radar dt: {self.dt} sec")
     elif len(self.init_samples) > 100:
-      estimated_dt = np.mean(np.diff(self.init_samples[50:]))
-      self.dt = estimated_dt
+      self.dt = np.mean(np.diff(self.init_samples[50:]))
       self.init_done = True
       print(f"Estimated radar dt: {self.dt} sec")
     else:
       self.init_samples.append(rcv_time)
 
-     
-  def update_with_ego_motion(self, v_ego, a_ego, rcv_time, can_packets: list[tuple[int, list[CanData]]]) -> structs.RadarDataT | None:
-    self.v_ego_hist.append(v_ego)
-    self.v_ego = self.v_ego_hist[0]
-    self.a_ego_hist.append(a_ego)
-    self.a_ego = self.a_ego_hist[0]
-    ret = self.update(can_packets)
-
-    if ret is not None:
-      if not self.init_done:
-        self.estimate_dt(rcv_time)
-        return None
-
-      new_tracks = {}
-      for addr, radar_point in self.pts.items():
-        track_id = radar_point.trackId
-        if track_id not in self.tracks:
-          new_tracks[track_id] = MyTrack(track_id, radar_point, self.dt)
-        else:
-          new_tracks[track_id] = self.tracks[track_id]
-        new_tracks[track_id].update(radar_point, self.a_ego)
-
-        if new_tracks[track_id].cnt < 6:
-          radar_point.aLead = 0
-          radar_point.jLead = 0
-          radar_point.yRel = float(new_tracks[track_id].yRel)
-          radar_point.yvRel = float(new_tracks[track_id].yvRel)
-        else:
-          radar_point.aLead = float(new_tracks[track_id].aLead)
-          radar_point.jLead = float(new_tracks[track_id].jLead)
-          radar_point.yRel = float(new_tracks[track_id].yRel)
-          radar_point.yvRel = float(new_tracks[track_id].yvRel)
-                
-      self.tracks = new_tracks
-      """
-      if self.last_timestamp is not None:
-        print(f"dt1 = {rcv_time - self.last_timestamp:.6f}")
-      if self.last_timestamp is not None and (rcv_time - self.last_timestamp) < 0.045:  # 0.05 - 0.005
-        if self.last_timestamp is not None:
-          print(f"dt3 = {rcv_time - self.last_timestamp:.6f}")
-        return None
-      if self.last_timestamp is not None:
-        print(f"dt2 = {rcv_time - self.last_timestamp:.6f}")
-      self.last_timestamp = rcv_time
-      """
-    return ret
-
-  def update(self, can_packets: list[tuple[int, list[CanData]]]) -> structs.RadarDataT | None:
-    self.frame += 1
-    if (self.frame % 5) == 0:  # 20 Hz is very standard
-      return structs.RadarData()
-    return None
+  def _refresh_tracks(self):
+    active_tracks = {}
+    for point in self.pts.values():
+      track_id = point.trackId
+      track = self.tracks.get(track_id)
+      if track is None:
+        track = MyTrack(track_id, point, self.dt)
+      track.update(point, self.a_ego)
+      track.write_estimates(point)
+      active_tracks[track_id] = track
+    self.tracks = active_tracks
 
 
 class CarInterfaceBase(ABC):
@@ -284,7 +254,6 @@ class CarInterfaceBase(ABC):
     ret = CarInterfaceBase.get_std_params(candidate)
 
     platform = PLATFORMS[candidate]
-    ret.mass = platform.config.specs.mass
     ret.wheelbase = platform.config.specs.wheelbase
     ret.steerRatio = platform.config.specs.steerRatio
     ret.centerToFront = ret.wheelbase * platform.config.specs.centerToFrontRatio
@@ -298,13 +267,10 @@ class CarInterfaceBase(ABC):
     if Params().get_bool("IgnoreMinimumSteeringSpeed"):
       ret.minSteerSpeed = 0.
 
-    # Vehicle mass is published curb weight plus assumed payload such as a human driver; notCars have no assumed payload
-    if not ret.notCar:
-      ret.mass = ret.mass + STD_CARGO_KG
-
-    # Set params dependent on values set by the car interface
-    ret.rotationalInertia = scale_rot_inertia(ret.mass, ret.wheelbase)
-    ret.tireStiffnessFront, ret.tireStiffnessRear = scale_tire_stiffness(ret.mass, ret.wheelbase, ret.centerToFront, ret.tireStiffnessFactor)
+    ret.rotationalInertiaPerMass = scale_rot_inertia_per_mass(ret.wheelbase)
+    ret.tireStiffnessFrontPerMass, ret.tireStiffnessRearPerMass = scale_tire_stiffness_per_mass(
+      ret.wheelbase, ret.centerToFront, ret.tireStiffnessFactor,
+    )
 
     return ret
 
@@ -361,7 +327,6 @@ class CarInterfaceBase(ABC):
 
     ret.pcmCruise = True     # openpilot's state is tied to the PCM's cruise state on most cars
     ret.minEnableSpeed = -1. # enable is done by stock ACC, so ignore this
-    ret.steerRatioRear = 0.  # no rear steering, at least on the listed cars aboveA
     ret.openpilotLongitudinalControl = False
     ret.stopAccel = -2.0
     ret.stoppingDecelRate = 0.8 # brake_travel/s while trying to stop

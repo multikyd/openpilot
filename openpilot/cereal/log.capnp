@@ -100,6 +100,7 @@ struct OnroadEvent @0xc4fa6047f024e718 {
     startupNoControl @62;
     startupNoSecOcKey @63;
     startupMaster @64;
+    startupCruiseCanceled @105;
     fcw @65;
     steerSaturated @66;
     belowEngageSpeed @67;
@@ -120,10 +121,7 @@ struct OnroadEvent @0xc4fa6047f024e718 {
     steerTimeLimit @83;
     vehicleSensorsInvalid @84;
     locationdTemporaryError @85;
-    locationdPermanentError @86;
     paramsdTemporaryError @87;
-    paramsdPermanentError @88;
-    actuatorsApiUnavailable @89;
     espActive @90;
     personalityChanged @91;
     aeb @92;
@@ -139,27 +137,30 @@ struct OnroadEvent @0xc4fa6047f024e718 {
     usbErrorDEPRECATED @78;
     audioFeedbackDEPRECATED @97;
     bigModelReadyDEPRECATED @101;
+    locationdPermanentErrorDEPRECATED @86;
+    paramsdPermanentErrorDEPRECATED @88;
+    actuatorsApiUnavailableDEPRECATED @89;
 
     # kisa
-    trafficStopping @105;
-    audioPrompt @106;
-    audioRefuse @107;
-    stopStop @108;
-    audioLaneChange @109;
-    trafficSignGreen @110;
-    trafficSignChanged @111;
-    turningLeft @112;
-    turningRight @113;
-    chimeAtResume @114;
-    laneChangeMerging @115;
-    laneChangeFinish @116;
-    softHold @117;
-    bumpApproaching @118;
-    signalCoast @119;
-    tbtBlinkerLeft @120;
-    tbtBlinkerRight @121;
-    overtakeStart @122;
-    overtakeReturn @123;
+    trafficStopping @106;
+    audioPrompt @107;
+    audioRefuse @108;
+    stopStop @109;
+    audioLaneChange @110;
+    trafficSignGreen @111;
+    trafficSignChanged @112;
+    turningLeft @113;
+    turningRight @114;
+    chimeAtResume @115;
+    laneChangeMerging @116;
+    laneChangeFinish @117;
+    softHold @118;
+    bumpApproaching @119;
+    signalCoast @120;
+    tbtBlinkerLeft @121;
+    tbtBlinkerRight @122;
+    overtakeStart @123;
+    overtakeReturn @124;
   }
 }
 
@@ -613,25 +614,29 @@ struct PandaState @0xa7649e2575e4591e {
     interruptRateGmlanDEPRECATED @6;
     interruptRateInterrupts @7;
     interruptRateSpiDma @8;
-    interruptRateSpiCs @9;
-    interruptRateUart1 @10;
-    interruptRateUart2 @11;
-    interruptRateUart3 @12;
-    interruptRateUart5 @13;
-    interruptRateUartDma @14;
+    selfTestCpu @9;
+    selfTestRam @10;
+    selfTestFlash @11;
+    ecc @12;
+    outputReadback @13;
+    dma @14;
     interruptRateUsb @15;
-    interruptRateTim1 @16;
-    interruptRateTim3 @17;
+    clock @16;
+    interruptMissing @17;
     registerDivergent @18;
     interruptRateKlineInit @19;
     interruptRateClockSource @20;
     interruptRateTick @21;
     interruptRateExti @22;
     interruptRateSpi @23;
-    interruptRateUart7 @24;
+    adc @24;
     sirenMalfunction @25;
     heartbeatLoopWatchdog @26;
-    # Update max fault type in boardd when adding faults
+    interruptRateSoundDma @27;
+    mpu @28;
+    timer @29;
+    safetyRedundancy @30;
+    # Update max fault type in pandad when adding faults
   }
 
   enum PandaType @0x8a58adf93e5b3751 {
@@ -857,7 +862,6 @@ struct SelfdriveState {
   alertHudVisual @12 :Car.CarControl.HUDControl.VisualAlert;
 
   # configurable driving settings
-  experimentalMode @10 :Bool;
   personality @11 :LongitudinalPersonality;
   distanceTraveled @14 :Float32;
 
@@ -874,7 +878,8 @@ struct SelfdriveState {
     refuse @3;
 
     warningSoft @4;
-    warningImmediate @5;
+    warningImmediateSystem @5;
+    warningImmediateUser @11;
 
     prompt @6;
     promptRepeat @7;
@@ -883,22 +888,22 @@ struct SelfdriveState {
     preAlert @9;
     complete @10;
 
-    trafficSignGreen @11;
-    trafficSignChanged @12;
-    laneChange @13;
-    stopping @14;
-    autoHold @15;
-    bsdWarning @16;
-    speedDown @17;
-    stopStop @18;
-    reverseGear @19;
-    dingdong @20;
-    bumpChime @21;
-    signalCoast @22;
-    tbtBlinkerLeft @23;
-    tbtBlinkerRight @24;
-    overtakeStart @25;
-    overtakeReturn @26;
+    trafficSignGreen @12;
+    trafficSignChanged @13;
+    laneChange @14;
+    stopping @15;
+    autoHold @16;
+    bsdWarning @17;
+    speedDown @18;
+    stopStop @19;
+    reverseGear @20;
+    dingdong @21;
+    bumpChime @22;
+    signalCoast @23;
+    tbtBlinkerLeft @24;
+    tbtBlinkerRight @25;
+    overtakeStart @26;
+    overtakeReturn @27;
   }
 
   enum OpenpilotState @0xdbe58b96d2d1ac61 {
@@ -925,6 +930,7 @@ struct SelfdriveState {
 
   deprecated :group {
     alertSound @8 :Car.CarControl.HUDControl.AudibleAlert;
+    experimentalMode @10 :Bool;
   }
 }
 
@@ -1325,7 +1331,6 @@ struct LongitudinalPlan @0xe00b5b3eba12876c {
   shouldStop @37: Bool;
   allowThrottle @38: Bool;
   allowBrake @39: Bool;
-  accelBoost @40 :Float32;
 
   xState @41: Int32;
   trafficState @42: Int32;
@@ -1384,6 +1389,7 @@ struct LongitudinalPlan @0xe00b5b3eba12876c {
     gpsTrajectory @12 :Deprecated.GpsTrajectory;
     gpsPlannerActive @19 :Bool;
     personality @36 :LongitudinalPersonality;
+    accelBoost @40 :Float32;
   }
 }
 struct UiPlan {

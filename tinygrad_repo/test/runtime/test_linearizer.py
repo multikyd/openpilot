@@ -2,7 +2,7 @@ import numpy as np
 import unittest
 
 from tinygrad.codegen.opt import Opt, OptOps
-from tinygrad.uop.ops import UOp, Ops, GroupOp, AxisType
+from tinygrad.uop.ops import UOp, Ops, GroupOp, AxisType, KernelInfo
 from tinygrad.device import Device, Buffer
 from tinygrad.tensor import Tensor, _to_np_dtype
 from tinygrad.engine.realize import run_linear
@@ -11,7 +11,7 @@ from tinygrad.helpers import Context, dedup, TC_SELECT, TC_OPT, DEV
 from tinygrad.dtype import dtypes, AddrSpace
 from tinygrad.renderer.ptx import PTXRenderer
 from tinygrad.renderer.cstyle import CUDARenderer
-from tinygrad.renderer.isa import ISARenderer
+from tinygrad.renderer.x86 import ISARenderer
 from test.helpers import replace_opts, check_schedule
 from test.runtime.test_softmax_fusion import single_kernel_softmax
 MOCKGPU = DEV.interface.startswith("MOCK")
@@ -109,7 +109,7 @@ class TestLinearizer(unittest.TestCase):
     uops = tuple(to_program(replace_opts(ast, []), renderer=Device[Device.DEFAULT].renderer).src[1].src)
     ranges = [i for i,u in enumerate(uops) if u.op is Ops.RANGE]
     # LOAD -> RANGE -> LOAD -> STORE
-    assert len([x for x in uops[:ranges[0]] if x.op is Ops.LOAD]) == 1
+    assert len([x for x in uops[:ranges[0]] if x.op is Ops.LOAD and x.src[0].buf_uop.arg.name != "args"]) == 1
 
   def test_range_outer_op_before_phi_nested_range(self):
     a = Tensor.randn(2, ).realize()
@@ -274,6 +274,16 @@ class TestLinearizer(unittest.TestCase):
     ast = helper_linearizer_opt(single_kernel_softmax(a), [opts])
     uops = to_program(replace_opts(ast, opts), renderer=Device[Device.DEFAULT].renderer).src[1].src
     self.assertEqual(len([u for u in uops if u.op is Ops.BARRIER]), 2)
+
+  def test_sibling_loops_shared_value(self):
+    flag, out = Tensor([0], dtype=dtypes.int).realize(), Tensor.empty(4, dtype=dtypes.int).realize()
+    f, o, i = flag.uop.placeholder_like(0), out.uop.placeholder_like(1), UOp.range(2, 0, dtype=dtypes.int)
+    v, g = (x:=f.after(i).index(0).load())+i, x.eq(0).cast(dtypes.int)
+    r1 = UOp.range(g, 1, dtype=dtypes.int)
+    r2 = UOp.range(g.after(o.index(i*2+r1).store(v).end(r1)), 2, dtype=dtypes.int)
+    prog = o.index(i*2+1+r2).store(v).end(r2).end(i).sink(arg=KernelInfo())
+    run_linear(UOp(Ops.LINEAR, src=(prog.call(flag.uop.buf_uop, out.uop.buf_uop),)), update_stats=False)
+    self.assertEqual(out.tolist(), [0, 0, 1, 1])
 
 # *** helpers ***
 

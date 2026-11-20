@@ -1,6 +1,7 @@
+# KYD UI: Retained brake/vehicle feedback widget. The current C4 view does not mount it.
 """Large frozen-frame human feedback; no changes to driving control."""
 import time
-import pyray as rl
+import raylib_nb as rl
 from openpilot.selfdrive.ui.mici.onroad import SIDE_PANEL_WIDTH
 from openpilot.selfdrive.ui.mici.onroad.hud_layout import SPEED_HEADER_HEIGHT
 from openpilot.selfdrive.ui.onroad.brake_labels import BrakeLabelWriter
@@ -91,10 +92,13 @@ class BrakeLabelControls:
       self.texture_attempted=True
       try:
         rgb=self.sample['rgb']
-        image=rl.Image(rl.ffi.from_buffer(rgb),rgb.shape[1],rgb.shape[0],1,
+        image=rl.Image(None,rgb.shape[1],rgb.shape[0],1,
                        rl.PixelFormat.PIXELFORMAT_UNCOMPRESSED_R8G8B8)
         self.texture=rl.load_texture_from_image(image)
-        if self.texture.id <= 0:self.texture=None
+        if self.texture.id > 0:
+          rl.update_texture(self.texture, rgb.copy(order='C'))
+        else:
+          self.texture = None
       except Exception:
         self.texture=None
     if self.texture is not None:

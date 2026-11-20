@@ -99,6 +99,26 @@ class DrawingTest(unittest.TestCase):
     self.hud._draw_lower_left(self.rect)
     self.assertEqual(self.hud._draw_steering_wheel.call_count,2)
     self.ray.draw_text_ex.assert_not_called()
+  def test_larger_notice_numbers_fit_below_car(self):
+    for kind, speed, distance, min_speed_size, min_distance_size in (
+        (22, 30, 80, 40, 28), (1, 50, 140, 37, 28), (1, 110, 1450, 25, 24)):
+      with self.subTest(kind=kind, speed=speed, distance=distance):
+        self.state.xSpdType = kind
+        self.state.xSpdLimitOrg = self.state.xSpdLimit = speed
+        self.state.xSpdDist = distance
+        self.state.bumpTarget = 0
+        self.ray.draw_text_ex.reset_mock()
+        self.hud._draw_lower_left(self.rect)
+        top, bottom = self.ray.draw_text_ex.call_args_list
+        x, y, width, height = layout.lower_notice_box(0, 0, 240)
+        for call, minimum in ((top, min_speed_size), (bottom, min_distance_size)):
+          _, value, position, size, *_ = call.args
+          self.assertGreaterEqual(size, minimum)
+          self.assertGreaterEqual(position.x, x)
+          self.assertLessEqual(position.x+len(value)*size*.6, x+width)
+          self.assertGreaterEqual(position.y, y)
+          self.assertLessEqual(position.y+size, y+height)
+        self.assertLess(top.args[2].y+top.args[3], bottom.args[2].y)
   def test_four_slots_fixed_and_own_brake_lamps_preserved(self):
     boxes=[]
     for gap in (1,4):

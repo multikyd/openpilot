@@ -3,6 +3,7 @@ from tinygrad import Device, Tensor, dtypes
 from tinygrad.codegen.opt import Opt, OptOps, KernelOptError
 from tinygrad.uop.ops import AxisType
 from tinygrad.codegen.opt.postrange import Scheduler
+from tinygrad.helpers import DEV
 
 # TODO: write a clean version of this
 from test.runtime.test_linearizer import helper_linearizer_opt
@@ -68,6 +69,7 @@ class TestKernelOpts(unittest.TestCase):
       [Opt(OptOps.SPLIT, 5, (0, AxisType.LOCAL, True)), Opt(OptOps.SPLIT, 1, (0, AxisType.LOCAL))],
     ])
 
+  @unittest.skipIf(Device.DEFAULT == "AMD" and DEV.interface.startswith("MOCK"), "AMD emulator doesn't support direct pc read and write")
   def test_unrolled_padded_cumsum(self):
     Tensor.manual_seed(7)
     a = Tensor.rand(13, 17)
@@ -99,10 +101,10 @@ class TestKernelOpts(unittest.TestCase):
   @unittest.skipUnless(Device[Device.DEFAULT].renderer.has_local, "test requires locals")
   @unittest.skipUnless(Device[Device.DEFAULT].renderer.has_shared, "test requires shared")
   def test_matmul(self):
-    N = 128
     Tensor.manual_seed(1552)
-    a = Tensor.rand(N, N)
-    b = Tensor.rand(N, N)
+    # Keep the full reduction and enough output elements for every split, without a square output tile.
+    a = Tensor.rand(128, 128)
+    b = Tensor.rand(128, 32)
     r = a@b
     helper_linearizer_opt(r, [
       [Opt(OptOps.SPLIT, 1, (32, AxisType.LOCAL))],
@@ -127,7 +129,7 @@ class TestKernelOpts(unittest.TestCase):
   @unittest.skipUnless(Device[Device.DEFAULT].renderer.has_shared, "test requires shared")
   def test_matmul_upcast_group(self):
     Tensor.manual_seed(1552)
-    helper_linearizer_opt(Tensor.rand(128, 128)@Tensor.rand(128, 128),
+    helper_linearizer_opt(Tensor.rand(16, 128)@Tensor.rand(128, 16),
                           [[Opt(OptOps.SPLIT, 2, (32, AxisType.LOCAL, True)), Opt(OptOps.SPLIT, 2, (4, AxisType.UPCAST))]])
 
   @unittest.skipUnless(Device[Device.DEFAULT].renderer.has_local, "test requires locals")
@@ -202,6 +204,11 @@ class TestKernelOpts(unittest.TestCase):
       helper_linearizer_opt(a@b, [[Opt(OptOps.SPLIT, 1, (0, AxisType.UPCAST)), Opt(OptOps.PADTO, 1, 8)]])
     with self.assertRaises(KernelOptError):
       helper_linearizer_opt(a@b, [[Opt(OptOps.SPLIT, 2, (0, AxisType.UPCAST)), Opt(OptOps.PADTO, 2, 8)]])
+
+  def test_padto_cmpeq_sum(self):
+    a, b = Tensor(list(range(17))), Tensor([i%3 for i in range(17)])
+    # The extra lanes compare 0 == 0, but must not contribute to the reduction.
+    helper_linearizer_opt((a == b).sum(), [[Opt(OptOps.PADTO, 0, 32)]])
 
   def test_padto_sum_ok(self):
     N = 18

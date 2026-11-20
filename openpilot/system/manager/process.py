@@ -11,7 +11,6 @@ from setproctitle import setproctitle
 
 from openpilot.cereal import log
 from opendbc.car.structs import car
-import openpilot.cereal.messaging as messaging
 from openpilot.common.basedir import BASEDIR
 from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
@@ -24,9 +23,6 @@ def launcher(proc: str, name: str) -> None:
 
     # rename the process
     setproctitle(proc)
-
-    # create new context since we forked
-    messaging.reset_context()
 
     # add daemon name tag to logs
     cloudlog.bind(daemon=name)
@@ -60,13 +56,11 @@ def join_process(process: Process, timeout: float) -> None:
 
 class ManagerProcess(ABC):
   daemon = False
-  sigkill = False
   should_run: Callable[[bool, Params, car.CarParams], bool]
   proc: Process | None = None
   enabled = True
   name = ""
   shutting_down = False
-  _reported_exit_proc: Process | None = None
 
   @abstractmethod
   def start(self) -> None:
@@ -80,7 +74,7 @@ class ManagerProcess(ABC):
       if not self.shutting_down:
         cloudlog.info(f"killing {self.name}")
         if sig is None:
-          sig = signal.SIGKILL if self.sigkill else signal.SIGINT
+          sig = signal.SIGINT
         self.signal(sig)
         self.shutting_down = True
 
@@ -119,36 +113,6 @@ class ManagerProcess(ABC):
     cloudlog.info(f"sending signal {sig} to {self.name}")
     os.kill(self.proc.pid, sig)
 
-  def report_unexpected_exit(self) -> None:
-    proc = self.proc
-    if proc is None or self.shutting_down or proc is self._reported_exit_proc:
-      return
-
-    exit_code = proc.exitcode
-    if exit_code is None:
-      return
-
-    self._reported_exit_proc = proc
-    signal_name = None
-    if exit_code < 0:
-      try:
-        signal_name = signal.Signals(-exit_code).name
-      except ValueError:
-        signal_name = f"UNKNOWN({-exit_code})"
-
-    # The surviving manager records evidence even when the child cannot handle a signal.
-    try:
-      from openpilot.selfdrive.kisapilot.auto_crash_capture import capture_service
-      capture_service().record(self.name, proc.pid, exit_code, signal_name)
-    except Exception:
-      cloudlog.exception("automatic_crash_capture_enqueue_failed")
-
-    # ERROR is printed to tmux even with the default LOGPRINT=warning and is
-    # forwarded through cloudlog to the persistent logs when logging is running.
-    cloudlog.event("managed_process_exited", error=True, process=self.name,
-                   pid=proc.pid, exit_code=exit_code, signal=signal_name,
-                   detected_at=time.time(), expected=False)
-
   def get_process_state_msg(self):
     state = log.ManagerState.ProcessState.new_message()
     state.name = self.name
@@ -161,13 +125,12 @@ class ManagerProcess(ABC):
 
 
 class NativeProcess(ManagerProcess):
-  def __init__(self, name, cwd, cmdline, should_run, enabled=True, sigkill=False):
+  def __init__(self, name, cwd, cmdline, should_run, enabled=True):
     self.name = name
     self.cwd = cwd
     self.cmdline = cmdline
     self.should_run = should_run
     self.enabled = enabled
-    self.sigkill = sigkill
     self.launcher = nativelauncher
 
   def start(self) -> None:
@@ -186,12 +149,11 @@ class NativeProcess(ManagerProcess):
 
 
 class PythonProcess(ManagerProcess):
-  def __init__(self, name, module, should_run, enabled=True, sigkill=False):
+  def __init__(self, name, module, should_run, enabled=True):
     self.name = name
     self.module = module
     self.should_run = should_run
     self.enabled = enabled
-    self.sigkill = sigkill
     self.launcher = launcher
 
   def start(self) -> None:
@@ -258,7 +220,6 @@ def ensure_running(procs: ValuesView[ManagerProcess], started: bool, params: Par
 
   running = []
   for p in procs:
-    p.report_unexpected_exit()
     if p.enabled and p.name not in not_run and p.should_run(started, params, CP):
       running.append(p)
     else:

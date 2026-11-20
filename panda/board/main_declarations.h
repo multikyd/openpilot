@@ -1,4 +1,5 @@
-#pragma once
+#ifndef BOARD_MAIN_DECLARATIONS_H
+#define BOARD_MAIN_DECLARATIONS_H
 
 #include "board/drivers/drivers.h"
 
@@ -16,6 +17,7 @@ extern uint16_t reset_flags;
 
 // heartbeat state
 extern uint32_t heartbeat_counter;
+extern uint32_t heartbeat_tick_counter;
 extern bool heartbeat_lost;
 extern bool heartbeat_disabled;
 
@@ -24,3 +26,5 @@ extern bool siren_enabled;
 
 // sound
 extern uint16_t sound_output_level;
+
+#endif  // BOARD_MAIN_DECLARATIONS_H

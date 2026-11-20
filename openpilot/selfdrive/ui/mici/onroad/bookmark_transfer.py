@@ -1,7 +1,8 @@
+# KYD UI: Live bookmark transfer banner.
 """Small live-only status banner; no reads on the 60 Hz drawing path."""
 import json
 import time
-import pyray as rl
+import raylib_nb as rl
 from openpilot.common.params import Params
 from openpilot.selfdrive.kisapilot.bookmark_status import status_text
 from openpilot.system.ui.lib.text_measure import measure_text_cached

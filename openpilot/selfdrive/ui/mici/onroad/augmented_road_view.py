@@ -1,10 +1,9 @@
-import time
-
+import time  # KYD UI: blinker-test tap cancellation uses monotonic time.
 import numpy as np
-import pyray as rl
+import raylib_nb as rl
 from openpilot.cereal import log
 from opendbc.car.structs import car
-from opendbc.car.hyundai.blinker_test import cancel_active
+from opendbc.car.hyundai.blinker_test import cancel_active  # KYD UI
 from openpilot.cereal.visionipc import VisionStreamType
 from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus
 from openpilot.selfdrive.ui.mici.onroad import SIDE_PANEL_WIDTH
@@ -13,9 +12,10 @@ from openpilot.selfdrive.ui.mici.onroad.driver_state import DriverStateRenderer
 from openpilot.selfdrive.ui.mici.onroad.hud_renderer import HudRenderer
 from openpilot.selfdrive.ui.mici.onroad.long_indicator import LongIndicator
 from openpilot.selfdrive.ui.mici.onroad.model_renderer import ModelRenderer
-from openpilot.selfdrive.ui.onroad.brake_light_overlay import BrakeLightOverlay
 from openpilot.selfdrive.ui.mici.onroad.navigation import NavigationPanel, PANEL_WIDTH
+# KYD UI: The right sidebar and lead tracking overlay replace the stock confidence ball.
 from openpilot.selfdrive.ui.mici.onroad.lead_brake_panel import LeadBrakePanel
+from openpilot.selfdrive.ui.onroad.brake_light_overlay import BrakeLightOverlay
 from openpilot.selfdrive.ui.mici.onroad.cameraview import CameraView
 from openpilot.system.ui.lib.application import FontWeight, gui_app, MousePos, MouseEvent, TextAlignment, TextAlignmentVertical
 from openpilot.system.ui.widgets.label import UnifiedLabel
@@ -166,8 +166,8 @@ class AugmentedRoadView(CameraView):
     self.view_from_calib = view_frame_from_device_frame.copy()
     self.view_from_wide_calib = view_frame_from_device_frame.copy()
 
+    self._matrix_cache_key: tuple | None = None
     self._cached_matrix: np.ndarray | None = None
-    self._frame_matrix_cache_key = None
     self._content_rect = rl.Rectangle()
     self._last_click_time = 0.0
 
@@ -176,14 +176,18 @@ class AugmentedRoadView(CameraView):
 
     self._navigation = NavigationPanel()
     self._model_renderer = ModelRenderer()
+    # KYD UI: re-use the displayed camera and calibration for the tracked lead outline.
     self._brake_light_overlay = BrakeLightOverlay()
     self._hud_renderer = HudRenderer()
     self._long_indicator = LongIndicator()
     self._alert_renderer = AlertRenderer()
+    # KYD UI: retain the camera-overlay DM icon and the right-hand lead/brake strip.
     self._driver_state_renderer = DriverStateRenderer()
     self._lead_brake_panel = LeadBrakePanel()
-    self._touch_press = None
+    self._touch_press: MousePos | None = None
     self._touch_dragged = False
+
+    # KYD UI: keep the full-width, centered offroad message.
     self._offroad_label = UnifiedLabel("start the car to\nuse openpilot", 54, FontWeight.DISPLAY,
                                        text_color=rl.Color(255, 255, 255, int(255 * 0.9)),
                                        alignment=TextAlignment.CENTER,
@@ -195,6 +199,7 @@ class AugmentedRoadView(CameraView):
     """Check if currently swiping left (for scroller to disable)."""
     return self._bookmark_icon.is_swiping_left()
 
+  # KYD UI: Use the local offroad message layout.
   def _update_state(self):
     super()._update_state()
 
@@ -206,6 +211,7 @@ class AugmentedRoadView(CameraView):
     else:
       self._offroad_label.set_text("start the car to\nuse openpilot")
 
+  # KYD UI: Preserve the local swipe/bookmark and tap handling.
   def _handle_mouse_press(self, mouse_pos: MousePos):
     self._touch_press = mouse_pos
     self._touch_dragged = False
@@ -227,12 +233,12 @@ class AugmentedRoadView(CameraView):
       return
     super()._handle_mouse_release(mouse_pos)
 
-  def _render(self, _):
-    # Draw text if not onroad
+  def _render(self, rect: rl.Rectangle):
+    # KYD UI: render the centered offroad message and clear the last lead.
     if not ui_state.started:
       self._brake_light_overlay.clear()
-      rl.draw_rectangle_rec(self.rect, rl.BLACK)
-      self._offroad_label.render(self._rect)
+      rl.draw_rectangle_rec(rect, rl.BLACK)
+      self._offroad_label.render(rect)
       return
 
     self._switch_stream_if_needed(ui_state.sm)
@@ -243,13 +249,11 @@ class AugmentedRoadView(CameraView):
     alert_to_render, not_animating_out = self._alert_renderer.will_render()
     show_navigation = ui_state.navigation_enabled and ui_state.nav_destination_set and alert_to_render is None
 
-    # Create inner content area with border padding
-    self._content_rect = rl.Rectangle(
-      self.rect.x,
-      self.rect.y,
-      self.rect.width - SIDE_PANEL_WIDTH - (PANEL_WIDTH if show_navigation else 0),
-      self.rect.height,
-    )
+    # KYD UI: reserve the right strip whether or not the navigation panel is open.
+    content_width = rect.width - SIDE_PANEL_WIDTH - (PANEL_WIDTH if show_navigation else 0)
+    if content_width <= 0 or rect.height <= 0:
+      return
+    self._content_rect = rl.Rectangle(rect.x, rect.y, content_width, rect.height)
 
     # Enable scissor mode to clip all rendering within content rectangle boundaries
     # This creates a rendering viewport that prevents graphics from drawing outside the border
@@ -260,60 +264,73 @@ class AugmentedRoadView(CameraView):
       int(self._content_rect.height)
     )
 
-    # Render the base camera view
-    super()._render(self._content_rect)
+    # KYD UI: release the clipping region even if an overlay fails.
+    try:
+      # Render the base camera view
+      super()._render(self._content_rect)
 
-    # Draw all UI overlays
-    self._model_renderer.render(self._content_rect)
-    if self.device_camera is not None:
-      wide = self.stream_type == WIDE_CAM
-      camera = self.device_camera.wide_road if wide else self.device_camera.narrow_road
-      calibration = self.view_from_wide_calib if wide else self.view_from_calib
-      self._brake_light_overlay.render(self, self._content_rect, ui_state.sm, camera, calibration, self.stream_type)
-    else:
-      self._brake_light_overlay.clear()
+      # Draw all UI overlays
+      self._model_renderer.render(self._content_rect)
+      # KYD UI: draw the vehicle outline between the model path and the HUD.
+      self._render_lead_outline(self._content_rect)
 
-    # Fade out bottom of overlays for looks
-    rl.draw_texture_ex(self._fade_texture, rl.Vector2(self._content_rect.x, self._content_rect.y), 0.0, 1.0, rl.WHITE)
+      # Fade out bottom of overlays for looks
+      rl.draw_texture_ex(self._fade_texture, rl.Vector2(self._content_rect.x, self._content_rect.y), 0.0, 1.0, rl.WHITE)
 
-    # Hide DMoji when disengaged unless AlwaysOnDM is enabled
-    should_draw_dmoji = (not self._hud_renderer.drawing_top_icons() and
-                         (ui_state.status != UIStatus.DISENGAGED or ui_state.always_on_dm))
-    self._driver_state_renderer.set_should_draw(should_draw_dmoji)
-    self._driver_state_renderer.set_position(self._rect.x + 16, self._rect.y + 4)
-    self._driver_state_renderer.render()
-    self._long_indicator.set_should_draw(not self._hud_renderer.drawing_top_icons())
-    self._long_indicator.render(self._content_rect)
+      self._hud_renderer.set_can_draw_top_icons(alert_to_render is None)
+      # critical alerts show a warning icon where the torque bar is
+      self._hud_renderer.set_torque_bar_hidden(alert_to_render is not None and alert_to_render.status == log.SelfdriveState.AlertStatus.critical)
+      self._hud_renderer.set_wheel_critical_icon(alert_to_render is not None and not not_animating_out and
+                                                 alert_to_render.visual_alert == car.CarControl.HUDControl.VisualAlert.steerRequired)
+      # KYD UI: the already positioned DM and gap widgets belong inside the video.
+      self._render_left_panel(self._content_rect)
+      self._alert_renderer.render(self._content_rect)
+      self._hud_renderer.render(self._content_rect)
 
-    self._hud_renderer.set_can_draw_top_icons(alert_to_render is None)
-    self._hud_renderer.set_wheel_critical_icon(alert_to_render is not None and not not_animating_out and
-                                               alert_to_render.visual_alert == car.CarControl.HUDControl.VisualAlert.steerRequired)
-    self._alert_renderer.render(self._content_rect)
-    self._hud_renderer.render(self._content_rect)
+      # Draw fake rounded border
+      rl.draw_rectangle_rounded_lines_ex(self._content_rect, 0.2 * 1.02, 10, 50, rl.BLACK)
+    finally:
+      rl.end_scissor_mode()
 
-    # Draw fake rounded border
-    rl.draw_rectangle_rounded_lines_ex(self._content_rect, 0.2 * 1.02, 10, 50, rl.BLACK)
-
-    # End clipping region
-    rl.end_scissor_mode()
-
-    # Custom UI extension point - add custom overlays here
-    # Use self._content_rect for positioning within camera bounds
     if show_navigation:
-      self._navigation.render(rl.Rectangle(self._content_rect.x + self._content_rect.width, self.rect.y, PANEL_WIDTH, self.rect.height))
-    self._hud_renderer.draw_current_speed_sidebar(self.rect)
-    self._lead_brake_panel.render(self.rect, ui_state.sm, self._brake_light_overlay)
+      self._navigation.render(rl.Rectangle(self._content_rect.x + self._content_rect.width, rect.y, PANEL_WIDTH, rect.height))
 
-    self._bookmark_icon.render(self.rect)
+    # KYD UI: draw speed and lead/brake state outside the camera clipping region.
+    self._hud_renderer.draw_current_speed_sidebar(rect)
+    self._lead_brake_panel.render(rect, ui_state.sm, self._brake_light_overlay)
+    self._bookmark_icon.render(rect)
 
+  # KYD UI: use the projection of whichever road camera is on screen.
+  def _render_lead_outline(self, rect: rl.Rectangle):
+    if self.device_camera is None:
+      self._brake_light_overlay.clear()
+      return
+
+    wide = self.stream_type == WIDE_CAM
+    camera = self.device_camera.wide_road if wide else self.device_camera.narrow_road
+    calibration = self.view_from_wide_calib if wide else self.view_from_calib
+    self._brake_light_overlay.render(self, rect, ui_state.sm, camera, calibration, self.stream_type)
+
+  # KYD UI: Anchor driver monitoring and the gap indicator over the video.
+  def _render_left_panel(self, rect: rl.Rectangle):
+    # KYD places the driver monitor and gap indicator over the left of the video.
+    draw_left_widgets = not self._hud_renderer.drawing_top_icons()
+    self._driver_state_renderer.set_should_draw(draw_left_widgets and (ui_state.status != UIStatus.DISENGAGED or ui_state.always_on_dm))
+    self._driver_state_renderer.set_position(rect.x + 16, rect.y + 4)
+    self._driver_state_renderer.render()
+    self._long_indicator.set_should_draw(draw_left_widgets)
+    self._long_indicator.render(rect)
+
+  # KYD UI: Release the lead detector along with the camera and navigation widgets.
   def close(self):
     if hasattr(self, "_brake_light_overlay"):
       self._brake_light_overlay.close()
-    self._navigation.close()
+    if hasattr(self, "_navigation"):
+      self._navigation.close()
     super().close()
 
   def _switch_stream_if_needed(self, sm):
-    if sm['selfdriveState'].experimentalMode and WIDE_CAM in self.available_streams:
+    if sm['carParams'].openpilotLongitudinalControl and WIDE_CAM in self.available_streams:
       v_ego = sm['carState'].vEgo
       if v_ego < WIDE_CAM_MAX_SPEED:
         target = WIDE_CAM
@@ -332,7 +349,9 @@ class AugmentedRoadView(CameraView):
     # Update device camera if not already set
     sm = ui_state.sm
     if not self.device_camera and sm.seen['narrowRoadCameraState'] and sm.seen['deviceState']:
-      self.device_camera = DEVICE_CAMERAS[(str(sm['deviceState'].deviceType), str(sm['narrowRoadCameraState'].sensor))]
+      # KYD UI: an unknown camera config can still use the default projection.
+      camera_key = (str(sm['deviceState'].deviceType), str(sm['narrowRoadCameraState'].sensor))
+      self.device_camera = DEVICE_CAMERAS.get(camera_key)
 
     # Check if camera calibration data is available and valid
     if not (sm.updated["extrinsicsCalibration"] and sm.valid['extrinsicsCalibration']):
@@ -353,8 +372,6 @@ class AugmentedRoadView(CameraView):
 
   def _calc_frame_matrix(self, rect: rl.Rectangle) -> np.ndarray:
     # Get camera configuration
-    calib_time = ui_state.sm.recv_frame['extrinsicsCalibration']
-    current_dims = (self._content_rect.width, self._content_rect.height)
     device_camera = self.device_camera or DEFAULT_DEVICE_CAMERA
     is_wide_camera = self.stream_type == WIDE_CAM
     intrinsic = device_camera.wide_road.intrinsics if is_wide_camera else device_camera.narrow_road.intrinsics
@@ -364,11 +381,11 @@ class AugmentedRoadView(CameraView):
     else:
       zoom = np.interp(ui_state.sm['carState'].vEgo, [10, 30], [0.8, 1.0])
 
-    # Calibration matrices are replaced by _update_calibration; camera configs are constant.
-    # Include position as well as size, since overlay coordinates use the viewport origin.
-    cache_key = (calib_time, self._content_rect.x, self._content_rect.y, *current_dims,
-                 self.stream_type, zoom, id(device_camera), id(calibration))
-    if self._cached_matrix is not None and self._frame_matrix_cache_key == cache_key:
+    # KYD UI: match the cache to the exact viewport, active camera and calibration.
+    cache_key = (ui_state.sm.recv_frame['extrinsicsCalibration'], self._content_rect.x, self._content_rect.y,
+                 self._content_rect.width, self._content_rect.height, self.stream_type, zoom,
+                 id(device_camera), id(calibration))
+    if cache_key == self._matrix_cache_key and self._cached_matrix is not None:
       return self._cached_matrix
 
     # Calculate transforms for vanishing point
@@ -412,7 +429,7 @@ class AugmentedRoadView(CameraView):
       [0.0, 0.0, 1.0]
     ])
     self._model_renderer.set_transform(video_transform @ calib_transform)
-    self._frame_matrix_cache_key = cache_key
+    self._matrix_cache_key = cache_key
 
     return self._cached_matrix
 

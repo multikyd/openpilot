@@ -1,3 +1,4 @@
+# KYD UI: C4 HUD geometry and advisory selection.
 """Shared geometry for the 536x240 C4 mici HUD, in logical UI pixels."""
 from dataclasses import dataclass
 import math
@@ -13,7 +14,8 @@ def left_car_box(x, y):
 
 
 def lower_notice_box(x, y, height):
-  return (x+LEFT_CENTER-41, y+150, 82, min(90, max(0, height-154)))
+  # The car silhouette ends at y=147. Leave two pixels above and below the notice.
+  return (x+LEFT_CENTER-41, y+149, 82, min(89, max(0, height-151)))
 
 
 def gap_bar_boxes(x, y):

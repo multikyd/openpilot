@@ -1,6 +1,6 @@
 from typing import cast
 import math, dataclasses
-from tinygrad.uop.ops import UOp, PatternMatcher, UPat, Ops, all_metadata, broadcast_axes
+from tinygrad.uop.ops import UOp, PatternMatcher, UPat, Ops, broadcast_axes
 from tinygrad.helpers import argsort
 from tinygrad.dtype import dtypes, sum_acc_dtype
 from tinygrad.function import renumber_invalid_outputs
@@ -23,11 +23,11 @@ def call_gradient(ctx:UOp, k:UOp, needed:set[int]) -> tuple[UOp|None, ...]:
              if st.op is Ops.STORE and st.src[0].unsharded_base.op is Ops.PARAM} if fxn.op is Ops.SINK and fxn.arg is None else {}
   if k.arg.grad_fxn is not None:
     real = [g.clone(device=args[i].device) if g.device is None else g
-            for i,g in enumerate(ctx.src if ctx.op is Ops.SINK else (ctx,)) if g.op is not Ops.NOOP]
+            for i,g in enumerate(ctx.src) if g.op is not Ops.NOOP]
     git = iter(k.arg.grad_fxn(*real, call=k) if len(real) > 1 else k.arg.grad_fxn(real[0], k))
     return (None,) + tuple(None if i in outputs else next(git) for i in range(len(args)))
   assert outputs, f"expected a CALL with output STOREs or a grad_fxn, got {fxn.op}"
-  params = {p.arg.slot:p for p in fxn.toposort(enter_calls=False) if p.op is Ops.PARAM and p.arg.slot >= 0}
+  params = {p.arg.slot:p for p in fxn.toposort() if p.op is Ops.PARAM and p.arg.slot >= 0}
   grad_args = tuple(ctx.src[i] for i in outputs)
   root_grad = UOp.sink(*[g if g.device is None else g.param_like(len(args)+i) for i,g in enumerate(grad_args)])
   grads = compute_gradient(UOp.sink(*[st.src[1] for st in outputs.values()]), root_grad, set(params.values()))
@@ -41,7 +41,7 @@ def call_gradient(ctx:UOp, k:UOp, needed:set[int]) -> tuple[UOp|None, ...]:
   args += grad_args
   bwd_body = renumber_invalid_outputs(bwd_body)
   # Compact this scope's PARAMs, capturing free Variables as inputs.
-  used = sorted((p for p in bwd_body.toposort(enter_calls=False) if p.op is Ops.PARAM), key=lambda p:p.arg.slot)
+  used = sorted((p for p in bwd_body.toposort() if p.op is Ops.PARAM), key=lambda p:p.arg.slot)
   bwd_args = [p if p.arg.slot < 0 else args[p.arg.slot] for p in used]
   bwd_body = bwd_body.substitute({p:p.replace(arg=dataclasses.replace(p.arg, slot=i, name=None, val=None))
                                   for i,p in enumerate(used)}, walk=True)
@@ -52,26 +52,25 @@ def call_gradient(ctx:UOp, k:UOp, needed:set[int]) -> tuple[UOp|None, ...]:
 def partial_store_gradient(ctx:UOp, dest:UOp, view:UOp):
   # A write through a non-overlapping view replaces only that region of the returned state.
   path, base = [], view
-  while base is not dest and base.op in {Ops.RESHAPE, Ops.SHRINK, Ops.PERMUTE, Ops.FLIP, Ops.PAD}:
+  while base is not dest and base.op in {Ops.RESHAPE, Ops.SHRINK, Ops.PERMUTE, Ops.PAD}:
     path.append(base)
     base = base.src[0]
   if base is not dest: return None
   grad = ctx
   for mop in reversed(path): grad = mop.replace(src=(grad,)+mop.src[1:])
-  mask = grad.const_like(1)
-  for mop in path: mask = pm_gradient.rewrite(mop, ctx=mask)[0]
+  mask = compute_gradient(view, grad.const_like(1), {dest})[dest]
   return mask.cast(dtypes.bool).where(0, ctx), grad
 
 # ctx is grad_output
 pm_gradient = PatternMatcher([
   (UPat(Ops.CAST, name="ret"), lambda ctx, ret: (ctx.cast(ret.src[0].dtype),)),
-  (UPat(Ops.RECIPROCAL, name="ret"), lambda ctx, ret: (-ctx * ret * ret,)),
+  (UPat(Ops.RECIP, name="ret"), lambda ctx, ret: (-ctx * ret * ret,)),
   (UPat(Ops.SIN, name="ret"), lambda ctx, ret: ((math.pi/2 - ret.src[0]).sin() * ctx,)),
   (UPat(Ops.LOG2, name="ret"), lambda ctx, ret: (ctx / (ret.src[0] * math.log(2)),)),
   (UPat(Ops.EXP2, name="ret"), lambda ctx, ret: (ret * ctx * math.log(2),)),
   (UPat(Ops.SQRT, name="ret"), lambda ctx, ret: (ctx / (ret*2),)),
   (UPat(Ops.TRUNC), lambda ctx: (ctx.const_like(0),)),
-  (UPat((Ops.CMPLT, Ops.CMPNE)), lambda: (None, None)),
+  (UPat((Ops.CMPLT, Ops.CMPEQ)), lambda: (None, None)),
   (UPat(Ops.ADD), lambda ctx: (ctx, ctx)),
   (UPat(Ops.POW, name="ret", src=(UPat.var("b"), UPat.var("e"))), lambda ctx, ret, b, e:
     (ctx * e.eq(0).where(e, e*b.pow(e-1)), ctx * b.eq(0).where((e<0).where(ret.const_like(-math.inf), 0), ret*b.log2()*math.log(2.0)))),
@@ -85,9 +84,8 @@ pm_gradient = PatternMatcher([
   (UPat(Ops.RESHAPE, name="ret"), lambda ctx, ret: (ctx.reshape(ret.src[0].shape), None)),
   (UPat(Ops.EXPAND), lambda ctx: (ctx, None)),
   (UPat(Ops.PAD, name="ret"), lambda ctx, ret: (ctx.shrink(tuple([(p[0], s+p[0]) for s,p in zip(ret.src[0].shape, ret.marg)])), None, None)),
-  (UPat(Ops.SHRINK, name="ret"), lambda ctx, ret: (ctx.pad(tuple([(p[0], s-p[0]-p[1]) for s,p in zip(ret.src[0].shape, ret.marg)])), None, None)),
-  (UPat(Ops.PERMUTE, name="ret"), lambda ctx, ret: (ctx.permute(argsort(ret.marg)),)),
-  (UPat(Ops.FLIP, name="ret"), lambda ctx, ret: (ctx.flip([i for i,x in enumerate(ret.marg) if x]),)),
+  (UPat(Ops.SHRINK, name="ret"), lambda ctx, ret: (ctx._mop(Ops.PAD, tuple((p[0], s) for s,p in zip(ret.src[0].shape, ret.marg))), None, None)),
+  (UPat(Ops.PERMUTE, name="ret"), lambda ctx, ret: (ctx.permute(argsort(ret.marg)), None)),
   (UPat(Ops.STACK, name="ret"), lambda ctx, ret: tuple(ctx[i] for i in range(len(ret.src)))),
   (UPat(Ops.COPY, name="ret"), lambda ctx, ret: (ctx.copy_to_device(ret.src[0].device),) + (None,) * (len(ret.src)-1)),
   (UPat(Ops.UNSHARD, name="ret"), lambda ctx, ret: ctx.shard(ret.device, ret.axis).src),
@@ -137,9 +135,4 @@ def compute_gradient(root:UOp, root_grad:UOp, targets:set[UOp]) -> dict[UOp, UOp
                                  n if p.op is Ops.NOOP else p for p, n in zip(grads[k].src, v.src)])
         else: grads[k] = grads[k] + v
       else: grads[k] = v
-      if len(forward_metadata:=all_metadata.get(t0, ())):
-        backward_metadata = tuple(dataclasses.replace(x, backward=True) for x in forward_metadata)
-        # we add the backward metadata to everything new in the graph
-        for bw_uop in v.toposort(lambda x: x not in (t0, *t0.src, grads[t0])):
-          all_metadata[bw_uop] = all_metadata.get(bw_uop, ())+backward_metadata
   return grads

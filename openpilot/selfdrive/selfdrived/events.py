@@ -174,6 +174,7 @@ class UserSoftDisableAlert(SoftDisableAlert):
   def __init__(self, alert_text_2: str):
     super().__init__(alert_text_2),
     self.alert_text_1 = "openpilot will disengage"
+    self.audible_alert = AudibleAlert.warningImmediateUser
 
 
 class ImmediateDisableAlert(Alert):
@@ -181,7 +182,14 @@ class ImmediateDisableAlert(Alert):
     super().__init__("TAKE CONTROL IMMEDIATELY", alert_text_2,
                      AlertStatus.critical, AlertSize.full,
                      Priority.HIGHEST, VisualAlert.steerRequired,
-                     AudibleAlert.warningImmediate, 4.),
+                     AudibleAlert.warningImmediateSystem, 4.),
+
+
+# user-triggered ImmediateDisable, plays the driver sound
+class UserImmediateDisableAlert(ImmediateDisableAlert):
+  def __init__(self, alert_text_2: str):
+    super().__init__(alert_text_2)
+    self.audible_alert = AudibleAlert.warningImmediateUser
 
 
 class EngagementAlert(Alert):
@@ -238,7 +246,7 @@ def soft_disable_alert(alert_text_2: str, *, audible_alert: int | None = None) -
 def user_soft_disable_alert(alert_text_2: str) -> AlertCallbackType:
   def func(CP: car.CarParams, CS: car.CarState, sm: messaging.SubMaster, metric: bool, soft_disable_time: int, personality) -> Alert:
     if soft_disable_time < int(0.5 / DT_CTRL):
-      return ImmediateDisableAlert(alert_text_2)
+      return UserImmediateDisableAlert(alert_text_2)
     return UserSoftDisableAlert(alert_text_2)
   return func
 
@@ -655,12 +663,6 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
     ET.SOFT_DISABLE: soft_disable_alert("locationd Temporary Error", audible_alert=AudibleAlert.none),
   },
 
-  EventName.locationdPermanentError: {
-    ET.NO_ENTRY: NoEntryAlert("locationd Permanent Error"),
-    ET.IMMEDIATE_DISABLE: ImmediateDisableAlert("locationd Permanent Error"),
-    ET.PERMANENT: NormalPermanentAlert("locationd Permanent Error"),
-  },
-
   # openpilot tries to learn certain parameters about your car by observing
   # how the car behaves to steering inputs from both human and openpilot driving.
   # This includes:
@@ -672,12 +674,6 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
   EventName.paramsdTemporaryError: {
     ET.NO_ENTRY: paramsd_invalid_alert,
     ET.SOFT_DISABLE: soft_disable_alert("paramsd Temporary Error"),
-  },
-
-  EventName.paramsdPermanentError: {
-    ET.NO_ENTRY: NoEntryAlert("paramsd Permanent Error"),
-    ET.IMMEDIATE_DISABLE: ImmediateDisableAlert("paramsd Permanent Error"),
-    ET.PERMANENT: NormalPermanentAlert("paramsd Permanent Error"),
   },
 
   # ********** events that affect controls state transitions **********
@@ -692,6 +688,14 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
 
   EventName.pcmDisable: {
     ET.USER_DISABLE: EngagementAlert(AudibleAlert.disengage),
+  },
+
+  EventName.startupCruiseCanceled: {
+    ET.PERMANENT: Alert(
+      "Cruise Canceled",
+      "Cruise was on at startup",
+      AlertStatus.normal, AlertSize.mid,
+      Priority.MID, VisualAlert.none, AudibleAlert.disengage, 3.),
   },
 
   EventName.buttonCancel: {

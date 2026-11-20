@@ -1,3 +1,4 @@
+# KYD UI: Traffic signal lamp and countdown presentation.
 """Direction-specific signal lamps and timers, independent of graphics."""
 import math
 

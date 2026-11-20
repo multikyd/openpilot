@@ -6,7 +6,7 @@ import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 import numpy as np
-import pyray as rl
+import raylib_nb as rl
 from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.controls.radard import RADAR_TO_CAMERA
 from openpilot.selfdrive.ui.onroad.brake_vehicle_model import BrakeVehicleModel, fuse_observation

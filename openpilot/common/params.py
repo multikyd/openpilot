@@ -1,7 +1,6 @@
 import sys
 import json
 import ctypes
-import threading
 import weakref
 import builtins
 import datetime
@@ -116,7 +115,6 @@ class UnknownKeyName(Exception):
 class Params:
   def __init__(self, d=""):
     path = ensure_bytes(d)
-    self._write_lock = threading.Lock()
     self.p = params_create(path, len(path))
     self._finalizer = weakref.finalize(self, params_destroy, self.p)
     self._finalizer.atexit = False  # daemon threads can still be using live Params handles during interpreter shutdown
@@ -173,12 +171,10 @@ class Params:
     """Write a parameter. block=True waits until it is persisted to disk."""
     k = self.check_key(key)
     value = self._put_cast(k, dat)
-    with self._write_lock:
-      params_put(self.p, k, value, len(value), block)
+    params_put(self.p, k, value, len(value), block)
 
   def put_bool(self, key, val, block=False):
-    with self._write_lock:
-      params_put_bool(self.p, self.check_key(key), val, block)
+    params_put_bool(self.p, self.check_key(key), val, block)
 
   def remove(self, key):
     params_remove(self.p, self.check_key(key))

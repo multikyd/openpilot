@@ -1,4 +1,4 @@
-import pyray as rl
+import raylib_nb as rl
 from openpilot.cereal import log
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.selfdrive.ui.ui_state import ui_state
@@ -31,6 +31,7 @@ class LongIndicator(Widget):
   def set_should_draw(self, should_draw: bool):
     self._should_draw = should_draw
 
+  # KYD UI: Limit this indicator to engaged longitudinal control and keep it clear of alerts.
   def _render(self, rect: rl.Rectangle) -> None:
     sm = ui_state.sm
     if sm.recv_frame['selfdriveState'] < ui_state.started_frame or not sm['selfdriveState'].enabled or not ui_state.has_longitudinal_control:
@@ -45,6 +46,7 @@ class LongIndicator(Widget):
     self._draw_lead_car(rect, alpha)
     self._draw_distance_bars(rect, alpha, visible)
 
+  # KYD UI: Use plan source to show the local lead-car state.
   def _draw_lead_car(self, rect: rl.Rectangle, alpha: float) -> None:
     sm = ui_state.sm
     plan = sm['longitudinalPlan']
@@ -59,6 +61,7 @@ class LongIndicator(Widget):
     self._draw_centered(white, rect, 100, white_alpha * alpha)
     self._draw_centered(green, rect, 100, green_alpha * alpha)
 
+  # KYD UI: Keep the personality highlight and gas-override blink.
   def _draw_distance_bars(self, rect: rl.Rectangle, alpha: float, visible: bool) -> None:
     sm = ui_state.sm
     now = rl.get_time()
@@ -71,6 +74,7 @@ class LongIndicator(Widget):
       self._personality_changed_time = now
     highlight = now - self._personality_changed_time < HIGHLIGHT_TIME
 
+    # KYD UI: animate the applied gap when the driver overrides with the accelerator.
     # blink at double the turn signal rate (2.67 Hz) while overriding the gas
     overriding = any(e.name == log.OnroadEvent.EventName.gasPressedOverride for e in sm['onroadEvents'])
     blink = 0.35 / 0.9 if overriding and now % 0.375 > 0.1875 else 1.0
@@ -83,6 +87,7 @@ class LongIndicator(Widget):
       self._draw_centered(white, rect, y, (0.35 * (1 - active) + 0.9 * (active - green_alpha) * blink) * alpha)
       self._draw_centered(green, rect, y, green_alpha * blink * alpha)
 
+  # KYD UI: Anchor on the video rather than centering in the whole viewport.
   @staticmethod
   def _draw_centered(texture: rl.Texture, rect: rl.Rectangle, y: float, alpha: float) -> None:
     pos = rl.Vector2(rect.x + 46 - texture.width / 2, rect.y + y - texture.height / 2)

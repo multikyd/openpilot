@@ -1,6 +1,6 @@
 import colorsys
 import numpy as np
-import pyray as rl
+import raylib_nb as rl
 from openpilot.cereal import log, messaging
 from opendbc.car.structs import car
 from dataclasses import dataclass, field
@@ -10,7 +10,7 @@ from openpilot.selfdrive.controls.radard import RADAR_TO_CAMERA
 from openpilot.selfdrive.locationd.calibrationd import HEIGHT_INIT
 from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus
 from openpilot.system.ui.lib.application import gui_app
-from openpilot.system.ui.lib.shader_polygon import draw_polygon, Gradient
+from openpilot.system.ui.lib.polygon import draw_polygon, Gradient
 from openpilot.system.ui.widgets import Widget
 
 CLIP_MARGIN = 500
@@ -19,6 +19,7 @@ MAX_DRAW_DISTANCE = 100.0
 LEAD_BAR_LENGTH = 12.0  # px
 LEAD_BAR_WIDTH = 1.8  # m
 
+# KYD UI: Use distinct lane-mode and model-mode path gradients.
 THROTTLE_COLORS = [
   rl.Color(13, 248, 122, 102),   # HSLF(148/360, 0.94, 0.51, 0.4)
   rl.Color(114, 255, 92, 89),    # HSLF(112/360, 1.0, 0.68, 0.35)
@@ -46,6 +47,7 @@ LL_NO_THROTTLE_COLORS = [
 
 # Hyundai camera CAN color classes: 1 white, 2 yellow, 3 blue.
 # modelV2 provides geometry/probability, not painted-line color classification.
+# KYD UI: Color lane markings, road edges and lane-change readiness from KYD data.
 UNKNOWN_LANE_RGB = (160, 160, 160)
 ROAD_EDGE_RGB = (255, 55, 55)
 WHITE_LANE_RGB = (255, 255, 255)
@@ -74,11 +76,13 @@ def lane_line_rgb(index, left_lane, right_lane, valid=True, *, left_ready=False,
 
 
 @dataclass
+# KYD UI: Cache raw and projected lane, edge and path points.
 class ModelPoints:
   raw_points: np.ndarray = field(default_factory=lambda: np.empty((0, 3), dtype=np.float32))
   projected_points: np.ndarray = field(default_factory=lambda: np.empty((0, 2), dtype=np.float32))
 
 
+# KYD UI: Store the radar lead projection for the path overlay.
 class LeadVehicle:
   def __init__(self):
     self.bar = np.empty((0, 2), dtype=np.float32)
@@ -87,6 +91,7 @@ class LeadVehicle:
     self.fade_filter = FirstOrderFilter(0.0, 0.1, 1 / gui_app.target_fps)
 
 
+# KYD UI: Render KYD lane/model paths and lane markings on Nightly polygon drawing.
 class ModelRenderer(Widget):
   def __init__(self):
     super().__init__()
@@ -129,12 +134,14 @@ class ModelRenderer(Widget):
       cp = messaging.log_from_bytes(car_params, car.CarParams)
       self._longitudinal_control = cp.openpilotLongitudinalControl
 
+  # KYD UI: Update the projection from the C4 camera viewport.
   def set_transform(self, transform: np.ndarray):
     transform = transform.astype(np.float32)
     if not np.array_equal(self._car_space_transform, transform):
       self._car_space_transform = transform
       self._transform_dirty = True
 
+  # KYD UI: Refresh projection and radar lead data at their own update rates.
   def _render(self, rect: rl.Rectangle):
     sm = ui_state.sm
 
@@ -186,6 +193,7 @@ class ModelRenderer(Widget):
     else:
       self._lead_vehicles = [LeadVehicle(), LeadVehicle()]
 
+  # KYD UI: Cache model points for use with the local viewport projection.
   def _update_raw_points(self, model):
     """Update raw 3D points from model data"""
     self._path.raw_points = np.array([model.position.x, model.position.y, model.position.z], dtype=np.float32).T
@@ -200,6 +208,7 @@ class ModelRenderer(Widget):
     self._road_edge_stds = np.array(model.roadEdgeStds, dtype=np.float32)
     self._acceleration_x = np.array(model.acceleration.x, dtype=np.float32)
 
+  # KYD UI: Use radar lead distance and position to align the path projection.
   def _update_leads(self, sm):
     plan = sm['longitudinalPlan']
     if plan.longitudinalPlanSource == log.LongitudinalPlan.LongitudinalPlanSource.e2e and len(sm['modelV2'].leadsV3) > 1:
@@ -226,6 +235,7 @@ class ModelRenderer(Widget):
       if visible:
         lead.bar = self._get_lead_bar(lane, lead.d_filter.update(d_rel), lead.y_filter.update(y_rel))
 
+  # KYD UI: match the projected lead bar to the local radar lead geometry.
   def _get_lead_bar(self, lane, d_rel, y_rel):
     # bar on the road behind the lead, following the lane
     x = np.array([d_rel, d_rel - min(6.0, 0.25 * d_rel)])
@@ -240,6 +250,7 @@ class ModelRenderer(Widget):
     bar[[1, 2]] = far + (near - far) * np.clip(length, 3.0, LEAD_BAR_LENGTH) / length
     return bar.astype(np.float32)
 
+  # KYD UI: Project lane lines, road edges and a lead-limited path.
   def _update_model(self, lead, path_x_array, update_lane_lines=True):
     """Update model visualization data based on model message"""
     max_distance = np.clip(path_x_array[-1], MIN_DRAW_DISTANCE, MAX_DRAW_DISTANCE)
@@ -283,6 +294,7 @@ class ModelRenderer(Widget):
 
     self._update_experimental_gradient()
 
+  # KYD UI: Build the path gradient from the model trajectory.
   def _update_experimental_gradient(self):
     """Pre-calculate experimental mode gradient colors"""
     if not self._experimental_mode:
@@ -329,6 +341,7 @@ class ModelRenderer(Widget):
     alpha = float(np.clip(prob, 0.0, 0.7)) if np.isfinite(prob) else 0.0
     return rl.Color(*rgb, int(alpha * 255))
 
+  # KYD UI: Show recognized lane colors and the green lane-change readiness indication.
   def _draw_lane_lines(self):
     """Paint ego-lane CAN colors and red model road edges independently of torque."""
     offset = np.array([self._rect.x, self._rect.y], dtype=np.float32)
@@ -353,6 +366,7 @@ class ModelRenderer(Widget):
       color = self._get_ll_color(float(1.0-self._road_edge_stds[i]), ROAD_EDGE_RGB)
       draw_polygon(self._rect, road_edge.projected_points + offset, color)
 
+  # KYD UI: Show lane-mode or model-mode coloring without changing steering.
   def _draw_path(self, sm):
     """Draw path with dynamic coloring based on mode and throttle state."""
     if not self._path.projected_points.size:
@@ -394,6 +408,7 @@ class ModelRenderer(Widget):
       else:
         draw_polygon(self._rect, path_pts, gradient=gradient)
 
+  # KYD UI: Keep the local lead indicator behavior near the path.
   def _draw_lead_indicator(self):
     offset = np.array([self._rect.x, self._rect.y], dtype=np.float32)
     for lead in self._lead_vehicles:
@@ -402,6 +417,7 @@ class ModelRenderer(Widget):
       else:
         draw_polygon(self._rect, lead.bar + offset, rl.Color(100, 255, 100, int(255 * lead.fade_filter.x)))
 
+  # KYD UI: Limit the projected path length using KYD geometry.
   @staticmethod
   def _get_path_length_idx(pos_x_array: np.ndarray, path_height: float) -> int:
     """Get the index corresponding to the given path height"""

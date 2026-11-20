@@ -42,7 +42,7 @@ class LateralPlanner:
 
     # Vehicle model parameters used to calculate lateral movement of car
     self.factor1 = CP.wheelbase - CP.centerToFront
-    self.factor2 = (CP.centerToFront * CP.mass) / (CP.wheelbase * CP.tireStiffnessRear)
+    self.factor2 = CP.centerToFront / (CP.wheelbase * CP.tireStiffnessRearPerMass)
     self.last_cloudlog_t = 0
     self.solution_invalid_cnt = 0
 

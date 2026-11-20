@@ -1,4 +1,5 @@
-#pragma once
+#ifndef BOARD_MAIN_DEFINITIONS_H
+#define BOARD_MAIN_DEFINITIONS_H
 
 #include "main_declarations.h"
 
@@ -10,8 +11,11 @@ uint16_t reset_flags = 0U;
 
 // heartbeat state
 uint32_t heartbeat_counter = 0;
+uint32_t heartbeat_tick_counter = 0;        // 8Hz
 bool heartbeat_lost = false;
 bool heartbeat_disabled = false;            // set over USB
 
 // siren state
 bool siren_enabled = false;
+
+#endif  // BOARD_MAIN_DEFINITIONS_H

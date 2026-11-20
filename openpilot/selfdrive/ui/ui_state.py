@@ -10,13 +10,17 @@ from openpilot.common.params import Params
 from openpilot.common.realtime import drop_realtime
 from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.ui.lib.prime_state import PrimeState
+from openpilot.selfdrive.ui.lib.notifications import Notifications
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.common.hardware import HARDWARE, PC
-from openpilot.common.hardware.usb import cable_connected, get_usb_state, is_chestnut_usb_id
+from openpilot.common.hardware.usb import cable_connected, get_usb_state, is_chestnut_usb_id, usb_host_connected
 from openpilot.selfdrive.modeld.helpers import chestnut_compiled
 from openpilot.selfdrive.selfdrived.alertmanager import OFFROAD_ALERTS
 
 BACKLIGHT_OFFROAD = 65 if HARDWARE.get_device_type() == "mici" else 50
+BACKLIGHT_MIN = 30  # the lowest backlight the display shows properly
+# auto brightness goes below the backlight's floor by dimming the UI, down to 40% black
+BRIGHTNESS_MIN = BACKLIGHT_MIN * 0.6 if HARDWARE.get_device_type() == "mici" else BACKLIGHT_MIN
 PARAM_UPDATE_TIME = 1 / 5.0
 
 
@@ -64,7 +68,9 @@ class UIState:
         "managerState",
         "selfdriveState",
         "longitudinalPlan",
+        # KYD HUD path and navigation telemetry.
         "lateralPlan",
+        "kisaNavigation",
         "gpsLocationExternal",
         "gpsLocation",
         "navInstruction",
@@ -73,24 +79,24 @@ class UIState:
         "vehicleParameters",
         "testJoystick",
         "rawAudioData",
-        "kisaNavigation",
       ]
     )
 
     self.prime_state = PrimeState()
+    self.notifications = Notifications()
 
     # UI Status tracking
     self.status: UIStatus = UIStatus.DISENGAGED
-    self.started_frame: int = 0
+    self._started_frame: int = 0
     self.started_time: float = 0.0
     self._engaged_prev: bool = False
     self._started_prev: bool = False
 
     # Core state variables
     self.is_metric: bool = self.params.get_bool("IsMetric")
+    self.initial_cruise_speed: int = self.params.get("InitialCruiseSpeedKph", return_default=True)
     self.is_release = self.params.get_bool("IsReleaseBranch")
     self.always_on_dm: bool = self.params.get_bool("AlwaysOnDM")
-    self.experimental_mode: bool = self.params.get_bool("ExperimentalMode")
     self.navigation_enabled: bool = self.params.get_bool("NavigationEnabled")
     self.nav_destination_set: bool = self.params.get("NavDestination") is not None
     self.chestnut_present: bool = False
@@ -106,18 +112,17 @@ class UIState:
     self.started: bool = False
     self.ignition: bool = False
     self.recording_audio: bool = False
-    self._record_audio_enabled: bool = False
-    self._display_param_update_time: float = 0.0
     self.panda_type: log.PandaState.PandaType = log.PandaState.PandaType.unknown
     self.personality: log.LongitudinalPersonality = log.LongitudinalPersonality.standard
     self.has_longitudinal_control: bool = False
+    self.personality_param: int = log.LongitudinalPersonality.standard
     self.is_body: bool | None = False
     self.CP: car.CarParams | None = None
     self.light_sensor: float = -1.0
 
     self._params_thread: threading.Thread | None = None
 
-    # Kisa state variables
+    # KYD HUD vehicle state
     self.accel: float = 0.0
     self.standstillElapsedTimer: int = 0
     self.activeLaneLine: bool = False
@@ -146,10 +151,10 @@ class UIState:
     self.rProb: float = 0.0
 
     self.enabled: bool = False
-    self.cruise_gap: int = self.params.get("LongitudinalPersonality") + 1
-    self.camera_scc: int = self.params.get("HyundaiCameraCruiseMode")
+    self.cruise_gap: int = self.params.get("LongitudinalPersonality", return_default=True) + 1
+    self.camera_scc: int = self.params.get("HyundaiCameraCruiseMode", return_default=True)
 
-    # Carrot
+    # KYD route guidance
     self.guidance_level: int = 0
     self.xSpdLimit: int = 0
     self.xSpdLimitOrg: int = 0
@@ -165,7 +170,6 @@ class UIState:
     self._offroad_transition_callbacks: list[Callable[[], None]] = []
     self._engaged_transition_callbacks: list[Callable[[], None]] = []
     self._on_body_changed_callbacks: list[Callable[[], None]] = []
-    self._update_display_params()
 
   def add_offroad_transition_callback(self, callback: Callable[[], None]):
     self._offroad_transition_callbacks.append(callback)
@@ -186,15 +190,22 @@ class UIState:
   def is_offroad(self) -> bool:
     return not self.started
 
+  @property
+  def started_frame(self) -> int:
+    """Start frame for the KYD overlays that also accept the first frame."""
+    return self._started_frame
+
+  def received_since_started(self, service: str) -> bool:
+    return self.sm.recv_frame[service] > self._started_frame
+
   def update(self) -> None:
     self.prime_state.start()  # start thread after manager forks ui
+    self.notifications.start()
     if self._params_thread is None:
       self._params_thread = threading.Thread(target=self._params_refresh_worker, daemon=True)
       self._params_thread.start()
 
     self.sm.update(0)
-    if time.monotonic() - self._display_param_update_time >= 1.0:
-      self._update_display_params()
     self._update_state()
     self._update_status()
     self._update_chestnut_state()
@@ -235,6 +246,7 @@ class UIState:
       self.is_body = self.CP.notCar
       for callback in self._on_body_changed_callbacks:
         callback()
+
     # Update recording audio state
     self.recording_audio = self._record_audio_enabled and self.started
 
@@ -294,7 +306,6 @@ class UIState:
         self.status = UIStatus.OVERRIDE
       else:
         self.status = UIStatus.ENGAGED if ss.enabled or self.latEnabled else UIStatus.DISENGAGED
-
       self.enabled = ss.enabled
 
     # Check for engagement state changes
@@ -305,11 +316,11 @@ class UIState:
 
     # Handle onroad/offroad transition
     if self.started != self._started_prev or self.sm.frame == 1:
+      self.status = UIStatus.DISENGAGED
       if self.started:
-        self.status = UIStatus.DISENGAGED
-        self.started_frame = self.sm.frame
+        self._started_frame = self.sm.frame
         self.started_time = time.monotonic()
-        self.chestnut_present = self.sm["deviceState"].chestnutPresent or (self.chestnut_compiled and self.usb_connected)
+        self.chestnut_present = self.sm["deviceState"].chestnutPresent or (self.chestnut_compiled and self.usb_connected and not usb_host_connected())
 
       for callback in self._offroad_transition_callbacks:
         callback()
@@ -325,7 +336,7 @@ class UIState:
                              ChestnutState.UNCOMPILED if detected else ChestnutState.DISCONNECTED)
       return
 
-    model_seen = self.sm.recv_frame["modelV2"] > self.started_frame
+    model_seen = self.received_since_started("modelV2")
     if not self.chestnut_present:
       self.chestnut_state = ChestnutState.DISCONNECTED
     elif not self.chestnut_compiled:
@@ -339,13 +350,6 @@ class UIState:
     else:
       self.chestnut_state = ChestnutState.ACTIVE
 
-  def _update_display_params(self) -> None:
-    # These preferences need not hit parameter storage on every rendered frame.
-    self._record_audio_enabled = self.params.get_bool("RecordAudio")
-    self.is_metric = self.params.get_bool("IsMetric")
-    self.always_on_dm = self.params.get_bool("AlwaysOnDM")
-    self._display_param_update_time = time.monotonic()
-
   def update_params(self) -> None:
     # For slower operations
     # Update longitudinal control state
@@ -357,11 +361,11 @@ class UIState:
       else:
         self.has_longitudinal_control = self.CP.openpilotLongitudinalControl
 
-    self._record_audio_enabled = self.params.get_bool("RecordAudio")
-    self.recording_audio = self._record_audio_enabled and self.started
+    self.recording_audio = self.params.get_bool("RecordAudio") and self.started
     self.is_metric = self.params.get_bool("IsMetric")
+    self.initial_cruise_speed = self.params.get("InitialCruiseSpeedKph", return_default=True)
     self.always_on_dm = self.params.get_bool("AlwaysOnDM")
-    self.experimental_mode = self.params.get_bool("ExperimentalMode")
+    self.personality_param = self.params.get("LongitudinalPersonality", return_default=True)
     self.navigation_enabled = self.params.get_bool("NavigationEnabled")
     self.nav_destination_set = self.params.get("NavDestination") is not None
     self.chestnut_active = self.params.get("ChestnutActive")
@@ -402,8 +406,9 @@ class Device:
     self._brightness_event = threading.Event()
     self._brightness_target: int = 0
 
-    self.custom_brightness: int = Params().get("DisplayBrightnessPct")
-    self._default_custom_brightness = self.custom_brightness
+    # KYD uses a separate user-configured brightness percentage.
+    self._default_custom_brightness = Params().get("DisplayBrightnessPct", return_default=True)
+    self.custom_brightness = self._default_custom_brightness
 
   @property
   def awake(self) -> bool:
@@ -467,11 +472,11 @@ class Device:
       else:
         clipped_brightness = ((clipped_brightness + 16.0) / 116.0) ** 3.0
 
-      clipped_brightness = float(np.interp(clipped_brightness, [0, 1], [30, 100]))
+      clipped_brightness = float(np.interp(clipped_brightness, [0, 1], [BRIGHTNESS_MIN, 100]))
 
-    brightness = round(self._brightness_filter.update(clipped_brightness))
-    brightness = round(brightness * self.custom_brightness / 100)
-    brightness = round(np.clip(brightness, 10, 100))
+    brightness = float(np.clip(self._brightness_filter.update(clipped_brightness) * self.custom_brightness / 100, 10, 100))
+    gui_app.set_dim(1 - brightness / BACKLIGHT_MIN)
+    brightness = round(max(brightness, BACKLIGHT_MIN))
     if not self._awake:
       brightness = 0
 

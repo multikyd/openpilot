@@ -72,7 +72,7 @@ class LabelControlsTest(unittest.TestCase):
     ray.Rectangle = lambda x,y,w,h: N(x=x,y=y,width=w,height=h)
     ray.Vector2 = lambda x,y: N(x=x,y=y)
     cls.now = 10.
-    dependencies = {'pyray':ray,
+    dependencies = {'raylib_nb':ray,
       'openpilot.selfdrive.ui.mici.onroad':N(SIDE_PANEL_WIDTH=80),
       'openpilot.selfdrive.ui.mici.onroad.hud_layout':N(SPEED_HEADER_HEIGHT=70),
       'openpilot.selfdrive.ui.onroad.brake_labels':labels,
@@ -136,7 +136,7 @@ class LabelControlsTest(unittest.TestCase):
         base_release(pos)
     stub=ast.ClassDef(name='View',bases=[ast.Name(id='Base',ctx=ast.Load())],keywords=[],body=[method],decorator_list=[])
     module=ast.fix_missing_locations(ast.Module(body=[stub],type_ignores=[]))
-    env=dict(Base=Base,MousePos=object)
+    env=dict(Base=Base, MousePos=object, ui_state=N(started=False))
     exec(compile(module,'actual_road_release','exec'),env)
     view=env['View']();view._bookmark_icon=N(interacting=lambda:False)
     pos=N(x=490,y=100)

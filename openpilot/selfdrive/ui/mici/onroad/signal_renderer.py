@@ -1,6 +1,7 @@
+# KYD UI: Traffic signal and pass-advice overlays.
 """Horizontal C4 signal bar; large timer and explicit estimated-time styling."""
 import math
-import pyray as rl
+import raylib_nb as rl
 from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.selfdrive.ui.mici.onroad.hud_layout import signal_box
 from openpilot.selfdrive.ui.mici.onroad.signal_presentation import signal_lamps, countdown_rows, next_green_wait, signal_panel_visible, signal_source_label

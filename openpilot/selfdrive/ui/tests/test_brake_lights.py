@@ -332,7 +332,7 @@ class OverlayLifecycleTest(unittest.TestCase):
   def setUpClass(cls):
     ray=MagicMock();ray.Rectangle=lambda x,y,w,h:SimpleNamespace(x=x,y=y,width=w,height=h)
     dependencies={
-      'pyray':ray,
+      'raylib_nb':ray,
       'openpilot.common.swaglog':SimpleNamespace(cloudlog=MagicMock()),
       'openpilot.selfdrive.controls.radard':SimpleNamespace(RADAR_TO_CAMERA=1.52),
       'openpilot.selfdrive.ui.onroad.brake_lights':core,
@@ -359,7 +359,8 @@ class OverlayLifecycleTest(unittest.TestCase):
     self.o.last_submit=100. # no work submission in lifecycle tests
 
   def run_render(self):
-    with patch.object(self.module,'project_search',return_value=(0,0,80,60)):
+    with (patch.object(self.module,'project_search',return_value=(0,0,80,60)),
+          patch.dict(sys.modules, {'openpilot.common.hardware': SimpleNamespace(PC=True)})):
       self.o._render(self.view,self.rect,self.sm,self.config,np.eye(3),0,100.)
 
   def test_stale_radar_camera_or_calibration_clears(self):

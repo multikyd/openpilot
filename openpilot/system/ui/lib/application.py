@@ -1,14 +1,13 @@
 import atexit
-import cffi
 import math
 import os
 import queue
 import time
 import signal
 import sys
-import pyray as rl
+import numpy as np
+import raylib_nb as rl
 import threading
-import platform
 import subprocess
 from contextlib import contextmanager
 from collections.abc import Callable
@@ -46,42 +45,20 @@ RECORD_BITRATE = os.getenv("RECORD_BITRATE", "")  # Target bitrate e.g. "2000k" 
 RECORD_SPEED = int(os.getenv("RECORD_SPEED", "1"))  # Speed multiplier
 OFFSCREEN = os.getenv("OFFSCREEN") == "1"  # Disable FPS limiting for fast offline rendering
 
-GL_VERSION = """
-#version 300 es
-precision highp float;
-"""
-if platform.system() == "Darwin":
-  GL_VERSION = """
-    #version 330 core
-  """
-
 BURN_IN_MODE = "BURN_IN" in os.environ
-BURN_IN_VERTEX_SHADER = GL_VERSION + """
-in vec3 vertexPosition;
-in vec2 vertexTexCoord;
-uniform mat4 mvp;
-out vec2 fragTexCoord;
-void main() {
-  fragTexCoord = vertexTexCoord;
-  gl_Position = mvp * vec4(vertexPosition, 1.0);
-}
-"""
-BURN_IN_FRAGMENT_SHADER = GL_VERSION + """
-in vec2 fragTexCoord;
-uniform sampler2D texture0;
-out vec4 fragColor;
-void main() {
-  vec4 sampled = texture(texture0, fragTexCoord);
-  float intensity = sampled.b;
-  // Map blue intensity to green -> yellow -> red to highlight burn-in risk.
-  vec3 start = vec3(0.0, 1.0, 0.0);
-  vec3 middle = vec3(1.0, 1.0, 0.0);
-  vec3 end = vec3(1.0, 0.0, 0.0);
-  vec3 gradient = mix(start, middle, clamp(intensity * 2.0, 0.0, 1.0));
-  gradient = mix(gradient, end, clamp((intensity - 0.5) * 2.0, 0.0, 1.0));
-  fragColor = vec4(gradient, sampled.a);
-}
-"""
+# a pixel's burn-in risk by its blue, from green to yellow to red
+def _burn_in_colors() -> np.ndarray:
+  """each blue value's color: red rising from 0 to 0.5, then green falling from 0.5 to 1"""
+  value = np.arange(256) / 255
+  colors = np.zeros((256, 4))
+  colors[:, 0] = np.clip(value * 2, 0, 1)
+  colors[:, 1] = 1 - np.clip((value - 0.5) * 2, 0, 1)
+  colors[:, 3] = 1
+  return np.round(colors * 255).astype(np.uint8)
+
+
+BURN_IN_COLORS = _burn_in_colors()
+
 
 DEFAULT_TEXT_SIZE = 60
 DEFAULT_TEXT_COLOR = rl.Color(255, 255, 255, int(255 * 0.9))
@@ -219,6 +196,7 @@ class GuiApplication:
 
     self._fonts: dict[FontWeight, rl.Font] = {}
     self._fallback_fonts: dict[str, rl.Font] = {}
+    self._font_chars: set[str] = set()
     self._width = width if width is not None else GuiApplication._default_width()
     self._height = height if height is not None else GuiApplication._default_height()
 
@@ -233,8 +211,6 @@ class GuiApplication:
     self._scaled_width += self._scaled_width % 2
     self._scaled_height += self._scaled_height % 2
 
-    self._render_texture: rl.RenderTexture | None = None
-    self._burn_in_shader: rl.Shader | None = None
     self._ffmpeg_proc: subprocess.Popen | None = None
     self._ffmpeg_queue: queue.Queue | None = None
     self._ffmpeg_thread: threading.Thread | None = None
@@ -242,7 +218,6 @@ class GuiApplication:
     self._textures: dict[str, rl.Texture] = {}
     self._target_fps: int = _DEFAULT_FPS
     self._last_fps_log_time: float = time.monotonic()
-    self._reset_frame_timings(self._last_fps_log_time)
     self._frame = 0
     self._window_close_requested = False
     self._nav_stack: list[object] = []
@@ -259,6 +234,7 @@ class GuiApplication:
     self._mouse_history: deque[MousePosWithTime] = deque(maxlen=MOUSE_THREAD_RATE)
     self._show_touches = SHOW_TOUCHES
     self._show_fps = SHOW_FPS
+    self._dim_color = rl.BLANK
     self._grid_size = GRID_SIZE
     self._profile_render_frames = PROFILE_RENDER
     self._render_profiler = None
@@ -274,6 +250,10 @@ class GuiApplication:
   def set_show_fps(self, show: bool):
     self._show_fps = show
 
+  def set_dim(self, dim: float):
+    """darken the whole screen, from 0 to 1"""
+    self._dim_color = rl.Color(0, 0, 0, round(255 * min(max(dim, 0.0), 1.0)))
+
   @property
   def show_touches(self) -> bool:
     return self._show_touches
@@ -288,24 +268,21 @@ class GuiApplication:
   def init_window(self, title: str, fps: int = _DEFAULT_FPS):
     with self._startup_profile_context():
       def _close(sig, frame):
-        self.close()
-        sys.exit(0)
+        # between frames: raylib can't draw once closed, and an exit raised inside one of its callbacks is dropped.
+        # a second signal ends it anyway
+        self.request_close()
+        signal.signal(sig, signal.SIG_DFL)
       signal.signal(signal.SIGINT, _close)
+      signal.signal(signal.SIGTERM, _close)
       atexit.register(self.close)
 
-      flags = rl.ConfigFlags.FLAG_MSAA_4X_HINT
       if ENABLE_VSYNC:
-        flags |= rl.ConfigFlags.FLAG_VSYNC_HINT
-      rl.set_config_flags(flags)
+        rl.set_config_flags(rl.ConfigFlags.FLAG_VSYNC_HINT)
 
       rl.init_window(self._scaled_width, self._scaled_height, title)
 
-      needs_render_texture = self._scale != 1.0 or BURN_IN_MODE or RECORD
       if self._scale != 1.0:
         rl.set_mouse_scale(1 / self._scale, 1 / self._scale)
-      if needs_render_texture:
-        self._render_texture = rl.load_render_texture(self._scaled_width, self._scaled_height)
-        rl.set_texture_filter(self._render_texture.texture, rl.TextureFilter.TEXTURE_FILTER_BILINEAR)
 
       if RECORD:
         output_fps = fps * RECORD_SPEED
@@ -315,10 +292,10 @@ class GuiApplication:
           '-nostats',               # Suppress encoding progress
           '-f', 'rawvideo',         # Input format
           '-pix_fmt', 'rgba',       # Input pixel format
-          '-s', f'{self._scaled_width}x{self._scaled_height}',  # Input resolution
+          '-s', 'x'.join(map(str, rl.cpu.screen().shape[1::-1])),  # Input resolution
           '-r', str(fps),           # Input frame rate
           '-i', 'pipe:0',           # Input from stdin
-          '-vf', 'vflip,format=yuv420p',  # Flip vertically and convert to yuv420p
+          '-vf', 'vflip,format=yuv420p',  # The screen's rows are bottom up: flip vertically and convert to yuv420p
           '-r', str(output_fps),    # Output frame rate (for speed multiplier)
           '-c:v', 'libx264',
           '-preset', 'veryfast',
@@ -346,8 +323,6 @@ class GuiApplication:
       self._load_fonts()
       self._patch_text_functions()
       self._patch_scissor_mode()
-      if BURN_IN_MODE and self._burn_in_shader is None:
-        self._burn_in_shader = rl.load_shader_from_memory(BURN_IN_VERTEX_SHADER, BURN_IN_FRAGMENT_SHADER)
 
       if not PC:
         self._mouse.start()
@@ -537,7 +512,7 @@ class GuiApplication:
     return image
 
   def _load_texture_from_image(self, image: rl.Image) -> rl.Texture:
-    """Send image to GPU and unload original image."""
+    """Make a texture from the image and unload the image."""
     texture = rl.load_texture_from_image(image)
     # Set texture filtering to smooth the result
     rl.set_texture_filter(texture, rl.TextureFilter.TEXTURE_FILTER_BILINEAR)
@@ -578,14 +553,6 @@ class GuiApplication:
       rl.unload_font(font)
     self._fallback_fonts = {}
 
-    if self._render_texture is not None:
-      rl.unload_render_texture(self._render_texture)
-      self._render_texture = None
-
-    if self._burn_in_shader:
-      rl.unload_shader(self._burn_in_shader)
-      self._burn_in_shader = None
-
     if not PC:
       self._mouse.stop()
 
@@ -618,24 +585,21 @@ class GuiApplication:
 
         # Store all mouse events for the current frame
         self._mouse_events = self._mouse.get_events()
-        if len(self._mouse_events) > 0:
-          self._last_mouse_event = self._mouse_events[-1]
+        # ignore additional fingers to avoid jumping
+        for mouse_event in self._mouse_events:
+          if mouse_event.slot == 0:
+            self._last_mouse_event = mouse_event
 
         # Skip rendering when screen is off
         if not self._should_render:
-          self._reset_frame_timings(frame_start)
           if PC:
             rl.poll_input_events()
           time.sleep(1 / self._target_fps)
           yield False, 0.0, 0.0
           continue
 
-        if self._render_texture:
-          rl.begin_texture_mode(self._render_texture)
-          rl.clear_background(rl.BLACK)
-        else:
-          rl.begin_drawing()
-          rl.clear_background(rl.BLACK)
+        rl.begin_drawing()
+        rl.clear_background(rl.BLACK)
 
         if self._scale != 1.0:
           rl.rl_push_matrix()
@@ -645,35 +609,29 @@ class GuiApplication:
         for tick in self._nav_stack_ticks:
           tick()
 
-        draw_start = time.monotonic()
-
-        # Only render top widgets
-        for widget in self._nav_stack[-self._nav_stack_widgets_to_render:]:
+        # Only render top widgets, and none under one covering the screen
+        widgets = self._nav_stack[-self._nav_stack_widgets_to_render:]
+        if widgets and widgets[-1].covers_screen:
+          widgets = widgets[-1:]
+        for widget in widgets:
           widget.render(rl.Rectangle(0, 0, self.width, self.height))
 
-        draw_end = time.monotonic()
         frame_time = rl.get_frame_time()
         cpu_time = time.monotonic() - frame_start
         yield True, frame_time, cpu_time
-        update_end = time.monotonic()
 
         if self._scale != 1.0:
           rl.rl_pop_matrix()
 
-        if self._render_texture:
-          rl.end_texture_mode()
-          rl.begin_drawing()
-          rl.clear_background(rl.BLACK)
-          src_rect = rl.Rectangle(0, 0, float(self._scaled_width), -float(self._scaled_height))
-          dst_rect = rl.Rectangle(0, 0, float(self._scaled_width), float(self._scaled_height))
-          texture = self._render_texture.texture
-          if texture:
-            if BURN_IN_MODE and self._burn_in_shader:
-              rl.begin_shader_mode(self._burn_in_shader)
-              rl.draw_texture_pro(texture, src_rect, dst_rect, rl.Vector2(0, 0), 0.0, rl.WHITE)
-              rl.end_shader_mode()
-            else:
-              rl.draw_texture_pro(texture, src_rect, dst_rect, rl.Vector2(0, 0), 0.0, rl.WHITE)
+        if self._dim_color.a > 0:
+          rl.draw_rectangle(0, 0, self._scaled_width, self._scaled_height, self._dim_color)
+
+        if RECORD:
+          self._ffmpeg_queue.put(rl.cpu.screen().tobytes())  # Async write via background thread
+
+        if BURN_IN_MODE:
+          screen = rl.cpu.screen()
+          screen[:] = BURN_IN_COLORS[screen[..., 2]]
 
         if self._show_fps:
           rl.draw_fps(10, 10)
@@ -684,23 +642,8 @@ class GuiApplication:
         if self._grid_size > 0:
           self._draw_grid()
 
-        present_start = time.monotonic()
         rl.end_drawing()
-        present_end = time.monotonic()
 
-        if RECORD:
-          image = rl.load_image_from_texture(self._render_texture.texture)
-          data_size = image.width * image.height * 4
-          data = bytes(rl.ffi.buffer(image.data, data_size))
-          self._ffmpeg_queue.put(data)  # Async write via background thread
-          rl.unload_image(image)
-
-        frame_end = time.monotonic()
-        self._record_frame_timings((
-          draw_start - frame_start, draw_end - draw_start, update_end - draw_end,
-          present_start - update_end, present_end - present_start, frame_end - present_end,
-          frame_end - frame_start,
-        ))
         self._monitor_fps()
         self._frame += 1
 
@@ -712,18 +655,20 @@ class GuiApplication:
   def font(self, font_weight: FontWeight = FontWeight.NORMAL) -> rl.Font:
     return self._fonts[font_weight]
 
+  @property
+  def font_chars(self) -> set[str]:
+    return self._font_chars
+
   def fallback_font(self) -> rl.Font:
     language = multilang.language
     if language not in self._fallback_fonts:
       chars = set(map(chr, range(32, 127))) | set(EXTRA_FONT_CHARS)
       chars.update(TRANSLATIONS_DIR.joinpath(f"app_{language}.po").read_text(encoding="utf-8"))
       codepoints = sorted(map(ord, chars))
-      codepoint_buffer = rl.ffi.new("int[]", codepoints)
       with as_file(FONT_DIR) as fspath:
         font = rl.load_font_ex((fspath / NOTO_FONTS[language]).as_posix(), 48,
-                               rl.ffi.cast("int *", codepoint_buffer), len(codepoints))
-      rl.gen_texture_mipmaps(font.texture)
-      rl.set_texture_filter(font.texture, rl.TextureFilter.TEXTURE_FILTER_TRILINEAR)
+                               codepoints, len(codepoints))
+      rl.set_texture_filter(font.texture, rl.TextureFilter.TEXTURE_FILTER_BILINEAR)
       self._fallback_fonts[language] = font
     return self._fallback_fonts[language]
 
@@ -743,22 +688,21 @@ class GuiApplication:
       if code not in FONT_FALLBACK_LANGUAGES:
         base_chars.update(TRANSLATIONS_DIR.joinpath(f"app_{code}.po").read_text(encoding="utf-8"))
 
+    self._font_chars = base_chars
     for font_weight_file in FontWeight:
       with as_file(FONT_DIR) as fspath:
         unifont = font_weight_file == FontWeight.UNIFONT
         codepoints = sorted(map(ord, unifont_chars if unifont else base_chars))
-        codepoint_buffer = rl.ffi.new("int[]", codepoints)
         font = rl.load_font_ex((fspath / font_weight_file).as_posix(), 16 if unifont else 200,
-                               rl.ffi.cast("int *", codepoint_buffer), len(codepoints))
+                               codepoints, len(codepoints))
         if font_weight_file != FontWeight.UNIFONT:
-          rl.gen_texture_mipmaps(font.texture)
-          rl.set_texture_filter(font.texture, rl.TextureFilter.TEXTURE_FILTER_TRILINEAR)
+          rl.set_texture_filter(font.texture, rl.TextureFilter.TEXTURE_FILTER_BILINEAR)
         self._fonts[font_weight_file] = font
     if multilang.requires_font_fallback():
       self.fallback_font()
 
   def _patch_text_functions(self):
-    # Wrap pyray text APIs to apply a global text size scale so our px sizes match Qt
+    # Wrap raylib text APIs to apply a global text size scale so our px sizes match Qt
     if not hasattr(rl, "_orig_draw_text_ex"):
       rl._orig_draw_text_ex = rl.draw_text_ex
 
@@ -783,30 +727,7 @@ class GuiApplication:
     rl.begin_scissor_mode = _begin_scissor_mode_scaled
 
   def _set_log_callback(self):
-    ffi_libc = cffi.FFI()
-    ffi_libc.cdef("""
-      int vasprintf(char **strp, const char *fmt, void *ap);
-      void free(void *ptr);
-    """)
-    libc = ffi_libc.dlopen(None)
-
-    @rl.ffi.callback("void(int, char *, void *)")
-    def trace_log_callback(log_level, text, args):
-      try:
-        text_addr = int(rl.ffi.cast("uintptr_t", text))
-        args_addr = int(rl.ffi.cast("uintptr_t", args))
-        text_libc = ffi_libc.cast("char *", text_addr)
-        args_libc = ffi_libc.cast("void *", args_addr)
-
-        out = ffi_libc.new("char **")
-        if libc.vasprintf(out, text_libc, args_libc) >= 0 and out[0] != ffi_libc.NULL:
-          text_str = ffi_libc.string(out[0]).decode("utf-8", "replace")
-          libc.free(out[0])
-        else:
-          text_str = rl.ffi.string(text).decode("utf-8", "replace")
-      except Exception as e:
-        text_str = f"[Log decode error: {e}]"
-
+    def trace_log_callback(log_level, text_str):
       if log_level == rl.TraceLogLevel.LOG_ERROR:
         cloudlog.error(f"raylib: {text_str}")
       elif log_level == rl.TraceLogLevel.LOG_WARNING:
@@ -825,45 +746,15 @@ class GuiApplication:
     self._trace_log_callback = trace_log_callback
     rl.set_trace_log_callback(self._trace_log_callback)
 
-  def _reset_frame_timings(self, now):
-    self._frame_timing_start = now
-    self._frame_timing_count = 0
-    self._frame_timing_sum = [0.0] * 7
-    self._frame_timing_max = [0.0] * 7
-
-  def _record_frame_timings(self, durations):
-    self._frame_timing_count += 1
-    for i, duration in enumerate(durations):
-      self._frame_timing_sum[i] += duration
-      self._frame_timing_max[i] = max(self._frame_timing_max[i], duration)
-
-  def _frame_timing_summary(self, now):
-    stages = ("prepare", "widgets", "state_update", "finish", "present", "capture", "total")
-    count = self._frame_timing_count
-    return {
-      "frames": count,
-      "window_s": round(now - self._frame_timing_start, 3),
-      "ui_mode": "big" if self.big_ui() else "mici",
-      # present includes GPU/display waits and raylib's FPS limiter.
-      "mean_ms": {name: round(self._frame_timing_sum[i] * 1000 / count, 3) if count else 0.0
-                  for i, name in enumerate(stages)},
-      "max_ms": {name: round(self._frame_timing_max[i] * 1000, 3) for i, name in enumerate(stages)},
-    }
-
   def _monitor_fps(self):
     fps = rl.get_fps()
-    current_time = time.monotonic()
 
     # Log FPS drop below threshold at regular intervals
     if fps < self._target_fps * FPS_DROP_THRESHOLD:
+      current_time = time.monotonic()
       if current_time - self._last_fps_log_time >= FPS_LOG_INTERVAL:
         cloudlog.warning(f"FPS dropped below {self._target_fps}: {fps}")
-        cloudlog.info({"event": "ui_frame_timing", "fps": fps, "target_fps": self._target_fps,
-                       "frame_timing": self._frame_timing_summary(current_time)})
         self._last_fps_log_time = current_time
-
-    if current_time - self._frame_timing_start >= FPS_LOG_INTERVAL:
-      self._reset_frame_timings(current_time)
 
     # Strict mode: terminate UI if FPS drops too much
     if STRICT_MODE and fps < self._target_fps * FPS_CRITICAL_THRESHOLD:

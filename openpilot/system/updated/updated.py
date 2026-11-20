@@ -18,7 +18,6 @@ from openpilot.common.markdown import parse_markdown
 from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.selfdrived.alertmanager import set_offroad_alert
 from openpilot.common.hardware import AGNOS, HARDWARE
-from openpilot.common.version import get_build_metadata
 
 LOCK_FILE = os.getenv("UPDATER_LOCK_FILE", "/tmp/safe_staging_overlay.lock")
 STAGING_ROOT = os.getenv("UPDATER_STAGING_ROOT", "/data/safe_staging")
@@ -173,11 +172,6 @@ def init_overlay() -> None:
   cloudlog.info(f"git diff output:\n{git_diff}")
 
 
-def lfs_command(checkout: str, action: str) -> list[str]:
-  client = os.path.join(checkout, "tools/lfs.sh")
-  return [client, action] if os.path.isfile(client) else ["git", "lfs", action]
-
-
 def finalize_update() -> None:
   """Take the current OverlayFS merged view and finalize a copy outside of
   OverlayFS, ready to be swapped-in at BASEDIR. Copy using shutil.copytree"""
@@ -198,18 +192,14 @@ def finalize_update() -> None:
   t = time.monotonic()
   try:
     run(["git", "gc"], FINALIZED)
-    if run(["git", "ls-files", ":(attr:filter=lfs)"], FINALIZED):
-      run(lfs_command(FINALIZED, "prune"), FINALIZED)
+    lfs = os.path.join(FINALIZED, "tools/lfs.sh")
+    run([lfs, "prune"] if os.path.isfile(lfs) else ["git", "lfs", "prune"], FINALIZED)
     cloudlog.event("Done git cleanup", duration=time.monotonic() - t)
   except subprocess.CalledProcessError:
     cloudlog.exception(f"Failed git cleanup, took {time.monotonic() - t:.3f} s")
 
   set_consistent_flag(True)
   cloudlog.info("done finalizing overlay")
-
-
-class OffroadOSUpdateRequired(Exception):
-  """Code is staged, but an OS image must wait for offroad."""
 
 
 def handle_agnos_update() -> None:
@@ -222,9 +212,6 @@ def handle_agnos_update() -> None:
   cloudlog.info(f"AGNOS version check: {cur_version} vs {updated_version}")
   if cur_version == updated_version:
     return
-
-  if not Params().get_bool("IsOffroad"):
-    raise OffroadOSUpdateRequired("OS update requires offroad")
 
   # prevent an openpilot getting swapped in with a mismatched or partially downloaded agnos
   set_consistent_flag(False)
@@ -341,19 +328,14 @@ class Updater:
 
     dt_uptime_onroad = (self.params.get("UptimeOnroad", return_default=True) - last_uptime_onroad) / (60*60)
     dt_route_count = self.params.get("RouteCount", return_default=True) - last_route_count
-    build_metadata = get_build_metadata()
     if failed_count > 15 and exception is not None and self.has_internet:
-      if build_metadata.tested_channel:
-        extra_text = "Ensure the software is correctly installed. Uninstall and re-install if this error persists."
-      else:
-        extra_text = exception
-      set_offroad_alert("Offroad_UpdateFailed", True, extra_text=extra_text)
+      set_offroad_alert("Offroad_UpdateFailed", True)
     elif failed_count > 0:
       if dt_uptime_onroad > HOURS_NO_CONNECTIVITY_MAX and dt_route_count > ROUTES_NO_CONNECTIVITY_MAX:
         set_offroad_alert("Offroad_ConnectivityNeeded", True)
       elif dt_uptime_onroad > HOURS_NO_CONNECTIVITY_PROMPT and dt_route_count > ROUTES_NO_CONNECTIVITY_PROMPT:
-        remaining = max(HOURS_NO_CONNECTIVITY_MAX - dt_uptime_onroad, 1)
-        set_offroad_alert("Offroad_ConnectivityNeededPrompt", True, extra_text=f"{remaining} hour{'' if remaining == 1 else 's'}.")
+        remaining = max(round(HOURS_NO_CONNECTIVITY_MAX - dt_uptime_onroad), 1)
+        set_offroad_alert("Offroad_ConnectivityNeededPrompt", True, extra_text=f"{remaining} hour{'' if remaining == 1 else 's'}")
 
   def check_for_update(self) -> None:
     cloudlog.info("checking for updates")
@@ -403,13 +385,12 @@ class Updater:
     cloudlog.info("git fetch success: %s", git_fetch_output)
 
     cloudlog.info("git reset in progress")
-    # Hydrate LFS files after checkout using the target branch's client.
-    no_lfs = ["-c", "filter.lfs.process=", "-c", "filter.lfs.smudge=",
-              "-c", "filter.lfs.required=false", "-c", "core.hooksPath=/dev/null"]
+    # Check out without running the installed LFS client, the new checkout installs its own below
+    nolfs = ["-c", "filter.lfs.process=", "-c", "filter.lfs.required=false", "-c", "core.hooksPath=/dev/null"]
     cmds = [
-      ["git", *no_lfs, "checkout", "--force", "--no-recurse-submodules", "-B", branch, "FETCH_HEAD"],
+      ["git", *nolfs, "checkout", "--force", "--no-recurse-submodules", "-B", branch, "FETCH_HEAD"],
       ["git", "branch", "--set-upstream-to", f"origin/{branch}"],
-      ["git", *no_lfs, "reset", "--hard"],
+      ["git", *nolfs, "reset", "--hard"],
       ["git", "clean", "-xdff"],
       ["git", "submodule", "sync"],
       ["git", "submodule", "update", "--init", "--recursive"],
@@ -418,8 +399,10 @@ class Updater:
     r = [run(cmd, OVERLAY_MERGED) for cmd in cmds]
     cloudlog.info("git reset success: %s", '\n'.join(r))
 
+    # Only checkouts with LFS files need a client, so release updates don't depend on git-lfs
     if run(["git", "ls-files", ":(attr:filter=lfs)"], OVERLAY_MERGED):
-      run(lfs_command(OVERLAY_MERGED, "pull"), OVERLAY_MERGED)
+      lfs = os.path.join(OVERLAY_MERGED, "tools/lfs.sh")
+      run([lfs, "pull"] if os.path.isfile(lfs) else ["git", "lfs", "pull"], OVERLAY_MERGED)
 
     # TODO: show agnos download progress
     if AGNOS:
@@ -432,14 +415,6 @@ class Updater:
 
 
 def main() -> None:
-  # Branch staging can run onroad; its Git/copy children yield CPU and I/O to driving.
-  try:
-    os.nice(10)
-  except OSError:
-    pass
-  ionice = shutil.which("ionice")
-  if ionice:
-    subprocess.run([ionice, "-c", "3", "-p", str(os.getpid())], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
   params = Params()
 
   if params.get_bool("DisableUpdates"):
@@ -467,19 +442,13 @@ def main() -> None:
     # invalidate old finalized update
     set_consistent_flag(False)
 
-    # The worker can run onroad; code downloads only touch the staging overlay.
-    params.put("UpdaterState", "starting...", block=True)
+    # set initial state
+    params.put("UpdaterState", "idle", block=True)
 
     # Run the update loop
     first_run = True
-    deferred_os = False
     while True:
       wait_helper.ready_event.clear()
-      if deferred_os and not params.get_bool("IsOffroad") and wait_helper.user_request != UserRequest.FETCH:
-        params.put("UpdaterState", "waiting_offroad_os", block=True)
-        wait_helper.sleep(30)
-        continue
-      deferred_os = False
 
       # Attempt an update
       exception = None
@@ -513,10 +482,6 @@ def main() -> None:
           updater.fetch_update()
           write_time_to_param(params, "UpdaterLastFetchTime")
         update_failed_count = 0
-      except OffroadOSUpdateRequired:
-        deferred_os = True
-        update_failed_count = 0
-        cloudlog.info("code downloaded; waiting for offroad before OS image preparation")
       except subprocess.CalledProcessError as e:
         cloudlog.event(
           "update process failed",
@@ -532,15 +497,15 @@ def main() -> None:
         OVERLAY_INIT.unlink(missing_ok=True)
 
       try:
-        params.put("UpdaterState", "waiting_offroad_os" if deferred_os else "idle", block=True)
-        update_successful = (not deferred_os and update_failed_count == 0)
+        params.put("UpdaterState", "idle", block=True)
+        update_successful = (update_failed_count == 0)
         updater.set_params(update_successful, update_failed_count, exception)
       except Exception:
         cloudlog.exception("uncaught updated exception while setting params, shouldn't happen")
 
       # infrequent attempts if we successfully updated recently
       wait_helper.user_request = UserRequest.NONE
-      wait_helper.sleep(30 if deferred_os else 5*60 if update_failed_count > 0 else 1.5*60*60)
+      wait_helper.sleep(5*60 if update_failed_count > 0 else 1.5*60*60)
 
 
 if __name__ == "__main__":
