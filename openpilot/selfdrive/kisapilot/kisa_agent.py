@@ -883,7 +883,7 @@ def vehicle_test_preflight():
             if raw:
                 with CarParams.from_bytes(raw) as cp:
                     result["supported"] = (cp.carFingerprint == CAR.HYUNDAI_IONIQ_5_PE and
-                        not (cp.flags & HyundaiFlags.ENABLE_BLINKERS) and
+                        not (cp.flags & HyundaiFlags.CANFD_ENABLE_BLINKERS) and
                         any(int(c.safetyParam) & SAFETY_FLAG for c in cp.safetyConfigs))
                     moving_configured = any((int(c.safetyParam) & moving_flags) == moving_flags for c in cp.safetyConfigs)
                     moving_road_configured = any(int(c.safetyParam) & MOVING_ROAD_SAFETY_FLAG for c in cp.safetyConfigs)

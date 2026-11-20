@@ -246,7 +246,7 @@ class CarController(CarControllerBase):
       self.params.STEER_DELTA_UP = self.steerDeltaUp
       self.params.STEER_DELTA_DOWN = self.steerDeltaDown
     
-    angle_control = self.CP.flags & HyundaiFlags.ANGLE_CONTROL
+    angle_control = self.CP.steerControlType == structs.CarParams.SteerControlType.angle
 
     # steering torque
     new_torque = int(round(actuators.torque * self.params.STEER_MAX))
@@ -352,18 +352,18 @@ class CarController(CarControllerBase):
     # *** common hyundai stuff ***
 
     # tester present - w/ no response (keeps relevant ECU disabled)
-    if self.frame % 100 == 0 and not (self.CP.flags & HyundaiFlags.CANFD_CAMERA_SCC) and self.CP.openpilotLongitudinalControl:
+    camera_scc = self.CP.flags & (HyundaiFlags.CAMERA_SCC | HyundaiFlags.CANFD_CAMERA_SCC)
+    if self.frame % 100 == 0 and not camera_scc and self.CP.openpilotLongitudinalControl:
       # for longitudinal control, either radar or ADAS driving ECU
       addr, bus = 0x7d0, self.CAN.ECAN if self.CP.flags & HyundaiFlags.CANFD else 0
-      if self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING.value:
+      if self.CP.flags & HyundaiFlags.CANFD_LKA_STEER_MSG.value:
         addr, bus = 0x730, self.CAN.ECAN
       can_sends.append(make_tester_present_msg(addr, bus, suppress_response=True))
 
       # for blinkers
-      if self.CP.flags & HyundaiFlags.ENABLE_BLINKERS:
+      if self.CP.flags & HyundaiFlags.CANFD_ENABLE_BLINKERS:
         can_sends.append(make_tester_present_msg(0x7b1, self.CAN.ECAN, suppress_response=True))
 
-    camera_scc = self.CP.flags & HyundaiFlags.CAMERA_SCC
     if self.CP.flags & HyundaiFlags.CANFD:
       can_sends.extend(self._create_canfd_frames(
         CC, CS, actuators, hud_control, camera_scc, apply_steer_req, apply_torque,
@@ -453,7 +453,7 @@ class CarController(CarControllerBase):
                            apply_angle, angle_control, accel, stopping, set_speed_in_units,
                            left_lane_warning, right_lane_warning, now_nanos):
     can_sends = []
-    hda2 = self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING
+    hda2 = self.CP.flags & HyundaiFlags.CANFD_LKA_STEER_MSG
     hda2_long = hda2 and self.CP.openpilotLongitudinalControl
 
     # steering control
@@ -477,7 +477,7 @@ class CarController(CarControllerBase):
       now = now_nanos / 1e9
       test_supported = (self.CP.carFingerprint == CAR.HYUNDAI_IONIQ_5_PE and
                         any(int(c.safetyParam) & SAFETY_FLAG for c in self.CP.safetyConfigs) and
-                        not (self.CP.flags & HyundaiFlags.ENABLE_BLINKERS) and
+                        not (self.CP.flags & HyundaiFlags.CANFD_ENABLE_BLINKERS) and
                         self.CAN.ECAN % 4 == (1 if hda2 and not camera_scc else 0))
       stock_fresh = 0 <= now - getattr(CS, "stock_spas_time", 0) < .25
       stock_active = not stock_fresh or getattr(CS, "stock_spas_mode", 7) not in (0, 3)
@@ -499,7 +499,7 @@ class CarController(CarControllerBase):
                                                  {"BLINKER_CONTROL": test_command}))
 
     # blinkers
-    if hda2 and self.CP.flags & HyundaiFlags.ENABLE_BLINKERS:
+    if hda2 and self.CP.flags & HyundaiFlags.CANFD_ENABLE_BLINKERS:
       can_sends.extend(hyundaicanfd.create_spas_messages(self.packer, self.CAN, self.frame, CC.leftBlinker, CC.rightBlinker))
 
     if self.camera_scc_params in [2, 3]:
@@ -515,7 +515,7 @@ class CarController(CarControllerBase):
         # else:
         #   can_sends.extend(hyundaicanfd.create_fca_warning_light(self.CP, self.packer, self.CAN, self.frame))
       if self.frame % 2 == 0:
-        if self.CP.flags & HyundaiFlags.CAMERA_SCC.value:
+        if self.CP.flags & HyundaiFlags.CANFD_CAMERA_SCC:
           can_sends.append(hyundaicanfd.create_acc_control_scc2(self.packer, self.CAN, CC.enabled, self.accel_last, accel, stopping, CC.cruiseControl.override,
                                                            set_speed_in_units, hud_control, self.hyundai_jerk, CS))
           can_sends.extend(hyundaicanfd.create_tcs_messages(self.packer, self.CAN, CS)) # for sorento SCC radar...

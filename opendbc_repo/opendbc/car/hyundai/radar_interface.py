@@ -93,7 +93,8 @@ def get_radar_can_parser_scc(CP):
     bus = CAN.ECAN
 
   print("$$$$$$$$ ECAN = ", CAN.ECAN)    
-  bus = CAN.CAM if CP.flags & HyundaiFlags.CAMERA_SCC else bus
+  camera_scc = CP.flags & (HyundaiFlags.CAMERA_SCC | HyundaiFlags.CANFD_CAMERA_SCC)
+  bus = CAN.CAM if camera_scc else bus
   return CANParser(DBC[CP.carFingerprint][Bus.pt], messages, bus)
 
 class RadarInterface(RadarInterfaceBase):

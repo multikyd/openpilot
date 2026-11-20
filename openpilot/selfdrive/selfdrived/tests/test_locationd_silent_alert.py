@@ -15,7 +15,7 @@ def load_alerts(mici):
     for child in ast.walk(node):
       if isinstance(child,ast.FunctionDef):child.returns=None
       if isinstance(child,ast.arg):child.annotation=None
-  audible=NS(none=0,warningSoft=1,warningImmediate=2,refuse=3)
+  audible=NS(none=0,warningSoft=1,warningImmediateSystem=2,refuse=3)
   env=dict(DT_CTRL=.01,HARDWARE=NS(get_device_type=lambda:'mici' if mici else 'tizi'),
            AlertStatus=NS(normal=0,userPrompt=1,critical=2),AlertSize=NS(mid=1,full=2),
            Priority=NS(LOW=1,MID=2,HIGHEST=3),VisualAlert=NS(none=0,steerRequired=1),
@@ -57,7 +57,7 @@ class TestLocationdSilentAlert(unittest.TestCase):
     self.assertEqual(env['NoEntryAlert']('Other Error').audible_alert,env['AudibleAlert'].refuse)
     default=env['soft_disable_alert']('Other Error')
     self.assertEqual(default(None,None,None,True,300,None).audible_alert,env['AudibleAlert'].warningSoft)
-    self.assertEqual(default(None,None,None,True,0,None).audible_alert,env['AudibleAlert'].warningImmediate)
+    self.assertEqual(default(None,None,None,True,0,None).audible_alert,env['AudibleAlert'].warningImmediateSystem)
 
 
 if __name__=='__main__':unittest.main()

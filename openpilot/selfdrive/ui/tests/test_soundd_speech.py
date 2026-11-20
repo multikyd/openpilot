@@ -40,8 +40,8 @@ class TestSpeechPlayback(unittest.TestCase):
     sound = self.sound()
     sound.update_alert(AudibleAlert.signalCoast)
     sound.get_sound_data(4096)
-    sound.update_alert(AudibleAlert.warningImmediate)
-    self.assertEqual(sound.current_alert, AudibleAlert.warningImmediate)
+    sound.update_alert(AudibleAlert.warningImmediateUser)
+    self.assertEqual(sound.current_alert, AudibleAlert.warningImmediateUser)
     self.assertEqual(sound.current_sound_frame, 0)
 
   def test_wav_format_matches_output(self):

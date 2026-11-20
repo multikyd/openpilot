@@ -46,6 +46,7 @@ NUMERIC_TO_TZ = {
 class CarState(CarStateBase):
   def __init__(self, CP):
     super().__init__(CP)
+    self.softHoldActive = 0
     can_define = CANDefine(DBC[CP.carFingerprint][Bus.pt])
 
     self.cruise_buttons: deque = deque([Buttons.NONE] * PREV_BUTTON_SAMPLES, maxlen=PREV_BUTTON_SAMPLES)
@@ -131,13 +132,14 @@ class CarState(CarStateBase):
     fingerprints = ast.literal_eval(fingerprints_str)
     #print("fingerprints =", fingerprints)
     ecu_disabled = False
-    if self.CP.openpilotLongitudinalControl and not (self.CP.flags & HyundaiFlags.CANFD_CAMERA_SCC):
+    camera_scc = self.CP.flags & (HyundaiFlags.CAMERA_SCC | HyundaiFlags.CANFD_CAMERA_SCC)
+    if self.CP.openpilotLongitudinalControl and not camera_scc:
       ecu_disabled = True
 
     if ecu_disabled:
       self.SCC11 = self.SCC12 = self.SCC13 = self.SCC14 = self.FCA11 = False
     else:
-      bus_cruise = 2 if self.CP.flags & HyundaiFlags.CAMERA_SCC else 0
+      bus_cruise = 2 if camera_scc else 0
       self.SCC11 = True if 1056 in fingerprints[bus_cruise] else False
       self.SCC12 = True if 1057 in fingerprints[bus_cruise] else False
       self.SCC13 = True if 1290 in fingerprints[bus_cruise] else False
@@ -457,7 +459,7 @@ class CarState(CarStateBase):
 
     # steering angle deg값이 이상함. mdps값이 더 신뢰가 가는듯.. torque steering 차량도 확인해야함.
     #ret.steeringAngleDeg = cp.vl["STEERING_SENSORS"]["STEERING_ANGLE"] * -1
-    if self.CP.flags & HyundaiFlags.ANGLE_CONTROL:
+    if self.CP.steerControlType == structs.CarParams.SteerControlType.angle:
       ret.steeringAngleDeg = cp.vl["MDPS"]["STEERING_ANGLE_2"] * -1
     else:
       ret.steeringAngleDeg = cp.vl["STEERING_SENSORS"]["STEERING_ANGLE"] * -1
@@ -480,7 +482,7 @@ class CarState(CarStateBase):
     ret.leftBlinker, ret.rightBlinker = self.update_blinker_from_lamp(50, left_blinker_lamp, right_blinker_lamp)
 
     if self.CP.enableBsm:
-      cp_bsm = cp_cam if self.CP.flags & HyundaiFlags.CAMERA_SCC.value else cp
+      cp_bsm = cp_cam if self.CP.flags & HyundaiFlags.CANFD_CAMERA_SCC.value else cp
       bsm_info = cp_bsm.vl["BLINDSPOTS_REAR_CORNERS"]
       ret.leftBlindspot = (bsm_info["FL_INDICATOR"] + bsm_info["INDICATOR_LEFT_TWO"] + bsm_info["INDICATOR_LEFT_FOUR"]) > 0
       ret.rightBlindspot = (bsm_info["FR_INDICATOR"] + bsm_info["INDICATOR_RIGHT_TWO"] + bsm_info["INDICATOR_RIGHT_FOUR"]) > 0
@@ -490,7 +492,7 @@ class CarState(CarStateBase):
       self.main_enabled = True
     # CAN FD cars enable on main button press, set available if no TCS faults preventing engagement
     ret.cruiseState.available = self.main_enabled #cp.vl["TCS"]["ACCEnable"] == 0
-    if self.CP.flags & HyundaiFlags.CAMERA_SCC.value:
+    if self.CP.flags & HyundaiFlags.CANFD_CAMERA_SCC.value:
       self.MainMode_ACC = cp_cam.vl["SCC_CONTROL"]["MainMode_ACC"] == 1
       self.ACCMode = cp_cam.vl["SCC_CONTROL"]["ACCMode"]
       self.LFA_ICON = cp_cam.vl["LFAHDA_CLUSTER"]["HDA_LFA_SymSta"]
@@ -517,10 +519,10 @@ class CarState(CarStateBase):
       ret.brakeHoldActive = cp.vl["ESP_STATUS"]["AUTO_HOLD"] == 1 and cp_cruise_info.vl["SCC_CONTROL"]["ACCMode"] not in (1, 2)
 
     speed_limit_cam = False
-    if self.CP.flags & HyundaiFlags.CAMERA_SCC.value:
+    if self.CP.flags & HyundaiFlags.CANFD_CAMERA_SCC.value:
       self.cruise_info = copy.copy(cp_cam.vl["SCC_CONTROL"])
       self.lfa_info = copy.copy(cp_cam.vl["LFA"])
-      if self.CP.flags & HyundaiFlags.ANGLE_CONTROL.value:
+      if self.CP.steerControlType == structs.CarParams.SteerControlType.angle:
         self.lfa_alt_info = copy.copy(cp_cam.vl["LFA_ALT"])
 
       if self.LFAHDA_CLUSTER:
@@ -601,7 +603,7 @@ class CarState(CarStateBase):
       ret.gearShifter = GearShifter.drive
     ret.gearStep = cp.vl["GEAR_ALT"]["GEAR_STEP"] if self.GEAR_ALT else ret.gearStep
 
-    if cp_alt and self.CP.flags & HyundaiFlags.CAMERA_SCC:
+    if cp_alt and self.CP.flags & HyundaiFlags.CANFD_CAMERA_SCC:
       lane_info = None
       lane_info = cp_alt.vl["CAM_0x362"] if self.CAM_0x362 else None
       lane_info = cp_alt.vl["CAM_0x2a4"] if self.CAM_0x2a4 else lane_info
@@ -668,7 +670,7 @@ class CarState(CarStateBase):
     self.buttons_counter = cp.vl[self.cruise_btns_msg_canfd]["COUNTER"]
     ret.accFaulted = cp.vl["TCS"]["ACCEnable"] != 0  # 0 ACC CONTROL ENABLED, 1-3 ACC CONTROL DISABLED
 
-    if not (self.CP.flags & HyundaiFlags.CAMERA_SCC):
+    if not (self.CP.flags & HyundaiFlags.CANFD_CAMERA_SCC):
       self.msg_0x362 = cp_cam.vl["CAM_0x362"]
       self.msg_0x2a4 = cp_cam.vl["CAM_0x2a4"]
 

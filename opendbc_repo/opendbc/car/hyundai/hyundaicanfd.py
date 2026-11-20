@@ -31,7 +31,7 @@ class CanBus(CanBusBase):
     super().__init__(CP, fingerprint)
 
     if lka_steering is None:
-      lka_steering = CP.flags & HyundaiFlags.CANFD_LKA_STEERING.value if CP is not None else False
+      lka_steering = CP.flags & HyundaiFlags.CANFD_LKA_STEER_MSG.value if CP is not None else False
 
     # On the CAN-FD platforms, the LKAS camera is on both A-CAN and E-CAN. LKA steering cars
     # have a different harness than the LFA steering variants in order to split
@@ -202,11 +202,11 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_steer, 
       "VALUE64": 0,
     }
 
-  if CP.flags & HyundaiFlags.CANFD_LKA_STEERING:
-    lkas_msg = "LKAS_ALT" if CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT else "LKAS"
+  if CP.flags & HyundaiFlags.CANFD_LKA_STEER_MSG:
+    lkas_msg = "LKAS_ALT" if CP.flags & HyundaiFlags.CANFD_LKA_STEER_MSG_ALT else "LKAS"
     if CP.openpilotLongitudinalControl:
       ret.append(packer.make_can_msg("LFA", CAN.ECAN, values))
-    if not (CP.flags & HyundaiFlags.CAMERA_SCC.value):
+    if not (CP.flags & HyundaiFlags.CANFD_CAMERA_SCC.value):
       ret.append(packer.make_can_msg(lkas_msg, CAN.ACAN, values))
   else:
     ret.append(packer.make_can_msg("LFA", CAN.ECAN, values))
@@ -239,7 +239,7 @@ def create_buttons(packer, CP, CAN, cnt, btn):
     "CRUISE_BUTTONS": btn,
   }
 
-  #bus = CAN.ECAN if CP.flags & HyundaiFlags.CANFD_LKA_STEERING else CAN.CAM
+  #bus = CAN.ECAN if CP.flags & HyundaiFlags.CANFD_LKA_STEER_MSG else CAN.CAM
   bus = CAN.ECAN
   return packer.make_can_msg("CRUISE_BUTTONS", bus, values)
 
@@ -419,7 +419,7 @@ def create_spas_messages(packer, CAN, frame, left_blink, right_blink):
 
 def create_fca_warning_light(CP, packer, CAN, frame):
   ret = []
-  if CP.flags & HyundaiFlags.CAMERA_SCC.value:
+  if CP.flags & HyundaiFlags.CANFD_CAMERA_SCC.value:
     return ret
 
   if frame % 2 == 0:
@@ -538,7 +538,7 @@ def create_ccnc_messages(CP, packer, CAN, frame, CC, CS, hud_control, disp_angle
       if desire_state[3] > 0.8: lane_changing = 3
       if desire_state[4] > 0.8: lane_changing = 4
 
-  if CP.flags & HyundaiFlags.CAMERA_SCC.value:
+  if CP.flags & HyundaiFlags.CANFD_CAMERA_SCC.value:
     HDA_CntrlModSta = 0
     if CS.lfahda_cluster_info is not None:
       HDA_CntrlModSta = CS.lfahda_cluster_info["HDA_CntrlModSta"]
@@ -559,7 +559,7 @@ def create_ccnc_messages(CP, packer, CAN, frame, CC, CS, hud_control, disp_angle
 
       if CS.cruise_buttons_msg is not None:
         values = copy.copy(CS.cruise_buttons_msg)
-        if CS.lfahda_cluster_info["HDA_LFA_SymSta"] == 0 and 0 < frame % 200 < 12:
+        if CS.lfahda_cluster_info is not None and CS.lfahda_cluster_info["HDA_LFA_SymSta"] == 0 and 0 < frame % 200 < 12:
           values["LFA_BTN"] = 1
 
         if CC.enabled and CS.MainMode_ACC:
@@ -774,7 +774,7 @@ def create_adrv_messages(CP, packer, CAN, frame):
 
   ret = []
 
-  if not CP.flags & HyundaiFlags.CAMERA_SCC.value:
+  if not CP.flags & HyundaiFlags.CANFD_CAMERA_SCC.value:
     values = {}
 
     ret.extend(create_fca_warning_light(CP, packer, CAN, frame))
@@ -818,7 +818,7 @@ def create_adrv_messages(CP, packer, CAN, frame):
 def alt_cruise_buttons(packer, CP, CAN, buttons, cruise_btns_msg, cnt):
   cruise_btns_msg["CRUISE_BUTTONS"] = buttons
   cruise_btns_msg["COUNTER"] = (cruise_btns_msg["COUNTER"] + 1 + cnt) % 256
-  bus = CAN.ECAN if CP.flags & HyundaiFlags.CANFD_LKA_STEERING else CAN.CAM
+  bus = CAN.ECAN if CP.flags & HyundaiFlags.CANFD_LKA_STEER_MSG else CAN.CAM
   return packer.make_can_msg("CRUISE_BUTTONS_ALT", bus, cruise_btns_msg)
   
 def hkg_can_fd_checksum(address: int, sig, d: bytearray) -> int:
