@@ -106,7 +106,7 @@ class CarState(CarStateBase):
 
     self.params = CarControllerParams(CP)
 
-    self.main_enabled = True if Params().get("AutoEngage") == 2 else False
+    self.main_enabled = True if Params().get("StartupEngagementMode") == 2 else False
     self.gear_shifter = GearShifter.drive # Gear_init for Nexo ?? unknown 21.02.23.LSW
     self.i_pedel_stop = False
 

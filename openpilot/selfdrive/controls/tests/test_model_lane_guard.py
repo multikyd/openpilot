@@ -375,13 +375,13 @@ class TestPositionGuardRouting(unittest.TestCase):
     method=next(n for n in controls.body if isinstance(n,ast.FunctionDef) and n.name=='state_control')
     helper=next(n for n in method.body if isinstance(n,ast.FunctionDef) and n.name=='position_curvature')
     start=method.body.index(helper)
-    block=method.body[start:start+5]  # helper, controller selection, guard resets
+    block=method.body[start:start+6]  # helper, lane observation, controller selection, guard resets
     self.code=compile(ast.Module(body=block,type_ignores=[]),'actual_control_selection','exec')
     self.position=NS(update=Mock(return_value=.003),reset=Mock())
     self.boundary=NS(update=Mock(return_value=.004),reset=Mock())
     self.narrow=NS(update=Mock(side_effect=lambda model,cs,curvature,guarded,*args,**kw:guarded),
-                   reset=Mock(),active=False)
-    sm={'lateralManeuverPlan':NS(desiredCurvature=.006),'carrotMan':NS(naviHighway=False)}
+                   reset=Mock(),active=False,single_lane=NS(update=Mock(),supported=False))
+    sm={'lateralManeuverPlan':NS(desiredCurvature=.006),'kisaNavigation':NS(naviHighway=False)}
     class Messages(dict):
       valid={'lateralManeuverPlan':False}
       logMonoTime={'modelV2':10_000_000_000,'carState':10_000_000_000}
@@ -391,7 +391,7 @@ class TestPositionGuardRouting(unittest.TestCase):
                     model_narrow_road_guard=self.narrow,
                     sm=Messages(sm),lanefull_mode_enabled=True,curvature=.001,
                     CP=None,lat_smooth_seconds=.1,desired_curvature=.002,
-                    lane_center_preference=-.03,camera_offset=.04)
+                    lane_center_preference=-.03,camera_offset=.04,narrow_guard_used=False)
     self.env=dict(self=self.controls,CC=NS(latActive=True),
                   CS=NS(vEgo=17.,steeringPressed=False,leftBlinker=False,rightBlinker=False,
                         leftBlindspot=False,rightBlindspot=False),
@@ -405,7 +405,8 @@ class TestPositionGuardRouting(unittest.TestCase):
                   time=NS(monotonic=lambda:10.),smooth_value=lambda value,previous,tau:value)
 
   def run_selection(self):
-    self.env.update(position_guard_used=False,model_lane_guard_used=False,narrow_guard_used=False)
+    self.controls.narrow_guard_used=False
+    self.env.update(position_guard_used=False,model_lane_guard_used=False)
     exec(self.code,self.env)
 
   def test_lane_mode_uses_planner_target_and_clears_model_correction(self):
@@ -448,7 +449,7 @@ class TestPositionGuardRouting(unittest.TestCase):
 
   def test_highway_disables_narrow_road_preference(self):
     self.controls.lanefull_mode_enabled=False
-    self.controls.sm['carrotMan'].naviHighway=True
+    self.controls.sm['kisaNavigation'].naviHighway=True
     self.run_selection()
     self.assertFalse(self.narrow.update.call_args.kwargs['enabled'])
 

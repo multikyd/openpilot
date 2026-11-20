@@ -44,7 +44,7 @@ class CarInterface(CarInterfaceBase):
   def _get_params(ret: structs.CarParams, candidate, fingerprint, car_fw, alpha_long, is_release, docs) -> structs.CarParams:
 
     params = Params()
-    camera_scc = params.get("HyundaiCameraSCC")
+    camera_scc = params.get("HyundaiCameraCruiseMode")
     if camera_scc > 0:
       ret.flags |= HyundaiFlags.CAMERA_SCC.value
       print("$$$CAMERA_SCC toggled...")
@@ -57,7 +57,7 @@ class CarInterface(CarInterfaceBase):
     # "LFA steering" if camera directly sends LFA to the MDPS
     cam_can = CanBus(None, fingerprint).CAM if camera_scc == 0 else 1
     lka_steering = False #0x50 in fingerprint[cam_can] or 0x110 in fingerprint[cam_can]
-    lka_steering = lka_steering or params.get("CanfdHDA2") > 0
+    lka_steering = lka_steering or params.get("CanfdHighwayAssistMode") > 0
     CAN = CanBus(None, fingerprint, lka_steering)
 
     if params.get("CanfdDebug") == -1:
@@ -147,7 +147,7 @@ class CarInterface(CarInterfaceBase):
       if (candidate == CAR.HYUNDAI_IONIQ_5_PE and 0x165 in fingerprint[CAN.ECAN] and
           0x16A in fingerprint[CAN.ECAN] and not (ret.flags & HyundaiFlags.ENABLE_BLINKERS)):
         ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.STATIONARY_BLINKER_TEST.value
-        if fingerprint[CAN.ECAN].get(STALK_ADDR) == 8 and Params().get_bool("TbtBlinkerExperiment"):
+        if fingerprint[CAN.ECAN].get(STALK_ADDR) == 8 and Params().get_bool("NavTurnSignalExperiment"):
           ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.TBT_BLINKER_TEST.value
           if Params().get_bool("MovingBlinkerRoadTest"):
             ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.MOVING_BLINKER_ROAD_TEST.value
@@ -278,7 +278,7 @@ class CarInterface(CarInterfaceBase):
   @staticmethod
   def init(CP, can_recv, can_send):
 
-    Params().put('LongitudinalPersonalityMax', 4)
+    Params().put('MaxFollowingPersonality', 4)
 
     if CP.openpilotLongitudinalControl and not (CP.flags & HyundaiFlags.CANFD_CAMERA_SCC):
       addr, bus = 0x7d0, 0

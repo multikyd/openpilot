@@ -10,6 +10,11 @@ DISCOVERY_PORTS = (7705, 17705, 17706)
 FRESH_SECONDS = 4.0
 READ_TIMEOUT = 10.0
 MAX_LINE = 2 * 1024 * 1024
+EVENT_TYPES = ('rgdata', 'route', 'ssinf', 'sinf', 'complexCrossroad')
+PACKET_METADATA = frozenset((
+  'source', 'bridge_version', 'timestamp_ms', 'raw_rgdata', 'raw_naver',
+  'raw_ssinf', 'raw_sinf', 'signal_update', 'navi_state',
+))
 
 class NaviSourceMux:
   def __init__(self, dispatch, changed, received=lambda *a: None, clock=time.monotonic):
@@ -26,15 +31,17 @@ class NaviSourceMux:
     return c['active'] and c['rg_at'] is not None and now-c['rg_at'] <= FRESH_SECONDS
 
   def _select(self, now):
-    candidates = {k:c for k,c in self.clients.items() if self._eligible(c, now)}
-    foreground = {k:c for k,c in candidates.items() if c['foreground'] is True}
-    if foreground:
-      target = max(foreground, key=lambda k:(foreground[k]['foreground_epoch'],
-                                             k == self.selected, foreground[k]['rg_at']))
-    elif self.selected in candidates:
-      target = self.selected
-    else:
-      target = max(candidates, key=lambda k:candidates[k]['rg_at'], default=None)
+    target = None
+    best_priority = None
+    for key, client in self.clients.items():
+      if not self._eligible(client, now):
+        continue
+      foreground = client['foreground'] is True
+      # Foreground ownership wins first. Otherwise keep the current eligible app.
+      priority = (foreground, client['foreground_epoch'] if foreground else 0,
+                  key == self.selected, client['rg_at'])
+      if best_priority is None or priority > best_priority:
+        target, best_priority = key, priority
     if target == self.selected:
       return False
     self.selected = target
@@ -100,18 +107,22 @@ class NaviSourceMux:
         c['foreground_epoch'] = epoch if isinstance(epoch,(int,float)) and math.isfinite(epoch) else 0
       if obj.get('source') in ('naver-map','tmap'):
         c['source'] = obj['source']
+      metadata = None
       outgoing = {}
-      for kind in ('rgdata','route','ssinf','sinf','complexCrossroad'):
-        alias = 'vrtx' if kind=='route' and 'vrtx' in obj else kind
+      for kind in EVENT_TYPES:
+        alias = 'vrtx' if kind == 'route' and 'vrtx' in obj else kind
         if alias not in obj:
           continue
-        if kind=='rgdata':
-          if not isinstance(obj[alias],dict) or not self._valid_rg(obj[alias]):
+        value = obj[alias]
+        if kind == 'rgdata':
+          if not isinstance(value, dict) or not self._valid_rg(value):
             continue
           c['rg_at'] = now
-        packet = {k:v for k,v in obj.items() if k in ('source','bridge_version','timestamp_ms','raw_rgdata','raw_naver','raw_ssinf','raw_sinf','signal_update','navi_state')}
-        packet[kind] = obj[alias]
-        c['cache'][kind] = (now,packet)
+        if metadata is None:
+          metadata = {name: field for name, field in obj.items() if name in PACKET_METADATA}
+        packet = metadata.copy()
+        packet[kind] = value
+        c['cache'][kind] = (now, packet)
         outgoing[kind] = packet
       switched = self._select(now)
       for kind in ('ssinf', 'sinf'):

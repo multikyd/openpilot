@@ -61,7 +61,7 @@ class LayoutTest(unittest.TestCase):
 
 class DrawingTest(unittest.TestCase):
   def setUp(self):
-    sm=NS(valid={"carrotMan":True},alive={"carrotMan":True},recv_time={"carrotMan":time.monotonic()})
+    sm=NS(valid={"kisaNavigation":True},alive={"kisaNavigation":True},recv_time={"kisaNavigation":time.monotonic()})
     self.state=NS(sm=sm,xSpdType=1,xSpdLimitOrg=50,xSpdLimit=50,xSpdDist=200,
                   bumpTarget=30,bumpDistance=100,is_metric=True,
                   tpmsPressureFl=35,tpmsPressureFr=35,tpmsPressureRl=35,tpmsPressureRr=35,
@@ -80,17 +80,21 @@ class DrawingTest(unittest.TestCase):
     self.rect=NS(x=0,y=0,width=476,height=240)
   def test_bump_then_camera_switch(self):
     self.hud._draw_lower_left(self.rect)
-    self.assertEqual(self.ray.draw_text_ex.call_args_list[0].args[1],"BUMP")
+    self.assertIs(self.ray.draw_texture_pro.call_args.args[0],self.hud.img_speed_bump)
+    self.assertEqual([call.args[1] for call in self.ray.draw_text_ex.call_args_list],["30","100m"])
     self.state.bumpTarget=0
     self.ray.draw_text_ex.reset_mock()
+    self.ray.draw_texture_pro.reset_mock()
     self.hud._draw_lower_left(self.rect)
-    self.assertEqual(self.ray.draw_text_ex.call_args_list[0].args[1],"CAM")
+    self.ray.draw_texture_pro.assert_not_called()
+    self.assertEqual(self.ray.draw_circle.call_count,2)
+    self.assertEqual([call.args[1] for call in self.ray.draw_text_ex.call_args_list],["50","200m"])
     self.hud._draw_steering_wheel.assert_not_called()
   def test_stale_and_critical_use_wheel(self):
-    self.state.sm.recv_time["carrotMan"]-=2
+    self.state.sm.recv_time["kisaNavigation"]-=2
     self.hud._draw_lower_left(self.rect)
     self.assertEqual(self.hud._draw_steering_wheel.call_count,1)
-    self.state.sm.recv_time["carrotMan"]=time.monotonic()
+    self.state.sm.recv_time["kisaNavigation"]=time.monotonic()
     self.hud._show_wheel_critical=True
     self.hud._draw_lower_left(self.rect)
     self.assertEqual(self.hud._draw_steering_wheel.call_count,2)

@@ -96,7 +96,7 @@ class TestTurnProgress(unittest.TestCase):
 
 class TestTbtProgressIntegration(unittest.TestCase):
   def setUp(self):
-    path=Path(__file__).parents[2]/'kisapilot/carrot_serv.py'
+    path=Path(__file__).parents[2]/'kisapilot/nav_guidance.py'
     tree=ast.parse(path.read_text(encoding='utf8'))
     method=next(n for n in ast.walk(tree) if isinstance(n,ast.FunctionDef) and n.name=='_turn_progress_speed')
     env=dict(np=np,math=math,ModelConstants=ModelConstants)
@@ -141,7 +141,7 @@ class TestTbtProgressIntegration(unittest.TestCase):
 
   def test_other_speed_constraints_remain_in_actual_selection(self):
     relaxed=self.tick(110)[-1]
-    path=Path(__file__).parents[2]/'kisapilot/carrot_serv.py'
+    path=Path(__file__).parents[2]/'kisapilot/nav_guidance.py'
     tree=ast.parse(path.read_text(encoding='utf8'))
     method=next(n for n in ast.walk(tree) if isinstance(n,ast.FunctionDef) and n.name=='update_navi')
     sources=next(n for n in method.body if isinstance(n,ast.Assign) and

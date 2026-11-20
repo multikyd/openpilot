@@ -157,21 +157,21 @@ class TestPlannerRecoveryIntegration(unittest.TestCase):
     class SM(dict):
       def all_checks(self,*args,**kwargs): return self.valid_checks
     sm = self.sm = SM(carState=NS(gasPressed=False,brakePressed=False,steeringPressed=True,steeringAngleDeg=15.,leftBlinker=False,rightBlinker=False),
-                      carrotMan=NS(xTurnInfo=0,xDistToTurn=0,naviConnected=False,naviHighway=False),
+                      kisaNavigation=NS(xTurnInfo=0,xDistToTurn=0,naviConnected=False,naviHighway=False),
                       controlsState=NS(curvature=.004,desiredCurvature=.004),selfdriveState=NS(enabled=True),
                       radarState=NS(leadOne=lead(),leadTwo=lead()),
                       modelV2=NS(orientationRate=NS(z=[0.]*33),velocity=NS(x=[0.]*33)))
-    sm.valid_checks = True;sm.logMonoTime={n:10_000_000_000 for n in ('carState','radarState','modelV2','carrotMan')}
-    self.carrot = NS(desireState=0.,myDrivingMode=NS(value=3),xState=0,
+    sm.valid_checks = True;sm.logMonoTime={n:10_000_000_000 for n in ('carState','radarState','modelV2','kisaNavigation')}
+    self.driving_policy = NS(desireState=0.,myDrivingMode=NS(value=3),xState=0,
                      signal_follow=NS(strength=0.),
-                     get_carrot_accel=lambda speed:1.)
+                     get_cruise_accel=lambda speed:1.)
     recovery = MagicMock();recovery.update.return_value=1.5;recovery.strength=.8
     recovery.progress=NS(heading=0.)
     self.planner = NS(CP=NS(openpilotLongitudinalControl=True),mpc=NS(mode='acc',t_follow=1.5),dt=.05,overtake_active=False,
                       launch_follow=NS(update=lambda **kw:kw['normal_max'],extra=0.),_launch_follow_active=False,
                       overtake_acceleration=NS(update=lambda value,*args:value),
                       turn_exit_recovery=recovery,_turn_exit_active=False,output_should_stop=False)
-    self.env = dict(np=np,self=self.planner,sm=sm,carrot=self.carrot,reset_state=False,force_slow_decel=False,
+    self.env = dict(np=np,self=self.planner,sm=sm,driving_policy=self.driving_policy,reset_state=False,force_slow_decel=False,
                     v_ego=6.,v_cruise=15.,ModelConstants=NS(IDX_N=33),
                     XState=NS(e2eStop=1,e2eStopped=2,e2ePrepare=3),cloudlog=MagicMock(),
                     get_future_curvature=lambda *args,**kwargs:.004,A_CRUISE_MIN=-2.,ACCEL_MIN=-3.5,ACCEL_MAX=2.,
@@ -186,20 +186,20 @@ class TestPlannerRecoveryIntegration(unittest.TestCase):
     self.assertEqual(self.env['accel_limits_turns'],[-2.,.9])
 
   def test_stale_navigation_disables_heading_progress_but_not_normal_exit(self):
-    self.sm['carrotMan'].naviConnected=True
-    self.sm['carrotMan'].xTurnInfo=2
-    self.sm['carrotMan'].xDistToTurn=10
+    self.sm['kisaNavigation'].naviConnected=True
+    self.sm['kisaNavigation'].xTurnInfo=2
+    self.sm['kisaNavigation'].xDistToTurn=10
     self.assertTrue(self.enabled())
     self.assertTrue(self.planner.turn_exit_recovery.update.call_args.kwargs['nav_fresh'])
-    self.sm.logMonoTime['carrotMan']=9_000_000_000
+    self.sm.logMonoTime['kisaNavigation']=9_000_000_000
     self.assertTrue(self.enabled())
     self.assertFalse(self.planner.turn_exit_recovery.update.call_args.kwargs['nav_fresh'])
 
   def test_signal_stop_pedal_and_eco_gates(self):
-    cases = [(self.carrot.signal_follow,'strength',.2),
+    cases = [(self.driving_policy.signal_follow,'strength',.2),
              (self.sm['carState'],'gasPressed',True),(self.sm['carState'],'brakePressed',True),
-             (self.carrot.myDrivingMode,'value',1),(self.carrot.myDrivingMode,'value',2),
-             (self.carrot,'xState',1),(self.carrot,'desireState',1.),
+             (self.driving_policy.myDrivingMode,'value',1),(self.driving_policy.myDrivingMode,'value',2),
+             (self.driving_policy,'xState',1),(self.driving_policy,'desireState',1.),
              (self.planner,'output_should_stop',True),
              (self.sm['selfdriveState'],'enabled',False)]
     for obj,key,value in cases:
@@ -262,7 +262,7 @@ class TestPlannerRecoveryIntegration(unittest.TestCase):
                isinstance(n.targets[0],ast.Name) and n.targets[0].id=='exit_strength')
     block=compile(ast.Module(body=update.body[start:start+3],type_ignores=[]),'actual_mpc_cost_recovery','exec')
     mpc=NS(max_a=1.5,turn_loss_limit=None,set_weights=MagicMock())
-    env=dict(np=np,self=mpc,carrot=NS(jerk_factor_apply=.7,aChangeCostStarting=10.),
+    env=dict(np=np,self=mpc,driving_policy=NS(jerk_factor_apply=.7,aChangeCostStarting=10.),
              turn_exit_strength=1.,mode='acc',reset_state=False,cruise_max_a=1.5,
              prev_accel_constraint=True,personality=0)
     exec(block,env)

@@ -143,9 +143,9 @@ class DesireHelper:
     # Blinkers / ATC
     self.blinker_ignore = False
     self.driver_blinker_state = BLINKER_NONE
-    self.carrot_blinker_state = BLINKER_NONE
-    self.carrot_lane_change_count = 0
-    self.carrot_cmd_index_last = 0
+    self.navigation_blinker_state = BLINKER_NONE
+    self.navigation_lane_change_count = 0
+    self.last_navigation_command_index = 0
     self.atc_type = ""
     self.atc_active = 0  # 0: 없음, 1: ATC 동작 중, 2: 운전자와 ATC 상충
 
@@ -193,10 +193,10 @@ class DesireHelper:
 
   def _update_params_periodic(self):
     if self.frame % 100 == 0:
-      self.laneChangeNeedTorque = self.params.get("LaneChangeNeedTorque")
-      self.laneChangeBsd = self.params.get("LaneChangeBsd")
-      self.laneChangeDelay = self.params.get("LaneChangeDelay")
-      self.modelTurnSpeedFactor = self.params.get("ModelTurnSpeedFactor")
+      self.laneChangeNeedTorque = self.params.get("LaneChangeRequiresTorque")
+      self.laneChangeBsd = self.params.get("LaneChangeBlindspotPolicy")
+      self.laneChangeDelay = self.params.get("LaneChangeDelaySec")
+      self.modelTurnSpeedFactor = self.params.get("VisionTurnLookaheadSec")
 
   def _make_model_turn_speed(self, modeldata):
     if self.modelTurnSpeedFactor > 0:
@@ -345,7 +345,7 @@ class DesireHelper:
     displacement = sign*(current[1]-previous[1])
     return near_line and displacement > .10 and displacement/(now-previous[0]) > .25
 
-  def _end_maneuver(self, carrotMan, completed=False):
+  def _end_maneuver(self, kisaNavigation, completed=False):
     self.lane_change_state = LaneChangeState.off
     self.lane_change_direction = LaneChangeDirection.none
     self.turn_direction = TurnDirection.none
@@ -355,34 +355,34 @@ class DesireHelper:
     self.lane_change_timer = self.lane_change_delay = self.keep_pulse_timer = 0.
     self.opposite_torque_time = 0.
     self.auto_lane_change_enable = self.next_lane_change = False
-    self.carrot_lane_change_count = 0
-    self.carrot_blinker_state = BLINKER_NONE
+    self.navigation_lane_change_count = 0
+    self.navigation_blinker_state = BLINKER_NONE
     self.driver_request_consumed = True
     self.blinker_ignore = True
-    self.blocked_atc_request = (carrotMan.atcType, carrotMan.carrotCmdIndex)
+    self.blocked_atc_request = (kisaNavigation.atcType, kisaNavigation.commandIndex)
     self.lane_change_started_at = None
     self.lane_change_crossed = False
     self.maneuver_end_reason = "completed" if completed else "cancelled"
 
-  def _update_atc_blinker(self, carrotMan, v_ego, driver_blinker_state):
+  def _update_atc_blinker(self, kisaNavigation, v_ego, driver_blinker_state):
     # ATC에서 온 turn/lanechange 명령 기반 깜빡이 상태 갱신.
-    atc_type = carrotMan.atcType
-    signature = (atc_type, carrotMan.carrotCmdIndex)
+    atc_type = kisaNavigation.atcType
+    signature = (atc_type, kisaNavigation.commandIndex)
     if self.blocked_atc_request == signature:
       self.atc_type = atc_type
-      self.carrot_lane_change_count = 0
+      self.navigation_lane_change_count = 0
       return BLINKER_NONE, False
     self.blocked_atc_request = None
     atc_blinker_state = BLINKER_NONE
 
     # ATC 기반 자동 차선변경 유지 시간
-    if self.carrot_lane_change_count > 0:
-      atc_blinker_state = self.carrot_blinker_state
-    elif carrotMan.carrotCmdIndex != self.carrot_cmd_index_last and carrotMan.carrotCmd == "LANECHANGE":
-      self.carrot_cmd_index_last = carrotMan.carrotCmdIndex
-      self.carrot_lane_change_count = int(0.2 / DT_MDL)
-      self.carrot_blinker_state = BLINKER_LEFT if carrotMan.carrotArg == "LEFT" else BLINKER_RIGHT
-      atc_blinker_state = self.carrot_blinker_state
+    if self.navigation_lane_change_count > 0:
+      atc_blinker_state = self.navigation_blinker_state
+    elif kisaNavigation.commandIndex != self.last_navigation_command_index and kisaNavigation.commandName == "LANECHANGE":
+      self.last_navigation_command_index = kisaNavigation.commandIndex
+      self.navigation_lane_change_count = int(0.2 / DT_MDL)
+      self.navigation_blinker_state = BLINKER_LEFT if kisaNavigation.commandArgument == "LEFT" else BLINKER_RIGHT
+      atc_blinker_state = self.navigation_blinker_state
     elif atc_type in ["turn left", "turn right"]:
       # 네비 turn 안내: 속도 조건을 턴 쪽으로 강제
       if self.atc_active != 2:
@@ -496,13 +496,13 @@ class DesireHelper:
   #  메인 업데이트 루틴
   # ─────────────────────────────────────────────
 
-  def update(self, carstate, modeldata, lateral_active, lane_change_prob, carrotMan, radarState):
+  def update(self, carstate, modeldata, lateral_active, lane_change_prob, kisaNavigation, radarState):
     self.frame += 1
     self._update_params_periodic()
     self._make_model_turn_speed(modeldata)
 
     # 카운터 감소
-    self.carrot_lane_change_count = max(0, self.carrot_lane_change_count - 1)
+    self.navigation_lane_change_count = max(0, self.navigation_lane_change_count - 1)
     self.lane_change_delay = max(0.0, self.lane_change_delay - DT_MDL)
     self.blindspot_detected_counter = max(0, self.blindspot_detected_counter - 1)
 
@@ -537,7 +537,7 @@ class DesireHelper:
     block_lanechange_bsd = (self.laneChangeBsd == 1)
 
     # ATC 깜빡이
-    atc_blinker_state, atc_desire_enabled = self._update_atc_blinker(carrotMan, v_ego, driver_blinker_state)
+    atc_blinker_state, atc_desire_enabled = self._update_atc_blinker(kisaNavigation, v_ego, driver_blinker_state)
 
     active_change = self.lane_change_state in (LaneChangeState.laneChangeStarting,
                                                LaneChangeState.laneChangeMerging,
@@ -546,7 +546,7 @@ class DesireHelper:
       kind = self._classify_maneuver_type(driver_blinker_state, carstate, self.maneuver_type)
       if kind == "lane_change" and self._lane_change_already_underway(driver_blinker_state):
         self.driver_request_consumed = True
-        self.blocked_atc_request = (carrotMan.atcType, carrotMan.carrotCmdIndex)
+        self.blocked_atc_request = (kisaNavigation.atcType, kisaNavigation.commandIndex)
     if self.driver_request_consumed and not active_change:
       driver_desire_enabled = False
       atc_desire_enabled = False
@@ -609,7 +609,7 @@ class DesireHelper:
     self.lane_appeared = self.lane_appeared and distance_to_road_edge < 4.0
 
     # Auto lane change 트리거
-    if self.carrot_lane_change_count > 0:
+    if self.navigation_lane_change_count > 0:
       auto_lane_change_blocked = False
       auto_lane_change_trigger = lane_change_available
     else:
@@ -731,7 +731,7 @@ class DesireHelper:
           self.lane_change_ll_prob = min(self.lane_change_ll_prob + DT_MDL, 1.0)
           if self.lane_change_ll_prob > 0.99:
             self.lane_change_direction = LaneChangeDirection.none
-            self._end_maneuver(carrotMan, completed=True)
+            self._end_maneuver(kisaNavigation, completed=True)
 
     if (self.lane_change_state == LaneChangeState.laneChangeStarting and
         previous_lane_change_state == LaneChangeState.preLaneChange):
@@ -769,7 +769,7 @@ class DesireHelper:
       # Countersteering after crossing ends the assist in the current lane; it
       # never requests a return to the original lane.
       completed = self.lane_change_crossed or self.lane_change_state == LaneChangeState.laneChangeFinishing
-      self._end_maneuver(carrotMan, completed=completed)
+      self._end_maneuver(kisaNavigation, completed=completed)
 
     # 최종 desire 결정
     if self.turn_direction != TurnDirection.none:

@@ -73,7 +73,7 @@ class UIState:
         "vehicleParameters",
         "testJoystick",
         "rawAudioData",
-        "carrotMan",
+        "kisaNavigation",
       ]
     )
 
@@ -147,10 +147,10 @@ class UIState:
 
     self.enabled: bool = False
     self.cruise_gap: int = self.params.get("LongitudinalPersonality") + 1
-    self.camera_scc: int = self.params.get("HyundaiCameraSCC")
+    self.camera_scc: int = self.params.get("HyundaiCameraCruiseMode")
 
     # Carrot
-    self.active_carrot: int = 0
+    self.guidance_level: int = 0
     self.xSpdLimit: int = 0
     self.xSpdLimitOrg: int = 0
     self.xSpdDist: int = 0
@@ -269,19 +269,19 @@ class UIState:
       self.latEnabled = car_state.latEnabled
       self.cruise_gap = car_state.cruiseGap
 
-    if self.sm.updated["carrotMan"]:
-      carrotman_state = self.sm["carrotMan"]
-      self.active_carrot = carrotman_state.activeCarrot
-      self.xSpdLimit = carrotman_state.xSpdLimit
-      self.xSpdLimitOrg = carrotman_state.xSpdLimitOrg
-      self.xSpdDist = carrotman_state.xSpdDist
-      self.xSpdType = carrotman_state.xSpdType
-      self.desiredSpeed = carrotman_state.desiredSpeed
-      self.desiredSource = carrotman_state.desiredSource
-      self.bumpTarget = carrotman_state.bumpTarget
-      self.bumpDistance = carrotman_state.bumpDistance
-      self.bumpLearningText = carrotman_state.bumpLearningText
-    if not self.started or time.monotonic() - self.sm.recv_time['carrotMan'] > 1:
+    if self.sm.updated["kisaNavigation"]:
+      navigation_state = self.sm["kisaNavigation"]
+      self.guidance_level = navigation_state.guidanceLevel
+      self.xSpdLimit = navigation_state.xSpdLimit
+      self.xSpdLimitOrg = navigation_state.xSpdLimitOrg
+      self.xSpdDist = navigation_state.xSpdDist
+      self.xSpdType = navigation_state.xSpdType
+      self.desiredSpeed = navigation_state.desiredSpeed
+      self.desiredSource = navigation_state.desiredSource
+      self.bumpTarget = navigation_state.bumpTarget
+      self.bumpDistance = navigation_state.bumpDistance
+      self.bumpLearningText = navigation_state.bumpLearningText
+    if not self.started or time.monotonic() - self.sm.recv_time['kisaNavigation'] > 1:
       self.bumpTarget = self.bumpDistance = 0
       self.bumpLearningText = ""
 
@@ -402,7 +402,7 @@ class Device:
     self._brightness_event = threading.Event()
     self._brightness_target: int = 0
 
-    self.custom_brightness: int = Params().get("ShowCustomBrightness")
+    self.custom_brightness: int = Params().get("DisplayBrightnessPct")
     self._default_custom_brightness = self.custom_brightness
 
   @property

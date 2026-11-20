@@ -27,12 +27,12 @@ import ipaddress
 import openpilot.cereal.messaging as messaging
 from openpilot.common.realtime import Ratekeeper, set_core_affinity
 from openpilot.common.params import Params
-from openpilot.selfdrive.kisapilot.carrot_functions import MyMovingAverage
+from openpilot.selfdrive.kisapilot.driving_policy import MyMovingAverage
 from openpilot.common.hardware import PC, COMMA_HARDWARE
 from openpilot.common.constants import CV
 
-from openpilot.selfdrive.kisapilot.carrot_serv import CarrotServ
-from openpilot.selfdrive.kisapilot.navi_transport import DISCOVERY_PORTS, NaviSourceMux, NaviTcpServer
+from openpilot.selfdrive.kisapilot.nav_guidance import GuidanceProcessor
+from openpilot.selfdrive.kisapilot.nav_transport import DISCOVERY_PORTS, NaviSourceMux, NaviTcpServer
 
 from openpilot.common.gps import get_gps_location_service
 
@@ -45,19 +45,19 @@ except ImportError:
 NetworkType = log.DeviceState.NetworkType
 
 NAVI_EVENT_TYPES = ("complexCrossroad", "rgdata", "vrtx", "ssinf", "sinf", "route")
-NAVI_DEBUG_PARAM = "CarrotNaviDebug"
-NAVI_IMAGE_PARAM = "CarrotNaviImage"
+NAVI_DEBUG_PARAM = "KisaNavigationDebug"
+NAVI_IMAGE_PARAM = "KisaNavigationImage"
 NAVI_IMAGE_BASE64_MAX_CHARS = 6 * 1024 * 1024
 
-AUTO_ONROAD_DIAGNOSTICS = os.environ.get("CARROT_AUTO_ONROAD_DIAGNOSTICS", "1").strip().lower() in ("1", "true", "yes", "on")
+AUTO_ONROAD_DIAGNOSTICS = os.environ.get("KISA_AUTO_ONROAD_DIAGNOSTICS", "1").strip().lower() in ("1", "true", "yes", "on")
 BROADCAST_INTERVAL = 5.0
 BROADCAST_REMOTE_INTERVAL = 10.0
 BROADCAST_NETWORK_ERROR_RETRY_INTERVAL = 15.0
 BROADCAST_NETWORK_ERROR_LOG_INTERVAL = 30.0
-AUTO_ONROAD_TMUX_DELAY_SECONDS = float(os.environ.get("CARROT_AUTO_ONROAD_TMUX_DELAY_SECONDS", "60"))
+AUTO_ONROAD_TMUX_DELAY_SECONDS = float(os.environ.get("KISA_AUTO_ONROAD_TMUX_DELAY_SECONDS", "60"))
 
 
-################ CarrotNavi
+################ KisaNavigation
 ## 국가법령정보센터: 도로설계기준
 #V_CURVE_LOOKUP_BP = [0., 1./800., 1./670., 1./560., 1./440., 1./360., 1./265., 1./190., 1./135., 1./85., 1./55., 1./30., 1./15.]
 #V_CRUVE_LOOKUP_VALS = [300, 150, 120, 110, 100, 90, 80, 70, 60, 50, 45, 35, 30]
@@ -214,7 +214,7 @@ def resample_relative_coords(relative_coords, distance_interval):
                 current_distance += distance_interval
             return resampled_points, resampled_distances
         except Exception as e:
-            print(f"[carrot_man] shapely resample failed: {e}")
+            print(f"[nav_service] shapely resample failed: {e}")
 
     return cleaned, [i * distance_interval for i in range(len(cleaned))]
 
@@ -241,23 +241,23 @@ def calculate_curvature(p1, p2, p3):
     #curvature_cache[key] = curvature
     return curvature
 
-class CarrotMan:
+class NavigationService:
   def __init__(self):
-    print("************************************************CarrotMan init************************************************")
+    print("************************************************NavigationService init************************************************")
     self.params = Params()
     self.params_memory = Params("/dev/shm/params")
     self.gps_location_service = get_gps_location_service(self.params)
     self.sm = messaging.SubMaster(['deviceState', 'carState', 'controlsState', 'radarState', 'longitudinalPlan', 'modelV2', 'selfdriveState', 'carControl', 'lateralPlan', self.gps_location_service, 'userBookmark'])
-    self.pm = messaging.PubMaster(['carrotMan'])
+    self.pm = messaging.PubMaster(['kisaNavigation'])
 
-    self.carrot_serv = CarrotServ()
+    self.guidance = GuidanceProcessor()
     # Drain every IMU sample at 10 Hz; SubMaster would retain only the newest.
     self.bump_accel_sock = messaging.sub_sock("accelerometer")
 
     self.show_panda_debug = False
     self.broadcast_ip = self.get_broadcast_address()
     self.broadcast_port = 7705
-    self.carrot_man_port = 7706
+    self.legacy_udp_port = 7706
     self.connection = None
 
     self.ip_address = "0.0.0.0"
@@ -265,7 +265,7 @@ class CarrotMan:
 
     self.turn_speed_last = 250
     self.curvatureFilter = MyMovingAverage(20)
-    self.carrot_curve_speed_params()
+    self.refresh_curve_speed_settings()
 
     self.is_running = True
     self.navi_points = []
@@ -273,7 +273,7 @@ class CarrotMan:
     self.navi_points_active = False
     self.navd_active = False
 
-    self.active_carrot_last = False
+    self.previous_guidance_level = False
 
     self._rgdata_ts_lock = threading.Lock()
     self._last_rgdata_timestamp_ms = 0
@@ -284,8 +284,8 @@ class CarrotMan:
 
     self.is_metric = self.params.get_bool("IsMetric")
 
-    self.carrot_zmq_thread = threading.Thread(target=self.carrot_cmd_zmq, args=[], daemon=True)
-    self.carrot_zmq_thread.start()
+    self.command_listener = threading.Thread(target=self.receive_command_requests, args=[], daemon=True)
+    self.command_listener.start()
 
     threading.Thread(target=self.broadcast_version_info, daemon=True).start()
 
@@ -312,7 +312,7 @@ class CarrotMan:
         return m.group(1)
 
     except Exception as e:
-      print(f"[carrot_man] failed to resolve broadcast address: {e}")
+      print(f"[nav_service] failed to resolve broadcast address: {e}")
     return "255.255.255.255"
 
   def get_local_ip(self):
@@ -341,16 +341,16 @@ class CarrotMan:
         for event in messaging.drain_sock(self.bump_accel_sock):
           accel = event.accelerometer
           if event.valid and accel.which() == "acceleration":
-            self.carrot_serv.bump_memory.sensor(accel.timestamp * 1e-9, accel.acceleration.v)
+            self.guidance.bump_memory.sensor(accel.timestamp * 1e-9, accel.acceleration.v)
         remote_addr = self.remote_addr
         remote_ip = remote_addr[0] if remote_addr is not None else ""
-        vturn_speed = self.carrot_curve_speed(self.sm)
-        #coords, distances, route_speed = self.carrot_navi_route()
+        vturn_speed = self.calculate_curve_speed(self.sm)
+        #coords, distances, route_speed = self.estimate_route_speed()
         coords, distances, route_speed = [], [], 300
 
         #print("coords=", coords)
         #print("curvatures=", curvatures)
-        self.carrot_serv.update_navi(remote_ip, self.sm, self.pm, vturn_speed, coords, distances, route_speed, self.gps_location_service)
+        self.guidance.update_navi(remote_ip, self.sm, self.pm, vturn_speed, coords, distances, route_speed, self.gps_location_service)
         self._refresh_signal_context()
 
         now = time.monotonic()
@@ -369,7 +369,7 @@ class CarrotMan:
               self.remote_addr = None
               self.params_memory.put("NetworkAddress", self.ip_address)
 
-            msg = self.make_send_message()
+            msg = self.build_discovery_message()
             if self.broadcast_ip is not None:
               dat = msg.encode('utf-8')
               for navi_port in DISCOVERY_PORTS:
@@ -397,7 +397,7 @@ class CarrotMan:
               self.params_memory.put("NetworkAddress", self.ip_address)
               next_broadcast_time = now + BROADCAST_NETWORK_ERROR_RETRY_INTERVAL
               if now - last_network_error_log_time >= BROADCAST_NETWORK_ERROR_LOG_INTERVAL:
-                print(f"[carrot_man] broadcast skipped: {e}")
+                print(f"[nav_service] broadcast skipped: {e}")
                 last_network_error_log_time = now
             else:
               if self.connection:
@@ -420,29 +420,29 @@ class CarrotMan:
         time.sleep(1)
 
 
-  def carrot_navi_route(self):
+  def estimate_route_speed(self):
 
-    if self.carrot_serv.active_carrot > 1:
+    if self.guidance.guidance_level > 1:
       if False and self.navd_active:  # mabox always active
         self.navd_active = False
         self.params.remove("NavDestination")
     is_onroad = not self.params.get_bool("IsOffroad")
-    if not is_onroad or not self.navi_points_active or not SHAPELY_AVAILABLE or (self.carrot_serv.active_carrot <= 1 and not self.navd_active):
-      #print(f"navi_points_active: {self.navi_points_active}, active_carrot: {self.carrot_serv.active_carrot}")
+    if not is_onroad or not self.navi_points_active or not SHAPELY_AVAILABLE or (self.guidance.guidance_level <= 1 and not self.navd_active):
+      #print(f"navi_points_active: {self.navi_points_active}, guidance_level: {self.guidance.guidance_level}")
       if self.navi_points_active:
-        print("navi_points_active: ", self.navi_points_active, "active_carrot: ", self.carrot_serv.active_carrot, "navd_active: ", self.navd_active)
+        print("navi_points_active: ", self.navi_points_active, "guidance_level: ", self.guidance.guidance_level, "navd_active: ", self.navd_active)
         #haversine_cache.clear()
         #curvature_cache.clear()
         self.navi_points = []
         self.navi_points_active = False
-        if self.active_carrot_last > 1:
+        if self.previous_guidance_level > 1:
           #self.params.remove("NavDestination")
           pass
-      self.active_carrot_last = self.carrot_serv.active_carrot
+      self.previous_guidance_level = self.guidance.guidance_level
       return [],[],300
 
-    current_position = (self.carrot_serv.vpPosPointLon, self.carrot_serv.vpPosPointLat)
-    heading_deg = self.carrot_serv.bearing
+    current_position = (self.guidance.vpPosPointLon, self.guidance.vpPosPointLat)
+    heading_deg = self.guidance.bearing
 
     distance_interval = 10.0
     out_speed = 300
@@ -452,7 +452,7 @@ class CarrotMan:
         try:
             relative_coords = gps_to_relative_xy(path, start_point, heading_deg)
         except Exception as e:
-            print(f"[carrot_man] invalid GPS path for navigation: {e}")
+            print(f"[nav_service] invalid GPS path for navigation: {e}")
             relative_coords = []
 
         resampled_points, resampled_distances = resample_relative_coords(relative_coords, distance_interval)
@@ -471,19 +471,19 @@ class CarrotMan:
                 curvatures.append(curvature)
                 speed = np.interp(abs(curvature), V_CURVE_LOOKUP_BP, V_CRUVE_LOOKUP_VALS)
                 if abs(curvature) < 0.02:
-                  speed = max(speed, self.carrot_serv.nRoadLimitSpeed)
+                  speed = max(speed, self.guidance.nRoadLimitSpeed)
                 speeds.append(speed)
                 distances.append(distance)
             #print(f"curvatures= {[round(s, 4) for s in curvatures]}")
             #print(f"speeds= {[round(s, 1) for s in speeds]}")
             # Apply acceleration limits in reverse to adjust speeds
-            accel_limit = self.carrot_serv.autoNaviSpeedDecelRate # m/s^2
+            accel_limit = self.guidance.autoNaviSpeedDecelRate # m/s^2
             accel_limit_kmh = accel_limit * 3.6  # Convert to km/h per second
             out_speeds = [0] * len(speeds)
             out_speeds[-1] = speeds[-1]  # Set the last speed as the initial value
             v_ego_kph = self.sm['carState'].vEgo * 3.6
 
-            time_delay = self.carrot_serv.autoNaviSpeedCtrlEnd
+            time_delay = self.guidance.autoNaviSpeedCtrlEnd
             time_wait = 0
             for i in range(len(speeds) - 2, -1, -1):
                 target_speed = speeds[i]
@@ -522,14 +522,14 @@ class CarrotMan:
     return resampled_points, resampled_distances, out_speed #speeds, distances
 
 
-  def make_send_message(self):
+  def build_discovery_message(self):
     msg = {}
-    msg['Carrot2'] = self.params.get("Version")
+    msg['Kisa2'] = self.params.get("Version")
     isOnroad = not self.params.get_bool("IsOffroad")
     msg['IsOnroad'] = isOnroad
-    msg['CarrotRouteActive'] = self.navi_points_active
+    msg['KisaRouteActive'] = self.navi_points_active
     msg['ip'] = self.ip_address
-    msg['port'] = self.carrot_man_port
+    msg['port'] = self.legacy_udp_port
     self.controls_active = False
     self.xState = 0
     self.trafficState = 0
@@ -556,8 +556,8 @@ class CarrotMan:
     msg['v_cruise_kph'] = v_cruise_kph
     msg['carcruiseSpeed'] = carcruiseSpeed
     msg['v_ego_kph'] = v_ego_kph
-    msg['tbt_dist'] = self.carrot_serv.xDistToTurn
-    msg['sdi_dist'] = self.carrot_serv.xSpdDist
+    msg['tbt_dist'] = self.guidance.xDistToTurn
+    msg['sdi_dist'] = self.guidance.xSpdDist
     msg['active'] = self.controls_active
     msg['xState'] = self.xState
     msg['trafficState'] = self.trafficState
@@ -573,13 +573,13 @@ class CarrotMan:
     return buffer
 
 
-  def carrot_man_thread(self):
+  def receive_legacy_udp(self):
     while True:
       try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
           sock.settimeout(10)  # 소켓 타임아웃 설정 (10초)
-          sock.bind(('0.0.0.0', self.carrot_man_port))  # UDP 포트 바인딩
-          print("#########carrot_man_thread: UDP thread started...")
+          sock.bind(('0.0.0.0', self.legacy_udp_port))  # UDP 포트 바인딩
+          print("#########receive_legacy_udp: UDP thread started...")
 
           while True:
             try:
@@ -597,17 +597,17 @@ class CarrotMan:
                 self.remote_addr = remote_addr
                 try:
                   json_obj = json.loads(data.decode())
-                  self.carrot_serv.update(json_obj)
+                  self.guidance.update(json_obj)
                 except Exception as e:
-                  print(f"carrot_man_thread: json error...: {e}")
+                  print(f"receive_legacy_udp: json error...: {e}")
                   print(data)
 
                 # 응답 메시지 생성 및 송신 (UDP는 sendto 사용)
                 #try:
-                #  msg = self.make_send_message()
+                #  msg = self.build_discovery_message()
                 #  sock.sendto(msg.encode('utf-8'), self.remote_addr)
                 #except Exception as e:
-                #  print(f"carrot_man_thread: send error...: {e}")
+                #  print(f"receive_legacy_udp: send error...: {e}")
 
               except TimeoutError:
                 #print("Waiting for data (timeout)...")
@@ -615,12 +615,12 @@ class CarrotMan:
                 time.sleep(1)
 
               except Exception as e:
-                print(f"carrot_man_thread: error...: {e}")
+                print(f"receive_legacy_udp: error...: {e}")
                 self.remote_addr = None
                 break
 
             except Exception as e:
-              print(f"carrot_man_thread: recv error...: {e}")
+              print(f"receive_legacy_udp: recv error...: {e}")
               self.remote_addr = None
               break
 
@@ -675,7 +675,7 @@ class CarrotMan:
                 try:
                   print(data)
                   kisa_data = self.parse_kisa_data(data)
-                  self.carrot_serv.update_kisa(kisa_data)
+                  self.guidance.update_kisa(kisa_data)
                   #json_obj = json.loads(data.decode())
                   #print(json_obj)
                 except Exception as e:
@@ -713,7 +713,7 @@ class CarrotMan:
       print(f"TMUX creation error: {e}")
       return False
 
-  def carrot_cmd_zmq(self):
+  def receive_command_requests(self):
 
     context = zmq.Context()
     def setup_socket():
@@ -727,7 +727,7 @@ class CarrotMan:
     isOnroadCount = 0
     onroad_start_at = None
 
-    print("#########carrot_cmd_zmq: thread started...")
+    print("#########receive_command_requests: thread started...")
     while True:
       try:
         now = time.monotonic()
@@ -771,7 +771,7 @@ class CarrotMan:
           #print(echo)
           socket.send(echo.encode())
       except Exception as e:
-        print(f"carrot_cmd_zmq error: {e}")
+        print(f"receive_command_requests error: {e}")
         socket.close()
         time.sleep(1)
         socket, poller = setup_socket()
@@ -794,7 +794,7 @@ class CarrotMan:
     float_data = self.recvall(sock, 4)  # Float은 4바이트
     return struct.unpack('!f', float_data)[0]
 
-  def carrot_route(self):
+  def receive_route_connections(self):
     host = '0.0.0.0'  # 혹은 다른 호스트 주소
     port = 7709  # 포트 번호
 
@@ -804,7 +804,7 @@ class CarrotMan:
         s.listen()
 
         while True:
-          print("################# waiting connection from CarrotMan route #####################")
+          print("################# waiting connection from NavigationService route #####################")
           conn, addr = s.accept()
           with conn:
             print(f"Connected by {addr}")
@@ -826,14 +826,14 @@ class CarrotMan:
             except Exception as e:
               print(e)
     except Exception as e:
-      print("################# CarrotMan route server error #####################")
+      print("################# NavigationService route server error #####################")
       print(e)
 
-  def carrot_curve_speed_params(self):
-    self.autoCurveSpeedFactor = self.params.get("AutoCurveSpeedFactor")*0.01
+  def refresh_curve_speed_settings(self):
+    self.autoCurveSpeedFactor = self.params.get("VisionCurveSensitivityPct")*0.01
 
-  def carrot_curve_speed(self, sm):
-    self.carrot_curve_speed_params()
+  def calculate_curve_speed(self, sm):
+    self.refresh_curve_speed_settings()
     if not sm.alive['carState'] and not sm.alive['modelV2']:
         return 250
     #print(len(sm['modelV2'].orientationRate.z))
@@ -867,9 +867,6 @@ class CarrotMan:
     turnSpeed = max(abs(adjusted_target_lat_a / max_curve)**0.5  * 3.6, 5)
     turnSpeed = min(turnSpeed, 250)
     return turnSpeed * curv_direction
-
-  def carrot_navi_thread(self):
-    self.carrot_navi_tcp_server(7712)
 
   def handle_route(self, arr: list):
     if not arr:
@@ -921,7 +918,7 @@ class CarrotMan:
         print("NavDestination put error:", e)
 
   def _signal_context(self, now):
-    serv = self.carrot_serv
+    serv = self.guidance
     navigation = {
       "age": now - serv.last_update_gps_time_navi,
       "lat": serv.vpPosPointLatNavi, "lon": serv.vpPosPointLonNavi,
@@ -1210,11 +1207,11 @@ class CarrotMan:
       print(f"navi image param error: {e}")
 
 
-  def handle_carrot_state(self, d: dict):
+  def apply_guidance_update(self, d: dict):
     try:
-      self.carrot_serv.update(d)
+      self.guidance.update(d)
     except Exception as e:
-      print("carrot_state update error:", e)
+      print("navigation_state update error:", e)
 
   def handle_unknown(self, obj: Any):
     print("[UNKNOWN]", str(obj)[:200])
@@ -1521,7 +1518,7 @@ class CarrotMan:
       if stale:
         print(f"[STALE DROP] rgdata ts={event_time_ms} <= last={last_ts}")
       else:
-        self._safe_dispatch_handler("rgdata", self.handle_carrot_state, self._normalize_rgdata(obj["rgdata"], obj.get("raw_rgdata")))
+        self._safe_dispatch_handler("rgdata", self.apply_guidance_update, self._normalize_rgdata(obj["rgdata"], obj.get("raw_rgdata")))
       handled = True
 
     if "vrtx" in obj:
@@ -1568,27 +1565,7 @@ class CarrotMan:
     self._last_complex_crossroad = {}
     self.params_memory.remove(NAVI_IMAGE_PARAM)
     self.handle_route([])
-    serv = self.carrot_serv
-    serv.navi_source = source if source in ("tmap", "naver-map") else ""
-    serv.navi_highway_stamp = None
-    serv.navigation_packet_stamp = None
-    serv.active_count = serv.active_sdi_count = 0
-    serv.nSdiType = serv.nSdiPlusType = serv.nSdiBlockType = serv.nSdiPlusBlockType = -1
-    serv.nSdiDist = serv.nSdiPlusDist = serv.nSdiBlockDist = serv.nSdiPlusBlockDist = 0
-    serv.nSdiBlockSpeed = serv.nSdiPlusBlockSpeed = 0
-    serv.nSdiSpeedLimit = serv.nSdiPlusSpeedLimit = 0
-    serv.xSpdType = -1
-    serv.xSpdLimit = serv.xSpdLimit_org = serv.xSpdDist = 0
-    serv.nTBTTurnType = serv.nTBTTurnTypeNext = -1
-    serv.nTBTDist = serv.nTBTDistNext = 0
-    serv.xTurnInfo = serv.xTurnInfoNext = -1
-    serv.xDistToTurn = serv.xDistToTurnNext = 0
-    serv.nSdiSection = 0
-    serv.signal_lane_points = []
-    serv.nRoadLimitSpeed = serv.nPosSpeed = 0
-    serv.vpPosPointLatNavi = serv.vpPosPointLonNavi = 0
-    serv.last_update_gps_time_navi = 0
-    serv.szSdiDescr = serv.szTBTMainText = serv.szTBTMainTextNext = ""
+    self.guidance.select_source(source)
     cloudlog.event("navi_source_selected", source=source or "none", remote=str(addr))
 
   def _navi_transport_received(self, source, packet):
@@ -1600,36 +1577,34 @@ class CarrotMan:
                    rgdata=packet.get("rgdata"), mode=raw.get("mode"),
                    safety=safety)
 
-  def carrot_navi_tcp_server(self, port: int = 7712):
-    mux = NaviSourceMux(lambda obj: self._dispatch_obj(obj, ordered=True),
-                        self._navi_source_changed, self._navi_transport_received)
-    self._navi_tcp_server = NaviTcpServer(mux, port)
-    self._navi_tcp_server.serve()
+  def start_navigation_receiver(self, *, host="0.0.0.0", port=7712):
+    mux = NaviSourceMux(self.receive_ordered_packet, self._navi_source_changed, self._navi_transport_received)
+    self.navigation_receiver = NaviTcpServer(mux, port=port, host=host)
+    thread = threading.Thread(target=self.navigation_receiver.serve, name="kisa-navigation-receiver", daemon=True)
+    thread.start()
+    return thread
+
+  def receive_ordered_packet(self, packet):
+    self._dispatch_obj(packet, ordered=True)
 
 
 def main():
   from openpilot.selfdrive.kisapilot.crash_diagnostics import enable_crash_diagnostics
   fault_file = enable_crash_diagnostics()
-  cloudlog.event('carrot_crash_diagnostics', fault_file=fault_file,
+  cloudlog.event('kisa_navigation_crash_diagnostics', fault_file=fault_file,
                  note='Python all-thread fatal stacks; native core collection uses system configuration')
   try:
     set_core_affinity([0, 1, 2, 3])
   except Exception:
-    print("[carrot_man] failed to set core affinity")
+    print("[nav_service] failed to set core affinity")
 
-  print("CarrotManager Started")
-  #print("Carrot GitBranch = {}, {}".format(Params().get("GitBranch"), Params().get("GitCommitDate")))
-  carrot_man = CarrotMan()
-
-  print(f"CarrotMan {carrot_man}")
-  #threading.Thread(target=carrot_man.kisa_app_thread).start()
-  threading.Thread(target=carrot_man.carrot_navi_thread, daemon=True).start()
+  navigation = NavigationService()
+  navigation.start_navigation_receiver()
   while True:
     try:
-      carrot_man.carrot_man_thread()
-    except Exception as e:
-      print(f"carrot_man error...: {e}")
-      traceback.print_exc()
+      navigation.receive_legacy_udp()
+    except Exception:
+      cloudlog.exception("Kisa navigation UDP receive failed")
       time.sleep(10)
 
 

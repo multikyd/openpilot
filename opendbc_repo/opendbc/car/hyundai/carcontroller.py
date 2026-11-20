@@ -160,12 +160,12 @@ class CarController(CarControllerBase):
     self.MainMode_ACC_trigger = 0
     self.LFA_trigger = 0
 
-    self.activeCarrot = 0
-    self.camera_scc_params = Params().get("HyundaiCameraSCC", return_default=True)
+    self.guidanceLevel = 0
+    self.camera_scc_params = Params().get("HyundaiCameraCruiseMode", return_default=True)
     self.is_ldws_car = Params().get_bool("IsLdwsCar")
     self.enable_corner_radar = 0
 
-    self.traffic_detection_mode = Params().get("TrafficLightDetectMode", return_default=True)
+    self.traffic_detection_mode = Params().get("TrafficSignalControlMode", return_default=True)
 
     self.e2e_standstill = False
     self.e2e_standstill_stat = False
@@ -185,11 +185,11 @@ class CarController(CarControllerBase):
     if self.frame % 300 == 0:
       params = Params()
       self.max_angle_frames = params.get("MaxAngleFrames")
-      steerMax = params.get("CustomSteerMax")
-      steerDeltaUp = params.get("CustomSteerDeltaUp")
-      steerDeltaDown = params.get("CustomSteerDeltaDown")
-      steerDeltaUpLC = params.get("CustomSteerDeltaUpLC")
-      steerDeltaDownLC = params.get("CustomSteerDeltaDownLC")
+      steerMax = params.get("SteeringTorqueLimit")
+      steerDeltaUp = params.get("SteeringTorqueRiseLimit")
+      steerDeltaDown = params.get("SteeringTorqueFallLimit")
+      steerDeltaUpLC = params.get("LaneChangeTorqueRiseLimit")
+      steerDeltaDownLC = params.get("LaneChangeTorqueFallLimit")
       if steerMax > 0:
         self.params.STEER_MAX = steerMax
       if steerDeltaUp > 0:
@@ -212,7 +212,7 @@ class CarController(CarControllerBase):
       else:
         self.steerDeltaDownLC = self.steerDeltaDown
         
-      self.soft_hold_mode = 1 if params.get("AutoCruiseControl") > 1 else 2
+      self.soft_hold_mode = 1 if params.get("AutoCruiseResumeMode") > 1 else 2
       self.hapticFeedbackWhenSpeedCamera = int(params.get("HapticFeedbackWhenSpeedCamera"))
 
       self.button_spam1 = params.get("CruiseButtonTest1")
@@ -220,7 +220,7 @@ class CarController(CarControllerBase):
       self.button_spam3 = params.get("CruiseButtonTest3")
 
       self.canfd_debug = params.get("CanfdDebug")
-      self.camera_scc_params = params.get("HyundaiCameraSCC")
+      self.camera_scc_params = params.get("HyundaiCameraCruiseMode")
       self.enable_corner_radar = params.get("EnableCornerRadar")
 
     actuators = CC.actuators
@@ -322,8 +322,8 @@ class CarController(CarControllerBase):
     sys_warning, sys_state, left_lane_warning, right_lane_warning = process_hud_alert(CC.enabled, self.car_fingerprint,
                                                                                       hud_control)
 
-    active_speed_decel = hud_control.activeCarrot == 3 and self.activeCarrot != 3 # 3: Speed Decel
-    self.activeCarrot = hud_control.activeCarrot
+    active_speed_decel = hud_control.guidanceLevel == 3 and self.guidanceLevel != 3 # 3: Speed Decel
+    self.guidanceLevel = hud_control.guidanceLevel
     if active_speed_decel and self.speedCameraHapticEndFrame < 0: # 과속카메라 감속시작
       self.speedCameraHapticEndFrame = self.frame + (8.0 / DT_CTRL)  #8초간 켜줌.
     elif not active_speed_decel:
@@ -364,131 +364,16 @@ class CarController(CarControllerBase):
         can_sends.append(make_tester_present_msg(0x7b1, self.CAN.ECAN, suppress_response=True))
 
     camera_scc = self.CP.flags & HyundaiFlags.CAMERA_SCC
-    # CAN-FD platforms
     if self.CP.flags & HyundaiFlags.CANFD:
-      hda2 = self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING
-      hda2_long = hda2 and self.CP.openpilotLongitudinalControl
-
-      # steering control
-      if camera_scc:
-        can_sends.extend(hyundaicanfd.create_steering_messages_camera_scc(self.frame, self.packer, self.CP, self.CAN, CC, apply_steer_req, apply_torque, CS, apply_angle, self.lkas_max_torque, angle_control))
-      else:
-        can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, apply_steer_req, apply_torque, apply_angle, self.lkas_max_torque, angle_control))
-
-      # prevent LFA from activating on HDA2 by sending "no lane lines detected" to ADAS ECU
-      if self.frame % 5 == 0 and hda2 and not camera_scc:
-        can_sends.extend(hyundaicanfd.create_suppress_lfa(self.packer, self.CAN, CS))
-
-      # LFA and HDA icons
-      if self.frame % 5 == 0 and camera_scc:
-        can_sends.extend(hyundaicanfd.create_lfahda_cluster(self.packer, CS, self.CAN, CC.longActive, CC.latActive))
-
-      # The test shares card's single sendcan publisher; no SPAS1 or ECU-disable.
-      if self.blinker_test is not None and now_nanos - self.last_spas_poll_nanos >= 20_000_000:
-        # Controller ticks can bunch after a scheduling delay. Pace by time.
-        self.last_spas_poll_nanos = now_nanos
-        now = now_nanos / 1e9
-        test_supported = (self.CP.carFingerprint == CAR.HYUNDAI_IONIQ_5_PE and
-                          any(int(c.safetyParam) & SAFETY_FLAG for c in self.CP.safetyConfigs) and
-                          not (self.CP.flags & HyundaiFlags.ENABLE_BLINKERS) and
-                          self.CAN.ECAN % 4 == (1 if hda2 and not camera_scc else 0))
-        stock_fresh = 0 <= now - getattr(CS, "stock_spas_time", 0) < .25
-        stock_active = not stock_fresh or getattr(CS, "stock_spas_mode", 7) not in (0, 3)
-        # Keep one owner until its neutral release frames finish. Give an
-        # eligible app request priority when choosing the next owner.
-        if not self.spas_sender.clear_frames:
-          sender = self.blinker_test
-          if not sender.has_request(now):
-            if self.overtake_signal_test is not None and self.overtake_signal_test.has_request(now):
-              sender = self.overtake_signal_test
-            elif self.tbt_blinker is not None:
-              sender = self.tbt_blinker
-          if sender is not self.spas_sender:
-            sender.last_status = -1.0
-            self.spas_sender = sender
-        test_command = self.spas_sender.update(now, CS.out, CC, test_supported, stock_active)
-        if test_command is not None and test_supported:
-          can_sends.append(self.packer.make_can_msg("SPAS2", self.CAN.ECAN,
-                                                   {"BLINKER_CONTROL": test_command}))
-
-      # blinkers
-      if hda2 and self.CP.flags & HyundaiFlags.ENABLE_BLINKERS:
-        can_sends.extend(hyundaicanfd.create_spas_messages(self.packer, self.CAN, self.frame, CC.leftBlinker, CC.rightBlinker))
-
-      if self.camera_scc_params in [2, 3]:
-        self.canfd_toggle_adas(CC, CS)
-      if self.CP.openpilotLongitudinalControl:
-        self.hyundai_jerk.make_jerk(self.CP, CS, accel, actuators, hud_control)
-        self.hyundai_jerk.check_carrot_cruise(CC, CS, hud_control, stopping, accel, actuators.aTarget)
-
-        if True: #not camera_scc:
-          can_sends.extend(hyundaicanfd.create_ccnc_messages(self.CP, self.packer, self.CAN, self.frame, CC, CS, hud_control, apply_angle, left_lane_warning, right_lane_warning, self.enable_corner_radar))
-          # if hda2:
-          #   can_sends.extend(hyundaicanfd.create_adrv_messages(self.CP, self.packer, self.CAN, self.frame))
-          # else:
-          #   can_sends.extend(hyundaicanfd.create_fca_warning_light(self.CP, self.packer, self.CAN, self.frame))
-        if self.frame % 2 == 0:
-          if self.CP.flags & HyundaiFlags.CAMERA_SCC.value:
-            can_sends.append(hyundaicanfd.create_acc_control_scc2(self.packer, self.CAN, CC.enabled, self.accel_last, accel, stopping, CC.cruiseControl.override,
-                                                             set_speed_in_units, hud_control, self.hyundai_jerk, CS))
-            can_sends.extend(hyundaicanfd.create_tcs_messages(self.packer, self.CAN, CS)) # for sorento SCC radar...
-          else:
-            can_sends.append(hyundaicanfd.create_acc_control(self.packer, self.CAN, CC.enabled, self.accel_last, accel, stopping, CC.cruiseControl.override,
-                                                             set_speed_in_units, hud_control, self.hyundai_jerk.jerk_u, self.hyundai_jerk.jerk_l, CS))
-          self.accel_last = accel
-      else:
-        # button presses
-        if self.camera_scc_params == 3: # camera scc but stock long
-          send_button = self.make_spam_button(CC, CS)
-          can_sends.extend(hyundaicanfd.forward_button_message(self.packer, self.CAN, self.frame, CS, send_button, self.MainMode_ACC_trigger, self.LFA_trigger))
-        else:
-          can_sends.extend(self.create_button_messages(CC, CS, use_clu11=False))
-        
+      can_sends.extend(self._create_canfd_frames(
+        CC, CS, actuators, hud_control, camera_scc, apply_steer_req, apply_torque,
+        apply_angle, angle_control, accel, stopping, set_speed_in_units,
+        left_lane_warning, right_lane_warning, now_nanos))
     else:
-      can_sends.append(hyundaican.create_lkas11(self.packer, self.frame, self.CP, apply_torque, apply_steer_req,
-                                                torque_fault, CS.lkas11, sys_warning, sys_state, CC.enabled,
-                                                hud_control.leftLaneVisible, hud_control.rightLaneVisible,
-                                                left_lane_warning, right_lane_warning, self.is_ldws_car))
-
-      if not self.CP.openpilotLongitudinalControl:
-        can_sends.extend(self.create_button_messages(CC, CS, use_clu11=True))
-      if self.CP.carFingerprint in CAN_GEARS["send_mdps12"]:  # send mdps12 to LKAS to prevent LKAS error
-        can_sends.append(hyundaican.create_mdps12(self.packer, self.frame, CS.mdps12))
-
-      casper_opt = self.CP.carFingerprint in (CAR.HYUNDAI_CASPER_EV)
-      if self.frame % 2 == 0 and self.CP.openpilotLongitudinalControl:
-        self.hyundai_jerk.make_jerk(self.CP, CS, accel, actuators, hud_control)
-        self.hyundai_jerk.check_carrot_cruise(CC, CS, hud_control, stopping, accel, actuators.aTarget)
-        #jerk = 3.0 if actuators.longControlState == LongCtrlState.pid else 1.0
-        use_fca = self.CP.flags & HyundaiFlags.USE_FCA.value
-        if camera_scc:
-          can_sends.extend(hyundaican.create_acc_commands_scc(self.packer, CC.enabled, accel, self.hyundai_jerk, int(self.frame / 2),
-                                                          hud_control, set_speed_in_units, stopping,
-                                                          CC.cruiseControl.override, casper_opt, CS, self.soft_hold_mode))
-        else:
-          can_sends.extend(hyundaican.create_acc_commands(self.packer, CC.enabled, accel, self.hyundai_jerk, int(self.frame / 2),
-                                                hud_control, set_speed_in_units, stopping,
-                                                CC.cruiseControl.override, use_fca, self.CP, CS, self.soft_hold_mode))
-
-
-      # 20 Hz LFA MFA message
-      if self.frame % 5 == 0 and self.CP.flags & HyundaiFlags.SEND_LFA.value:
-        can_sends.append(hyundaican.create_lfahda_mfc(self.packer, CC, self.blinking_signal))
-
-      # 5 Hz ACC options
-      if self.frame % 20 == 0 and self.CP.openpilotLongitudinalControl:
-        if camera_scc:
-          if CS.scc13 is not None:
-            if casper_opt:
-              #can_sends.append(hyundaican.create_acc_opt_copy(CS, self.packer))
-              pass
-          pass
-        else:
-          can_sends.extend(hyundaican.create_acc_opt(self.packer, self.CP))
-
-      # 2 Hz front radar options
-      if self.frame % 50 == 0 and self.CP.openpilotLongitudinalControl and not camera_scc:
-        can_sends.append(hyundaican.create_frt_radar_opt(self.packer))
+      can_sends.extend(self._create_classic_can_frames(
+        CC, CS, actuators, hud_control, camera_scc, apply_steer_req, apply_torque,
+        accel, stopping, set_speed_in_units, left_lane_warning, right_lane_warning,
+        torque_fault, sys_warning, sys_state))
 
     if CS.out.cruiseState.enabled:
       self.e2e_standstill = False
@@ -563,6 +448,139 @@ class CarController(CarControllerBase):
     self.frame += 1
     return new_actuators, can_sends
 
+
+  def _create_canfd_frames(self, CC, CS, actuators, hud_control, camera_scc, apply_steer_req, apply_torque,
+                           apply_angle, angle_control, accel, stopping, set_speed_in_units,
+                           left_lane_warning, right_lane_warning, now_nanos):
+    can_sends = []
+    hda2 = self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING
+    hda2_long = hda2 and self.CP.openpilotLongitudinalControl
+
+    # steering control
+    if camera_scc:
+      can_sends.extend(hyundaicanfd.create_steering_messages_camera_scc(self.frame, self.packer, self.CP, self.CAN, CC, apply_steer_req, apply_torque, CS, apply_angle, self.lkas_max_torque, angle_control))
+    else:
+      can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, apply_steer_req, apply_torque, apply_angle, self.lkas_max_torque, angle_control))
+
+    # prevent LFA from activating on HDA2 by sending "no lane lines detected" to ADAS ECU
+    if self.frame % 5 == 0 and hda2 and not camera_scc:
+      can_sends.extend(hyundaicanfd.create_suppress_lfa(self.packer, self.CAN, CS))
+
+    # LFA and HDA icons
+    if self.frame % 5 == 0 and camera_scc:
+      can_sends.extend(hyundaicanfd.create_lfahda_cluster(self.packer, CS, self.CAN, CC.longActive, CC.latActive))
+
+    # The test shares card's single sendcan publisher; no SPAS1 or ECU-disable.
+    if self.blinker_test is not None and now_nanos - self.last_spas_poll_nanos >= 20_000_000:
+      # Controller ticks can bunch after a scheduling delay. Pace by time.
+      self.last_spas_poll_nanos = now_nanos
+      now = now_nanos / 1e9
+      test_supported = (self.CP.carFingerprint == CAR.HYUNDAI_IONIQ_5_PE and
+                        any(int(c.safetyParam) & SAFETY_FLAG for c in self.CP.safetyConfigs) and
+                        not (self.CP.flags & HyundaiFlags.ENABLE_BLINKERS) and
+                        self.CAN.ECAN % 4 == (1 if hda2 and not camera_scc else 0))
+      stock_fresh = 0 <= now - getattr(CS, "stock_spas_time", 0) < .25
+      stock_active = not stock_fresh or getattr(CS, "stock_spas_mode", 7) not in (0, 3)
+      # Keep one owner until its neutral release frames finish. Give an
+      # eligible app request priority when choosing the next owner.
+      if not self.spas_sender.clear_frames:
+        sender = self.blinker_test
+        if not sender.has_request(now):
+          if self.overtake_signal_test is not None and self.overtake_signal_test.has_request(now):
+            sender = self.overtake_signal_test
+          elif self.tbt_blinker is not None:
+            sender = self.tbt_blinker
+        if sender is not self.spas_sender:
+          sender.last_status = -1.0
+          self.spas_sender = sender
+      test_command = self.spas_sender.update(now, CS.out, CC, test_supported, stock_active)
+      if test_command is not None and test_supported:
+        can_sends.append(self.packer.make_can_msg("SPAS2", self.CAN.ECAN,
+                                                 {"BLINKER_CONTROL": test_command}))
+
+    # blinkers
+    if hda2 and self.CP.flags & HyundaiFlags.ENABLE_BLINKERS:
+      can_sends.extend(hyundaicanfd.create_spas_messages(self.packer, self.CAN, self.frame, CC.leftBlinker, CC.rightBlinker))
+
+    if self.camera_scc_params in [2, 3]:
+      self.canfd_toggle_adas(CC, CS)
+    if self.CP.openpilotLongitudinalControl:
+      self.hyundai_jerk.make_jerk(self.CP, CS, accel, actuators, hud_control)
+      self.hyundai_jerk.update_kisa_cruise(CC, CS, hud_control, stopping, accel, actuators.aTarget)
+
+      if True: #not camera_scc:
+        can_sends.extend(hyundaicanfd.create_ccnc_messages(self.CP, self.packer, self.CAN, self.frame, CC, CS, hud_control, apply_angle, left_lane_warning, right_lane_warning, self.enable_corner_radar))
+        # if hda2:
+        #   can_sends.extend(hyundaicanfd.create_adrv_messages(self.CP, self.packer, self.CAN, self.frame))
+        # else:
+        #   can_sends.extend(hyundaicanfd.create_fca_warning_light(self.CP, self.packer, self.CAN, self.frame))
+      if self.frame % 2 == 0:
+        if self.CP.flags & HyundaiFlags.CAMERA_SCC.value:
+          can_sends.append(hyundaicanfd.create_acc_control_scc2(self.packer, self.CAN, CC.enabled, self.accel_last, accel, stopping, CC.cruiseControl.override,
+                                                           set_speed_in_units, hud_control, self.hyundai_jerk, CS))
+          can_sends.extend(hyundaicanfd.create_tcs_messages(self.packer, self.CAN, CS)) # for sorento SCC radar...
+        else:
+          can_sends.append(hyundaicanfd.create_acc_control(self.packer, self.CAN, CC.enabled, self.accel_last, accel, stopping, CC.cruiseControl.override,
+                                                           set_speed_in_units, hud_control, self.hyundai_jerk.jerk_u, self.hyundai_jerk.jerk_l, CS))
+        self.accel_last = accel
+    else:
+      # button presses
+      if self.camera_scc_params == 3: # camera scc but stock long
+        send_button = self.make_spam_button(CC, CS)
+        can_sends.extend(hyundaicanfd.forward_button_message(self.packer, self.CAN, self.frame, CS, send_button, self.MainMode_ACC_trigger, self.LFA_trigger))
+      else:
+        can_sends.extend(self.create_button_messages(CC, CS, use_clu11=False))
+    return can_sends
+
+  def _create_classic_can_frames(self, CC, CS, actuators, hud_control, camera_scc, apply_steer_req, apply_torque,
+                                 accel, stopping, set_speed_in_units, left_lane_warning, right_lane_warning,
+                                 torque_fault, sys_warning, sys_state):
+    can_sends = []
+    can_sends.append(hyundaican.create_lkas11(self.packer, self.frame, self.CP, apply_torque, apply_steer_req,
+                                              torque_fault, CS.lkas11, sys_warning, sys_state, CC.enabled,
+                                              hud_control.leftLaneVisible, hud_control.rightLaneVisible,
+                                              left_lane_warning, right_lane_warning, self.is_ldws_car))
+
+    if not self.CP.openpilotLongitudinalControl:
+      can_sends.extend(self.create_button_messages(CC, CS, use_clu11=True))
+    if self.CP.carFingerprint in CAN_GEARS["send_mdps12"]:  # send mdps12 to LKAS to prevent LKAS error
+      can_sends.append(hyundaican.create_mdps12(self.packer, self.frame, CS.mdps12))
+
+    casper_opt = self.CP.carFingerprint in (CAR.HYUNDAI_CASPER_EV)
+    if self.frame % 2 == 0 and self.CP.openpilotLongitudinalControl:
+      self.hyundai_jerk.make_jerk(self.CP, CS, accel, actuators, hud_control)
+      self.hyundai_jerk.update_kisa_cruise(CC, CS, hud_control, stopping, accel, actuators.aTarget)
+      #jerk = 3.0 if actuators.longControlState == LongCtrlState.pid else 1.0
+      use_fca = self.CP.flags & HyundaiFlags.USE_FCA.value
+      if camera_scc:
+        can_sends.extend(hyundaican.create_acc_commands_scc(self.packer, CC.enabled, accel, self.hyundai_jerk, int(self.frame / 2),
+                                                        hud_control, set_speed_in_units, stopping,
+                                                        CC.cruiseControl.override, casper_opt, CS, self.soft_hold_mode))
+      else:
+        can_sends.extend(hyundaican.create_acc_commands(self.packer, CC.enabled, accel, self.hyundai_jerk, int(self.frame / 2),
+                                              hud_control, set_speed_in_units, stopping,
+                                              CC.cruiseControl.override, use_fca, self.CP, CS, self.soft_hold_mode))
+
+
+    # 20 Hz LFA MFA message
+    if self.frame % 5 == 0 and self.CP.flags & HyundaiFlags.SEND_LFA.value:
+      can_sends.append(hyundaican.create_lfahda_mfc(self.packer, CC, self.blinking_signal))
+
+    # 5 Hz ACC options
+    if self.frame % 20 == 0 and self.CP.openpilotLongitudinalControl:
+      if camera_scc:
+        if CS.scc13 is not None:
+          if casper_opt:
+            #can_sends.append(hyundaican.create_acc_opt_copy(CS, self.packer))
+            pass
+        pass
+      else:
+        can_sends.extend(hyundaican.create_acc_opt(self.packer, self.CP))
+
+    # 2 Hz front radar options
+    if self.frame % 50 == 0 and self.CP.openpilotLongitudinalControl and not camera_scc:
+      can_sends.append(hyundaican.create_frt_radar_opt(self.packer))
+    return can_sends
 
   def create_button_messages(self, CC: structs.CarControl, CS: CarState, use_clu11: bool):
     can_sends = []
@@ -727,34 +745,34 @@ class HyundaiJerk:
     self.jerk_u = self.jerk_l = 0.0
     self.cb_upper = self.cb_lower = 0.0
     self.jerk_u_min = 0.5
-    self.carrot_cruise = 1
-    self.carrot_cruise_accel = 0.0
-    self.carrot_cruise_decel = self.params.get("CarrotCruiseDecel", return_default=True)
-    self.carrot_cruise_atc_decel = self.params.get("CarrotCruiseAtcDecel", return_default=True)
+    self.kisa_cruise_mode = 1
+    self.kisa_cruise_accel = 0.0
+    self.kisa_cruise_decel = self.params.get("KisaCruiseDecel", return_default=True)
+    self.kisa_turn_decel = self.params.get("KisaTurnDecel", return_default=True)
     self.timer = 0
 
-  def check_carrot_cruise(self, CC, CS, hud_control, stopping, accel, a_target):
+  def update_kisa_cruise(self, CC, CS, hud_control, stopping, accel, a_target):
     self.timer += 1
     if self.timer % int(3.0/DT_CTRL) == 0:
       self.timer = 0
-      self.carrot_cruise_decel = self.params.get("CarrotCruiseDecel", return_default=True)
-      self.carrot_cruise_atc_decel = self.params.get("CarrotCruiseAtcDecel", return_default=True)
-    if self.carrot_cruise_atc_decel >= 0 and 0 < hud_control.atcDistance < 500:
-      self.carrot_cruise_decel = max(self.carrot_cruise_decel, self.carrot_cruise_atc_decel)
-    self.carrot_cruise = 0
-    if CS.out.carrotCruise > 0 and not CC.cruiseControl.override:
+      self.kisa_cruise_decel = self.params.get("KisaCruiseDecel", return_default=True)
+      self.kisa_turn_decel = self.params.get("KisaTurnDecel", return_default=True)
+    if self.kisa_turn_decel >= 0 and 0 < hud_control.atcDistance < 500:
+      self.kisa_cruise_decel = max(self.kisa_cruise_decel, self.kisa_turn_decel)
+    self.kisa_cruise_mode = 0
+    if CS.out.kisaCruise > 0 and not CC.cruiseControl.override:
       if CS.softHoldActive == 0 and not stopping:
         if CS.out.vEgo > 10/3.6:
-          if self.carrot_cruise_decel < 0:
+          if self.kisa_cruise_decel < 0:
             if (a_target > -0.1 or accel > -0.1):
-              self.carrot_cruise = 1
-              self.carrot_cruise_accel = 0.0
+              self.kisa_cruise_mode = 1
+              self.kisa_cruise_accel = 0.0
           else:
-            self.carrot_cruise = 2
-            carrot_cruise = min(accel, -self.carrot_cruise_decel * 0.01)
-            self.carrot_cruise_accel = max(carrot_cruise, self.carrot_cruise_accel - 1.0 * DT_CTRL) #  점진적으로 줄임.
-    if self.carrot_cruise == 0:
-      self.carrot_cruise_accel = CS.out.aEgo
+            self.kisa_cruise_mode = 2
+            kisa_cruise_mode = min(accel, -self.kisa_cruise_decel * 0.01)
+            self.kisa_cruise_accel = max(kisa_cruise_mode, self.kisa_cruise_accel - 1.0 * DT_CTRL) #  점진적으로 줄임.
+    if self.kisa_cruise_mode == 0:
+      self.kisa_cruise_accel = CS.out.aEgo
 
   def make_jerk(self, CP, CS, accel, actuators, hud_control):
     if actuators.longControlState == LongCtrlState.stopping:

@@ -576,7 +576,7 @@ class RadarD:
       self.timer = 0
       self.enable_radar_tracks = self.params.get("EnableRadarTracks")
       self.enable_corner_radar = self.params.get("EnableCornerRadar")
-    raw_radar_lat_factor = self.params.get("RadarLatFactor")
+    raw_radar_lat_factor = self.params.get("RadarCutInLateralFactor")
     cutin_tuning = cutin_tuning_from_sensitivity(raw_radar_lat_factor)
     self.radar_lat_factor = cutin_tuning["horizon_s"] if raw_radar_lat_factor > 0.0 else 0.0
     self.cutin_confirm_frames = max(1, int(round(cutin_tuning["confirm_s"] / DT_MDL)))

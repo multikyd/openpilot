@@ -118,13 +118,13 @@ def create_clu11(packer, frame, clu11, button, CP):
 
 
 def create_lfahda_mfc(packer, CC, blinking_signal):
-  activeCarrot = CC.hudControl.activeCarrot
+  guidanceLevel = CC.hudControl.guidanceLevel
   values = {
     "LFA_Icon_State": 2 if CC.latActive else 1 if CC.enabled else 0,
-    #"HDA_Active": 1 if activeCarrot >= 2 else 0,
-    #"HDA_Icon_State": 2 if activeCarrot == 3 and blinking_signal else 2 if activeCarrot >= 2 else 0,
-    "HDA_Icon_State": 0 if activeCarrot == 3 and blinking_signal else 2 if activeCarrot >= 1 else 0,
-    "HDA_VSetReq": 0, #set_speed_in_units if activeCarrot >= 2 else 0,
+    #"HDA_Active": 1 if guidanceLevel >= 2 else 0,
+    #"HDA_Icon_State": 2 if guidanceLevel == 3 and blinking_signal else 2 if guidanceLevel >= 2 else 0,
+    "HDA_Icon_State": 0 if guidanceLevel == 3 and blinking_signal else 2 if guidanceLevel >= 1 else 0,
+    "HDA_VSetReq": 0, #set_speed_in_units if guidanceLevel >= 2 else 0,
     "HDA_USM" : 2,
     "HDA_Icon_Wheel" : 1 if CC.latActive else 0,
     #"HDA_Chime" : 1 if CC.latActive else 0, # comment for K9 chime, 
@@ -146,11 +146,11 @@ def create_acc_commands_scc(packer, enabled, accel, jerk, idx, hud_control, set_
   objGap2 = 0 if objGap == 0 else 2 if hud_control.leadRelSpeed < -0.2 else 1
 
   if long_enabled:
-    if jerk.carrot_cruise == 1:
+    if jerk.kisa_cruise_mode == 1:
       long_enabled = False
       accel = -0.5
-    elif jerk.carrot_cruise == 2:
-      accel = jerk.carrot_cruise_accel
+    elif jerk.kisa_cruise_mode == 2:
+      accel = jerk.kisa_cruise_accel
 
   if long_enabled:
     scc12_acc_mode = 2 if long_override else 1

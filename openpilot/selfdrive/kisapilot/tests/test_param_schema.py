@@ -2,7 +2,11 @@
 import json
 from pathlib import Path
 import re
+import tempfile
+from types import SimpleNamespace
 import unittest
+
+from openpilot.selfdrive.kisapilot.param_migration import RENAMED_PARAMS, migrate_parameters
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -55,6 +59,24 @@ class TestParamSchema(unittest.TestCase):
           self.assertLessEqual(float(value), entry['max_value'])
           for language in ('ko', 'en'):
             self.assertTrue(label[language].strip())
+
+  def test_previous_tuning_moves_before_cleanup_and_never_overwrites_current_tuning(self):
+    with tempfile.TemporaryDirectory() as temporary:
+      directory = Path(temporary)
+      params = SimpleNamespace(get_param_path=lambda: directory)
+      for previous, current in RENAMED_PARAMS.items():
+        self.assertNotIn(previous, self.registry)
+        self.assertIn(current, self.registry)
+        (directory / previous).write_bytes(b'old-value')
+      protected = directory / RENAMED_PARAMS["StopDistanceCarrot"]
+      protected.write_bytes(b'2.2')
+      migrate_parameters(params)
+      for previous, current in RENAMED_PARAMS.items():
+        (directory / previous).unlink(missing_ok=True)
+        target = directory / current
+        self.assertEqual(target.read_bytes(), b'2.2' if target == protected else b'old-value')
+      migrate_parameters(params)
+      self.assertEqual(protected.read_bytes(), b'2.2')
 
 
 if __name__ == '__main__':

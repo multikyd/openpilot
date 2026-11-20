@@ -20,6 +20,7 @@ from openpilot.system.athena.registration import register, UNREGISTERED_DONGLE_I
 from openpilot.common.swaglog import cloudlog, add_file_handler
 from openpilot.common.version import get_build_metadata
 from openpilot.common.hardware.hw import Paths
+from openpilot.selfdrive.kisapilot.param_migration import RENAMED_PARAMS, migrate_parameters
 
 import importlib.util
 
@@ -29,6 +30,7 @@ def manager_init() -> None:
   build_metadata = get_build_metadata()
 
   params = Params()
+  migrate_parameters(params)
   params.clear_all(ParamKeyFlag.CLEAR_ON_MANAGER_START)
   params.clear_all(ParamKeyFlag.CLEAR_ON_ONROAD_TRANSITION)
   params.clear_all(ParamKeyFlag.CLEAR_ON_OFFROAD_TRANSITION)
@@ -51,6 +53,7 @@ def manager_init() -> None:
       for line in f:
         try:
           key, val_str = line.strip().split(":")
+          key = RENAMED_PARAMS.get(key, key)
           param_type = params.get_type(key)
           if param_type == ParamKeyType.BOOL:
             params.put_bool(key, True if val_str == "1" else False, block=True)

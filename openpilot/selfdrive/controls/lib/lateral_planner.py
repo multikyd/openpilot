@@ -14,7 +14,7 @@ from openpilot.common.params import Params
 from openpilot.selfdrive.controls.lib.lane_planner_2 import LanePlanner
 
 TRAJECTORY_SIZE = 33
-CAMERA_OFFSET = Params().get("CameraOffsetAdj", return_default=True) if Params().get("CameraOffsetAdj", return_default=True) is not None else 0.04 # default 0.04
+CAMERA_OFFSET = Params().get("CameraLateralOffsetM", return_default=True) if Params().get("CameraLateralOffsetM", return_default=True) is not None else 0.04 # default 0.04
 
 
 PATH_COST = 1.0
@@ -65,7 +65,7 @@ class LateralPlanner:
     self.lanelines_active = False
     self.lanelines_active_tmp = False
 
-    self.useLaneLineSpeedApply = self.params.get("UseLaneLineSpeed")
+    self.useLaneLineSpeedApply = self.params.get("LaneModeMinSpeedKph")
     self.useLaneLineMode = False
     self.plan_a = np.zeros((TRAJECTORY_SIZE, ))
     self.plan_yaw = np.zeros((TRAJECTORY_SIZE,))
@@ -89,7 +89,7 @@ class LateralPlanner:
     self.x0 = x0
     self.lat_mpc.reset(x0=self.x0)
 
-  def update(self, sm, carrot):
+  def update(self, sm, driving_policy):
     global LATERAL_ACCEL_COST, LATERAL_JERK_COST, STEERING_RATE_COST
     self.readParams -= 1
     if self.readParams <= 0:
@@ -106,7 +106,7 @@ class LateralPlanner:
     v_ego_car = max(sm['carState'].vEgo, MIN_SPEED)
     speed_kph = v_ego_car * 3.6
     self.v_ego = v_ego_car
-    self.curve_speed = sm['carrotMan'].vTurnSpeed
+    self.curve_speed = sm['kisaNavigation'].vTurnSpeed
 
     # Parse model predictions
     md = sm['modelV2']
@@ -143,7 +143,7 @@ class LateralPlanner:
     # Turn off lanes during lane change
     #if self.DH.desire == log.Desire.laneChangeRight or self.DH.desire == log.Desire.laneChangeLeft:
       
-    if md.meta.desire != log.Desire.none or carrot.atc_active:
+    if md.meta.desire != log.Desire.none or driving_policy.atc_active:
       self.LP.lane_change_multiplier = 0.0 #md.meta.laneChangeProb
     else:
       self.LP.lane_change_multiplier = 1.0
@@ -160,7 +160,7 @@ class LateralPlanner:
       measured_curvature, self.t_idxs, self.plan_yaw_rate, self.v_plan, preview_horizon=.75)
     self.LP.narrow_right_ready = bool(sm['carControl'].latActive and
                                       sm.all_checks(service_list=['carState', 'modelV2', 'carControl']))
-    self.LP.single_lane_highway = bool(sm['carrotMan'].naviHighway)
+    self.LP.single_lane_highway = bool(sm['kisaNavigation'].naviHighway)
     self.path_xyz, self.lanelines_active = self.LP.get_d_path(sm['carState'], v_ego_car, self.t_idxs, self.path_xyz, self.curve_speed)
 
     # Keep heading references consistent with the blended path during release.

@@ -66,7 +66,7 @@ class Controls:
     self.sm = messaging.SubMaster(['lateralDelay', 'vehicleParameters', 'lateralTorqueParameters', 'modelV2', 'selfdriveState',
                                    'extrinsicsCalibration', 'deviceMotion', 'longitudinalPlan', 'lateralManeuverPlan', 'carState', 'carOutput',
                                    'driverMonitoringState', 'onroadEvents', 'driverAssistance',
-                                   'carrotMan', 'lateralPlan', 'radarState',], poll='selfdriveState')
+                                   'kisaNavigation', 'lateralPlan', 'radarState',], poll='selfdriveState')
     self.pm = messaging.PubMaster(['carControl', 'controlsState'])
 
     self.steer_limited_by_safety = False
@@ -77,7 +77,7 @@ class Controls:
     self.model_narrow_road_guard = ModelNarrowRoadGuard()
     self.narrow_guard_used = False
     self.lane_center_preference = self.params.get("LaneCenterOffset", return_default=True)
-    self.camera_offset = self.params.get("CameraOffsetAdj", return_default=True)
+    self.camera_offset = self.params.get("CameraLateralOffsetM", return_default=True)
 
     self.pose_calibrator = PoseCalibrator()
     self.calibrated_pose: Pose | None = None
@@ -99,11 +99,11 @@ class Controls:
     self.lanefull_timer = 0
 
     self.timer = 0
-    self.sr_rate = self.params.get("SteerRatioRate", return_default=True)
-    self.custom_sr = self.params.get("CustomSR", return_default=True)
-    self.use_lane_line_curve_speed = self.params.get("UseLaneLineCurveSpeed", return_default=True)
-    self.lat_smooth_seconds = LAT_SMOOTH_SECONDS if self.params.get("LatSmoothSec", return_default=True) < 0 else self.params.get("LatSmoothSec", return_default=True)
-    self.steer_actuator_delay = self.params.get("SteerActuatorDelay", return_default=True)
+    self.sr_rate = self.params.get("LiveSteeringRatioPct", return_default=True)
+    self.custom_sr = self.params.get("ManualSteeringRatio", return_default=True)
+    self.use_lane_line_curve_speed = self.params.get("LaneModeCurveThresholdKph", return_default=True)
+    self.lat_smooth_seconds = LAT_SMOOTH_SECONDS if self.params.get("LateralSmoothingSec", return_default=True) < 0 else self.params.get("LateralSmoothingSec", return_default=True)
+    self.steer_actuator_delay = self.params.get("SteeringDelaySec", return_default=True)
 
 
   def update(self):
@@ -119,14 +119,14 @@ class Controls:
     self.timer += 1
     if self.timer >= 300: # 3sec
       self.timer = 0
-      self.sr_rate = self.params.get("SteerRatioRate")
-      self.custom_sr = self.params.get("CustomSR")
-      self.use_lane_line_curve_speed = self.params.get("UseLaneLineCurveSpeed")
-      self.lat_smooth_seconds = self.params.get("LatSmoothSec", return_default=True)
+      self.sr_rate = self.params.get("LiveSteeringRatioPct")
+      self.custom_sr = self.params.get("ManualSteeringRatio")
+      self.use_lane_line_curve_speed = self.params.get("LaneModeCurveThresholdKph")
+      self.lat_smooth_seconds = self.params.get("LateralSmoothingSec", return_default=True)
       if self.lat_smooth_seconds < 0:
         self.lat_smooth_seconds = LAT_SMOOTH_SECONDS
-      self.steer_actuator_delay = self.params.get("SteerActuatorDelay")
-      self.camera_offset = self.params.get("CameraOffsetAdj", return_default=True)
+      self.steer_actuator_delay = self.params.get("SteeringDelaySec")
+      self.camera_offset = self.params.get("CameraLateralOffsetM", return_default=True)
       self.lane_center_preference = self.params.get("LaneCenterOffset", return_default=True)
 
     CS = self.sm['carState']
@@ -202,8 +202,8 @@ class Controls:
 
     # Steering PID loop and lateral MPC
     lat_plan = self.sm['lateralPlan']
-    #self.lanefull_mode_enabled = (lat_plan.useLaneLines and abs(self.sm['carrotMan'].vTurnSpeed) > self.use_lane_line_curve_speed)
-    v_turn = abs(self.sm['carrotMan'].vTurnSpeed)
+    #self.lanefull_mode_enabled = (lat_plan.useLaneLines and abs(self.sm['kisaNavigation'].vTurnSpeed) > self.use_lane_line_curve_speed)
+    v_turn = abs(self.sm['kisaNavigation'].vTurnSpeed)
     mode_now = time.monotonic()
     close_lead_model = self.close_lead_mode.update(
       mode_now, CS.vEgo, self.sm['radarState'].leadOne, model_v2.laneLineProbs,
@@ -259,7 +259,7 @@ class Controls:
     self.model_narrow_road_guard.single_lane.update(
       model_v2, CS, model_v2.action.desiredCurvature,
       self.sm.logMonoTime['modelV2']*1e-9, position_now,
-      enabled=(CC.latActive and not self.sm['carrotMan'].naviHighway and
+      enabled=(CC.latActive and not self.sm['kisaNavigation'].naviHighway and
                self.sm.all_checks(['modelV2', 'carState']) and
                0. <= position_now-self.sm.logMonoTime['carState']*1e-9 <= .1))
     if not CC.latActive:
@@ -290,7 +290,7 @@ class Controls:
       guarded_curvature = self.model_narrow_road_guard.update(
         model_v2, CS, model_v2.action.desiredCurvature, guarded_curvature,
         self.sm.logMonoTime['modelV2']*1e-9, guard_now,
-        enabled=(not self.sm['carrotMan'].naviHighway and
+        enabled=(not self.sm['kisaNavigation'].naviHighway and
                  self.sm.all_checks(['modelV2', 'carState']) and
                  0. <= guard_now-self.sm.logMonoTime['carState']*1e-9 <= .1),
         actuator_delay=steer_actuator_delay)
@@ -356,7 +356,7 @@ class Controls:
     CC.cruiseControl.override = CC.enabled and not CC.longActive and self.CP.openpilotLongitudinalControl
     CC.cruiseControl.cancel = CS.cruiseState.enabled and (not CC.enabled or not self.CP.pcmCruise)
 
-    desired_kph = min(CS.vCruiseCluster, self.sm['carrotMan'].desiredSpeed)
+    desired_kph = min(CS.vCruiseCluster, self.sm['kisaNavigation'].desiredSpeed)
     setSpeed = float(desired_kph * CV.KPH_TO_MS)
     speeds = self.sm['longitudinalPlan'].speeds
     if len(speeds):
@@ -366,8 +366,8 @@ class Controls:
 
     hudControl = CC.hudControl
 
-    hudControl.activeCarrot = self.sm['carrotMan'].activeCarrot
-    hudControl.atcDistance = self.sm['carrotMan'].xDistToTurn
+    hudControl.guidanceLevel = self.sm['kisaNavigation'].guidanceLevel
+    hudControl.atcDistance = self.sm['kisaNavigation'].xDistToTurn
 
     lp = self.sm['longitudinalPlan']
     if self.CP.pcmCruise:
@@ -416,7 +416,7 @@ class Controls:
       hudControl.rightLaneDepart = self.sm['driverAssistance'].rightLaneDeparture
     
     hudControl.e2eX = self.sm['longitudinalPlan'].e2eX
-    hudControl.vTurnSpeed = self.sm['carrotMan'].vTurnSpeed
+    hudControl.vTurnSpeed = self.sm['kisaNavigation'].vTurnSpeed
     hudControl.curvature = self.curvature
 
     CO = self.sm['carOutput']

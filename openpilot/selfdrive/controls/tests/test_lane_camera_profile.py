@@ -9,7 +9,7 @@ from openpilot.selfdrive.controls.lib import lane_planner_2 as lane_module
 
 class TestLaneCameraProfile(unittest.TestCase):
   def setUp(self):
-    self.values = dict(LaneCenterOffset=-.05, CameraOffsetAdj=.04, LeftEdgeOffset=0., RightEdgeOffset=0., AdjustLaneOffset=0.)
+    self.values = dict(LaneCenterOffset=-.05, CameraLateralOffsetM=.04, LeftEdgeOffset=0., RightEdgeOffset=0., AdjustLaneOffset=0.)
     with patch.object(lane_module, 'Params', lambda: NS(get=lambda k, **kw: self.values[k])):
       self.p = lane_module.LanePlanner()
     self.cs = NS(vEgo=20., leftBlinker=False, rightBlinker=False, steeringPressed=False, leftLaneLine=11)
@@ -199,7 +199,7 @@ class TestLaneCameraProfile(unittest.TestCase):
   def test_profile_does_not_rewrite_global_camera_parameter(self):
     self.geometry('left')
     self.settle()
-    self.assertEqual(self.values['CameraOffsetAdj'],.04)
+    self.assertEqual(self.values['CameraLateralOffsetM'],.04)
     self.assertAlmostEqual(self.p.effective_camera_offset,0.)
 
 

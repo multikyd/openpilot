@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-CarrotSpeedTable v6 (Params backend, JSON+gzip, 1e-4° grid, 8 buckets)  [EVENT-BASED, NO TS]
-- KEY: "CarrotSpeedTable"
+KisaSpeedTable v6 (Params backend, JSON+gzip, 1e-4° grid, 8 buckets)  [EVENT-BASED, NO TS]
+- KEY: "KisaSpeedTable"
 - FORMAT(v6):
   {
     "format":"v6",
@@ -54,8 +54,8 @@ def _is_gzip(data: bytes) -> bool:
   return len(data) >= 2 and data[0] == 0x1F and data[1] == 0x8B
 
 
-class CarrotSpeed:
-  KEY = "CarrotSpeedTable"
+class KisaSpeedTable:
+  KEY = "KisaSpeedTable"
 
   def __init__(self,
                neighbor_ring: int = 1,

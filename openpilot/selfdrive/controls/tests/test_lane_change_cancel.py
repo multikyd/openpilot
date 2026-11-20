@@ -8,7 +8,7 @@ from openpilot.selfdrive.controls.lib.desire_helper import DesireHelper
 
 class FakeParams:
   def get(self, key):
-    return {'LaneChangeNeedTorque': 0, 'LaneChangeBsd': 0, 'LaneChangeDelay': 0., 'ModelTurnSpeedFactor': 0.}[key]
+    return {'LaneChangeRequiresTorque': 0, 'LaneChangeBlindspotPolicy': 0, 'LaneChangeDelaySec': 0., 'VisionTurnLookaheadSec': 0.}[key]
 
 
 class TestLaneChangeCancel(unittest.TestCase):
@@ -23,13 +23,13 @@ class TestLaneChangeCancel(unittest.TestCase):
     self.model = NS(laneLines=[lane(-5.4), lane(-1.8), lane(1.8), lane(5.4)],
                     laneLineProbs=[.99]*4, roadEdges=[lane(-7.2), lane(7.2)],
                     orientationRate=NS(z=[0.]*33), meta=NS(desireState=[0.]*7))
-    self.carrot = NS(atcType='', carrotCmdIndex=0, carrotCmd='', carrotArg='')
+    self.driving_policy = NS(atcType='', commandIndex=0, commandName='', commandArgument='')
     self.radar = NS(leadLeft=NS(present=False), leadRight=NS(present=False))
     self.tick(30)
 
   def tick(self, count=1, probability=.8, active=True):
     for _ in range(count):
-      self.helper.update(self.cs, self.model, active, probability, self.carrot, self.radar)
+      self.helper.update(self.cs, self.model, active, probability, self.driving_policy, self.radar)
 
   def begin(self, side='left'):
     setattr(self.cs, side+'Blinker', True)
@@ -87,7 +87,7 @@ class TestLaneChangeCancel(unittest.TestCase):
     self.assertEqual(self.helper.turn_direction, log.Desire.none)
     self.assertEqual(self.helper.maneuver_type, 'none')
     self.assertFalse(self.helper.auto_lane_change_enable)
-    self.assertEqual(self.helper.carrot_lane_change_count, 0)
+    self.assertEqual(self.helper.navigation_lane_change_count, 0)
 
   def test_persistent_lighter_opposition_cancels(self):
     self.begin()
@@ -234,7 +234,7 @@ class TestLaneChangeCancel(unittest.TestCase):
     self.assertEqual(self.helper.desire, log.Desire.none)
 
   def test_same_atc_request_cannot_restart_cancelled_change(self):
-    self.carrot.atcType = 'fork left'
+    self.driving_policy.atcType = 'fork left'
     self.tick(4)
     # Force the active state, independent of automatic-start lane availability.
     self.helper.lane_change_state = log.LaneChangeState.laneChangeStarting

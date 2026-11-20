@@ -117,18 +117,18 @@ class TestHighwayQueueGate(unittest.TestCase):
 
     class SM(dict):
       checks = True
-      logMonoTime = {'carrotMan': int(10e9)}
+      logMonoTime = {'kisaNavigation': int(10e9)}
       def all_checks(self, services):
         return self.checks
 
-    sm = SM(carrotMan=SimpleNamespace(naviHighway=True))
+    sm = SM(kisaNavigation=SimpleNamespace(naviHighway=True))
     self.assertTrue(eval(code, dict(sm=sm, now=10.5)))
     for now in (9.9, 11.01):
       self.assertFalse(eval(code, dict(sm=sm, now=now)))
     sm.checks = False
     self.assertFalse(eval(code, dict(sm=sm, now=10.5)))
     sm.checks = True
-    sm['carrotMan'].naviHighway = False
+    sm['kisaNavigation'].naviHighway = False
     self.assertFalse(eval(code, dict(sm=sm, now=10.5)))
 
 

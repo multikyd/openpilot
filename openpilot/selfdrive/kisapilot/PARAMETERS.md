@@ -8,14 +8,14 @@
 
 | 키 | 확인 결과 |
 |---|---|
-| `SoundVolumeAdjustEngage` | 별도 인게이지 음량을 읽는 코드 없음. 실제 음량은 `SoundVolumeAdjust` 사용. |
+| `SoundVolumeAdjustEngage` | 별도 인게이지 음량을 읽는 코드 없음. 실제 음량은 `AlertVolumePct` 사용. |
 | `RecordRoadCam` | 녹화 방식을 선택하는 소비 코드 없음. |
 | `KisaBlindSpotDetect` | 화면 표시 소비 코드 없음. 실제 BSD 수신·판정과는 별도인 과거 UI 설정. |
 | `RecordingTimePerVideo` / `RecordingMaxFiles` | 파일 분할·보관에 사용하는 코드 없음. |
 | `ShowDebugUI` / `ShowRadarInfo` / `ShowPlotMode` | 현재 UI에 소비 코드 없음. |
 | `PathOffset` | 읽어서 저장만 하고 경로 계산에 쓰지 않던 두 줄과 함께 제거. |
 | `LatMpcInputOffset` | 등록과 미사용 테스트 더미값만 남아 있어 제거. |
-| `CarrotSpeed` | 키 소비 코드 없음. 동명의 실제 `CarrotSpeed` 클래스는 유지. |
+| `KisaSpeedTable` | 키 소비 코드 없음. 동명의 실제 `KisaSpeedTable` 클래스는 유지. |
 
 등록 목록은 286개에서 275개, 화면 스키마는 100개에서 91개로 정리했습니다. 내부 상태·캐시·외부 앱 통신 키는 화면에 없다는 이유만으로 제거하지 않았습니다. `PutPrebuiltOn`, `CarList`, `GitCommits`처럼 부팅 스크립트나 셸에서 쓰는 키도 유지합니다. 차량에 저장된 과거 파라미터 파일을 일괄 삭제하는 작업은 포함하지 않습니다.
 
@@ -29,7 +29,7 @@
 
 ## UI/Start
 
-### HYUNDAI: 카메라 SCC · `HyundaiCameraSCC`
+### HYUNDAI: 카메라 SCC · `HyundaiCameraCruiseMode`
 
 범위: 0 ~ 3 (단계 1) / 코드 기본값: `1`
 
@@ -37,7 +37,7 @@
 
 사용처: [carcontroller.py](../../../opendbc_repo/opendbc/car/hyundai/carcontroller.py), [hyundaicanfd.py](../../../opendbc_repo/opendbc/car/hyundai/hyundaicanfd.py), [interface.py](../../../opendbc_repo/opendbc/car/hyundai/interface.py), [ui_state.py](../../../openpilot/selfdrive/ui/ui_state.py)
 
-### CANFD: HDA2 모드 · `CanfdHDA2`
+### CANFD: HDA2 모드 · `CanfdHighwayAssistMode`
 
 범위: 0 ~ 2 (단계 1) / 코드 기본값: `2`
 
@@ -53,7 +53,7 @@ CAN-FD 차량의 HDA2 조향 메시지 구성을 선택합니다. 0은 강제 �
 
 사용처: [interface.py](../../../opendbc_repo/opendbc/car/hyundai/interface.py), [radar_interface.py](../../../opendbc_repo/opendbc/car/hyundai/radar_interface.py), [radard.py](../../../openpilot/selfdrive/controls/radard.py)
 
-### 자동 크루즈 제어 · `AutoCruiseControl`
+### 자동 크루즈 제어 · `AutoCruiseResumeMode`
 
 범위: 0 ~ 2 (단계 1) / 코드 기본값: `0`
 
@@ -61,15 +61,15 @@ CAN-FD 차량의 HDA2 조향 메시지 구성을 선택합니다. 0은 강제 �
 
 사용처: [carcontroller.py](../../../opendbc_repo/opendbc/car/hyundai/carcontroller.py), [cruise.py](../../../openpilot/selfdrive/car/cruise.py)
 
-### 크루즈 자동 ON 거리(m) · `CruiseOnDist`
+### 크루즈 자동 ON 거리(m) · `AutoResumeLeadDistanceM`
 
 범위: 0 ~ 25 (단계 0.5) / 코드 기본값: `4.0`
 
-페달을 놓은 상태에서 크루즈 자동 재개를 판단하는 앞차 거리입니다(단위 m). 0은 거리 조건으로 재개하지 않습니다. AutoCruiseControl 및 차량 상태 조건을 만족해야 하며, 정차 목표 간격을 설정하는 항목은 아닙니다.
+페달을 놓은 상태에서 크루즈 자동 재개를 판단하는 앞차 거리입니다(단위 m). 0은 거리 조건으로 재개하지 않습니다. AutoCruiseResumeMode 및 차량 상태 조건을 만족해야 하며, 정차 목표 간격을 설정하는 항목은 아닙니다.
 
 사용처: [cruise.py](../../../openpilot/selfdrive/car/cruise.py)
 
-### 자동 인게이지 · `AutoEngage`
+### 자동 인게이지 · `StartupEngagementMode`
 
 범위: 0 ~ 2 (단계 1) / 코드 기본값: `0`
 
@@ -77,7 +77,7 @@ CAN-FD 차량의 HDA2 조향 메시지 구성을 선택합니다. 0은 강제 �
 
 사용처: [carstate.py](../../../opendbc_repo/opendbc/car/hyundai/carstate.py), [cruise.py](../../../openpilot/selfdrive/car/cruise.py)
 
-### 자동 GasTok 활성화 속도 · `AutoGasTokSpeed`
+### 자동 GasTok 활성화 속도 · `PedalTapResumeThreshold`
 
 범위: 0 ~ 200 (단계 5) / 코드 기본값: `0`
 
@@ -85,7 +85,7 @@ CAN-FD 차량의 HDA2 조향 메시지 구성을 선택합니다. 0은 강제 �
 
 사용처: [cruise.py](../../../openpilot/selfdrive/car/cruise.py)
 
-### 사운드 볼륨(기본 100%) · `SoundVolumeAdjust`
+### 사운드 볼륨(기본 100%) · `AlertVolumePct`
 
 범위: 5 ~ 200 (단계 5) / 코드 기본값: `100`
 
@@ -93,7 +93,7 @@ CAN-FD 차량의 HDA2 조향 메시지 구성을 선택합니다. 0은 강제 �
 
 사용처: [soundd.py](../../../openpilot/selfdrive/ui/soundd.py)
 
-### 화면 밝기(%) · `ShowCustomBrightness`
+### 화면 밝기(%) · `DisplayBrightnessPct`
 
 범위: 10 ~ 100 (단계 10) / 코드 기본값: `50`
 
@@ -101,7 +101,7 @@ CAN-FD 차량의 HDA2 조향 메시지 구성을 선택합니다. 0은 강제 �
 
 사용처: [ui_state.py](../../../openpilot/selfdrive/ui/ui_state.py)
 
-### HDP(CCNC) 사용 · `HDPuse`
+### HDP(CCNC) 사용 · `StockHudAssistDisplayMode`
 
 범위: 0 ~ 2 (단계 1) / 코드 기본값: `0`
 
@@ -109,17 +109,17 @@ CAN-FD 차량의 HDA2 조향 메시지 구성을 선택합니다. 0은 강제 �
 
 사용처: [hyundaicanfd.py](../../../opendbc_repo/opendbc/car/hyundai/hyundaicanfd.py)
 
-### 크루즈 속도 자동 동기화 · `AutoGasSyncSpeed`
+### 크루즈 속도 자동 동기화 · `SyncSetSpeedOnAccelerator`
 
 범위: 켜기/끄기 / 코드 기본값: `1`
 
 가속 페달을 일정 시간 이상 밟는 동안 현재 속도가 설정 속도를 넘으면 크루즈 설정 속도를 현재 속도에 맞춥니다. 주변 차량 속도를 따라 설정 속도를 계속 올리는 기능은 아닙니다.
 
-사용처: [cruise.py](../../../openpilot/selfdrive/car/cruise.py), [carrot_serv.py](../../../openpilot/selfdrive/kisapilot/carrot_serv.py)
+사용처: [cruise.py](../../../openpilot/selfdrive/car/cruise.py), [nav_guidance.py](../../../openpilot/selfdrive/kisapilot/nav_guidance.py)
 
 ## LAT
 
-### 카메라 오프셋 · `CameraOffsetAdj`
+### 카메라 오프셋 · `CameraLateralOffsetM`
 
 범위: -5 ~ 5 (단계 0.01) / 코드 기본값: `0.04`
 
@@ -135,7 +135,7 @@ CAN-FD 차량의 HDA2 조향 메시지 구성을 선택합니다. 0은 강제 �
 
 사용처: [controlsd.py](../../../openpilot/selfdrive/controls/controlsd.py), [lane_planner_2.py](../../../openpilot/selfdrive/controls/lib/lane_planner_2.py)
 
-### Steer Ratio(Manual) · `CustomSR`
+### Steer Ratio(Manual) · `ManualSteeringRatio`
 
 범위: 0 ~ 30 (단계 0.05) / 코드 기본값: `0.0`
 
@@ -143,7 +143,7 @@ CAN-FD 차량의 HDA2 조향 메시지 구성을 선택합니다. 0은 강제 �
 
 사용처: [controlsd.py](../../../openpilot/selfdrive/controls/controlsd.py)
 
-### Live Steer Ratio 적용 비율(%) · `SteerRatioRate`
+### Live Steer Ratio 적용 비율(%) · `LiveSteeringRatioPct`
 
 범위: 30 ~ 170 (단계 1) / 코드 기본값: `100`
 
@@ -159,7 +159,7 @@ CAN-FD 차량의 HDA2 조향 메시지 구성을 선택합니다. 0은 강제 �
 
 사용처: [calibrationd.py](../../../openpilot/selfdrive/locationd/calibrationd.py), [modeld.py](../../../openpilot/selfdrive/modeld/modeld.py)
 
-### Steer Actuator Delay · `SteerActuatorDelay`
+### Steer Actuator Delay · `SteeringDelaySec`
 
 범위: 0 ~ 1 (단계 0.05) / 코드 기본값: `0.0`
 
@@ -167,7 +167,7 @@ CAN-FD 차량의 HDA2 조향 메시지 구성을 선택합니다. 0은 강제 �
 
 사용처: [controlsd.py](../../../openpilot/selfdrive/controls/controlsd.py), [modeld.py](../../../openpilot/selfdrive/modeld/modeld.py)
 
-### Lateral 스무딩 시간 · `LatSmoothSec`
+### Lateral 스무딩 시간 · `LateralSmoothingSec`
 
 범위: -0.01 ~ 3 (단계 0.01) / 코드 기본값: `0.13`
 
@@ -175,7 +175,7 @@ CAN-FD 차량의 HDA2 조향 메시지 구성을 선택합니다. 0은 강제 �
 
 사용처: [controlsd.py](../../../openpilot/selfdrive/controls/controlsd.py), [modeld.py](../../../openpilot/selfdrive/modeld/modeld.py)
 
-### Steer Max · `CustomSteerMax`
+### Steer Max · `SteeringTorqueLimit`
 
 범위: 0 ~ 1024 (단계 1) / 코드 기본값: `0`
 
@@ -183,7 +183,7 @@ CAN-FD 차량의 HDA2 조향 메시지 구성을 선택합니다. 0은 강제 �
 
 사용처: [carcontroller.py](../../../opendbc_repo/opendbc/car/hyundai/carcontroller.py)
 
-### Steer Delta Up · `CustomSteerDeltaUp`
+### Steer Delta Up · `SteeringTorqueRiseLimit`
 
 범위: 0 ~ 50 (단계 1) / 코드 기본값: `0`
 
@@ -191,7 +191,7 @@ CAN-FD 차량의 HDA2 조향 메시지 구성을 선택합니다. 0은 강제 �
 
 사용처: [carcontroller.py](../../../opendbc_repo/opendbc/car/hyundai/carcontroller.py)
 
-### Steer Delta Down · `CustomSteerDeltaDown`
+### Steer Delta Down · `SteeringTorqueFallLimit`
 
 범위: 0 ~ 50 (단계 1) / 코드 기본값: `0`
 
@@ -199,7 +199,7 @@ CAN-FD 차량의 HDA2 조향 메시지 구성을 선택합니다. 0은 강제 �
 
 사용처: [carcontroller.py](../../../opendbc_repo/opendbc/car/hyundai/carcontroller.py)
 
-### 레이더 컷인 감도 계수 · `RadarLatFactor`
+### 레이더 컷인 감도 계수 · `RadarCutInLateralFactor`
 
 범위: 0 ~ 10 (단계 0.1) / 코드 기본값: `2.0`
 
@@ -233,7 +233,7 @@ CAN-FD 차량의 HDA2 조향 메시지 구성을 선택합니다. 0은 강제 �
 
 ## LONG
 
-### Longitudinal P Gain · `LongTuningKpV`
+### Longitudinal P Gain · `LongitudinalSpeedKp`
 
 범위: 0 ~ 1.5 (단계 0.05) / 코드 기본값: `0.5`
 
@@ -241,7 +241,7 @@ CAN-FD 차량의 HDA2 조향 메시지 구성을 선택합니다. 0은 강제 �
 
 사용처: [longcontrol.py](../../../openpilot/selfdrive/controls/lib/longcontrol.py)
 
-### Longitudinal I Gain · `LongTuningKiV`
+### Longitudinal I Gain · `LongitudinalSpeedKi`
 
 범위: 0 ~ 2 (단계 0.01) / 코드 기본값: `0.1`
 
@@ -249,15 +249,15 @@ CAN-FD 차량의 HDA2 조향 메시지 구성을 선택합니다. 0은 강제 �
 
 사용처: [longcontrol.py](../../../openpilot/selfdrive/controls/lib/longcontrol.py)
 
-### Longitudinal Actuator Delay · `LongActuatorDelay`
+### Longitudinal Actuator Delay · `LongitudinalDelaySec`
 
 범위: 0 ~ 2 (단계 0.05) / 코드 기본값: `0.2`
 
 가감속 명령부터 차량 반응까지의 예측 지연입니다(단위 초). 모델과 종방향 계획이 이 시간만큼 앞선 상태를 고려합니다. 정차 거리나 감속 강도를 직접 지정하는 값은 아닙니다.
 
-사용처: [carrot_serv.py](../../../openpilot/selfdrive/kisapilot/carrot_serv.py), [longitudinal_planner.py](../../../openpilot/selfdrive/controls/lib/longitudinal_planner.py), [modeld.py](../../../openpilot/selfdrive/modeld/modeld.py)
+사용처: [nav_guidance.py](../../../openpilot/selfdrive/kisapilot/nav_guidance.py), [longitudinal_planner.py](../../../openpilot/selfdrive/controls/lib/longitudinal_planner.py), [modeld.py](../../../openpilot/selfdrive/modeld/modeld.py)
 
-### 모델 정지 판정 속도(m/s) · `VEgoStopping`
+### 모델 정지 판정 속도(m/s) · `ModelStopThresholdMps`
 
 범위: 0.01 ~ 1 (단계 0.05) / 코드 기본값: `0.05`
 
@@ -273,7 +273,7 @@ CAN-FD 차량의 HDA2 조향 메시지 구성을 선택합니다. 0은 강제 �
 
 사용처: [radard.py](../../../openpilot/selfdrive/controls/radard.py)
 
-### 정지 상태 감속 목표(m/s²) · `StoppingAccel`
+### 정지 상태 감속 목표(m/s²) · `StoppingStateAccelMps2`
 
 범위: -1 ~ 0 (단계 0.05) / 코드 기본값: `0.0`
 
@@ -281,29 +281,29 @@ CAN-FD 차량의 HDA2 조향 메시지 구성을 선택합니다. 0은 강제 �
 
 사용처: [longcontrol.py](../../../openpilot/selfdrive/controls/lib/longcontrol.py)
 
-### 정지 거리(m) · `StopDistanceCarrot`
+### 정지 거리(m) · `KisaStandstillDistance`
 
 범위: 0.3 ~ 10 (단계 0.1) / 코드 기본값: `3.3`
 
 앞차 추종 계산의 기본 정차 여유 거리입니다(단위 m). 속도에 따른 차간 시간·제동 거리와 함께 사용합니다. 실제 최종 간격은 앞차 추정과 정지 제어에 따라 달라지므로 이 거리에서 즉시 멈추는 스위치가 아닙니다.
 
-사용처: [carrot_functions.py](../../../openpilot/selfdrive/kisapilot/carrot_functions.py)
+사용처: [driving_policy.py](../../../openpilot/selfdrive/kisapilot/driving_policy.py)
 
-### 선행 차량 저크 계수 · `JLeadFactor3`
+### 선행 차량 저크 계수 · `LeadJerkWeight`
 
 범위: 0 ~ 1 (단계 0.05) / 코드 기본값: `0.65`
 
 앞차의 가속도 변화율(저크)을 미래 움직임 예측에 반영하는 비율입니다. 0은 해당 저크 보정을 사용하지 않습니다. 앞차 추적·거리 기반 감속은 계속 작동합니다.
 
-사용처: [carrot_functions.py](../../../openpilot/selfdrive/kisapilot/carrot_functions.py)
+사용처: [driving_policy.py](../../../openpilot/selfdrive/kisapilot/driving_policy.py)
 
-### 앞차 저크별 가속 변화 비용 · `AChangeCost2`
+### 앞차 저크별 가속 변화 비용 · `LeadJerkAccelChangeCost`
 
 범위: 10 ~ 500 (단계 5) / 코드 기본값: `125`
 
 앞차 저크가 커질 때 MPC에 사용하는 가속도 변화 비용입니다. 기본 비용과 이 값 사이를 상황에 따라 보간합니다. 비용이 크면 가속도 변화를 더 억제하지만, 정차 마지막 충격이나 목표 거리를 직접 지정하지는 않습니다.
 
-사용처: [carrot_functions.py](../../../openpilot/selfdrive/kisapilot/carrot_functions.py)
+사용처: [driving_policy.py](../../../openpilot/selfdrive/kisapilot/driving_policy.py)
 
 ### 앞차 위험 거리 제약 계수 · `LeadDangerFactor`
 
@@ -311,63 +311,63 @@ CAN-FD 차량의 HDA2 조향 메시지 구성을 선택합니다. 0은 강제 �
 
 MPC의 앞차 위험 거리 제약에 곱하는 계수입니다. 크게 하면 거리 제약이 더 보수적으로 작용합니다. 감속 시작 시점만을 독립적으로 정하는 값이 아니며 실제 감속은 속도·상대속도·다른 제약과 함께 결정됩니다.
 
-사용처: [carrot_functions.py](../../../openpilot/selfdrive/kisapilot/carrot_functions.py)
+사용처: [driving_policy.py](../../../openpilot/selfdrive/kisapilot/driving_policy.py)
 
-### 가속 상한 기준점 0km/h · `CruiseMaxVals0`
+### 가속 상한 기준점 0km/h · `MaxAccelAt0Kph`
 
 범위: 0 ~ 2.5 (단계 0.05) / 코드 기본값: `1.65`
 
 0km/h 기준점의 최대 가속도입니다(단위 m/s²). 기준 속도는 0·10·40·60·80·110·140km/h이며 사이 속도에서는 이웃 값 사이를 선형 보간합니다. 140km/h 이상은 마지막 값을 사용합니다. 실제 가속 명령은 앞차·주행 모드·커브 제한 등에 의해 더 낮아질 수 있습니다.
 
-사용처: [carrot_functions.py](../../../openpilot/selfdrive/kisapilot/carrot_functions.py)
+사용처: [driving_policy.py](../../../openpilot/selfdrive/kisapilot/driving_policy.py)
 
-### 가속 상한 기준점 10km/h · `CruiseMaxVals1`
+### 가속 상한 기준점 10km/h · `MaxAccelAt10Kph`
 
 범위: 0 ~ 2.5 (단계 0.05) / 코드 기본값: `1.55`
 
 10km/h 기준점의 최대 가속도입니다(단위 m/s²). 기준 속도는 0·10·40·60·80·110·140km/h이며 사이 속도에서는 이웃 값 사이를 선형 보간합니다. 140km/h 이상은 마지막 값을 사용합니다. 실제 가속 명령은 앞차·주행 모드·커브 제한 등에 의해 더 낮아질 수 있습니다.
 
-사용처: [carrot_functions.py](../../../openpilot/selfdrive/kisapilot/carrot_functions.py)
+사용처: [driving_policy.py](../../../openpilot/selfdrive/kisapilot/driving_policy.py)
 
-### 가속 상한 기준점 40km/h · `CruiseMaxVals2`
+### 가속 상한 기준점 40km/h · `MaxAccelAt40Kph`
 
 범위: 0 ~ 2.5 (단계 0.05) / 코드 기본값: `0.8`
 
 40km/h 기준점의 최대 가속도입니다(단위 m/s²). 기준 속도는 0·10·40·60·80·110·140km/h이며 사이 속도에서는 이웃 값 사이를 선형 보간합니다. 140km/h 이상은 마지막 값을 사용합니다. 실제 가속 명령은 앞차·주행 모드·커브 제한 등에 의해 더 낮아질 수 있습니다.
 
-사용처: [carrot_functions.py](../../../openpilot/selfdrive/kisapilot/carrot_functions.py)
+사용처: [driving_policy.py](../../../openpilot/selfdrive/kisapilot/driving_policy.py)
 
-### 가속 상한 기준점 60km/h · `CruiseMaxVals3`
+### 가속 상한 기준점 60km/h · `MaxAccelAt60Kph`
 
 범위: 0 ~ 2.5 (단계 0.05) / 코드 기본값: `0.6`
 
 60km/h 기준점의 최대 가속도입니다(단위 m/s²). 기준 속도는 0·10·40·60·80·110·140km/h이며 사이 속도에서는 이웃 값 사이를 선형 보간합니다. 140km/h 이상은 마지막 값을 사용합니다. 실제 가속 명령은 앞차·주행 모드·커브 제한 등에 의해 더 낮아질 수 있습니다.
 
-사용처: [carrot_functions.py](../../../openpilot/selfdrive/kisapilot/carrot_functions.py)
+사용처: [driving_policy.py](../../../openpilot/selfdrive/kisapilot/driving_policy.py)
 
-### 가속 상한 기준점 80km/h · `CruiseMaxVals4`
+### 가속 상한 기준점 80km/h · `MaxAccelAt80Kph`
 
 범위: 0 ~ 2.5 (단계 0.05) / 코드 기본값: `0.4`
 
 80km/h 기준점의 최대 가속도입니다(단위 m/s²). 기준 속도는 0·10·40·60·80·110·140km/h이며 사이 속도에서는 이웃 값 사이를 선형 보간합니다. 140km/h 이상은 마지막 값을 사용합니다. 실제 가속 명령은 앞차·주행 모드·커브 제한 등에 의해 더 낮아질 수 있습니다.
 
-사용처: [carrot_functions.py](../../../openpilot/selfdrive/kisapilot/carrot_functions.py)
+사용처: [driving_policy.py](../../../openpilot/selfdrive/kisapilot/driving_policy.py)
 
-### 가속 상한 기준점 110km/h · `CruiseMaxVals5`
+### 가속 상한 기준점 110km/h · `MaxAccelAt110Kph`
 
 범위: 0 ~ 2.5 (단계 0.05) / 코드 기본값: `0.3`
 
 110km/h 기준점의 최대 가속도입니다(단위 m/s²). 기준 속도는 0·10·40·60·80·110·140km/h이며 사이 속도에서는 이웃 값 사이를 선형 보간합니다. 140km/h 이상은 마지막 값을 사용합니다. 실제 가속 명령은 앞차·주행 모드·커브 제한 등에 의해 더 낮아질 수 있습니다.
 
-사용처: [carrot_functions.py](../../../openpilot/selfdrive/kisapilot/carrot_functions.py)
+사용처: [driving_policy.py](../../../openpilot/selfdrive/kisapilot/driving_policy.py)
 
-### 가속 상한 기준점 140km/h · `CruiseMaxVals6`
+### 가속 상한 기준점 140km/h · `MaxAccelAt140Kph`
 
 범위: 0 ~ 2.5 (단계 0.05) / 코드 기본값: `0.2`
 
 140km/h 기준점의 최대 가속도입니다(단위 m/s²). 기준 속도는 0·10·40·60·80·110·140km/h이며 사이 속도에서는 이웃 값 사이를 선형 보간합니다. 140km/h 이상은 마지막 값을 사용합니다. 실제 가속 명령은 앞차·주행 모드·커브 제한 등에 의해 더 낮아질 수 있습니다.
 
-사용처: [carrot_functions.py](../../../openpilot/selfdrive/kisapilot/carrot_functions.py)
+사용처: [driving_policy.py](../../../openpilot/selfdrive/kisapilot/driving_policy.py)
 
 ## Button/Gap/Stop
 
@@ -395,7 +395,7 @@ LFA 버튼의 짧은 누름 기능입니다. 0은 조향 활성 상태 전환, 1
 
 사용처: [cruise.py](../../../openpilot/selfdrive/car/cruise.py)
 
-### 크루즈 속도 단위(기본) · `CruiseSpeedUnitBasic`
+### 크루즈 속도 단위(기본) · `CruiseButtonBasicStep`
 
 범위: 1 ~ 20 (단계 1) / 코드 기본값: `10`
 
@@ -403,7 +403,7 @@ LFA 버튼의 짧은 누름 기능입니다. 0은 조향 활성 상태 전환, 1
 
 사용처: [cruise.py](../../../openpilot/selfdrive/car/cruise.py)
 
-### 크루즈 속도 단위(확장) · `CruiseSpeedUnit`
+### 크루즈 속도 단위(확장) · `CruiseButtonExtendedStep`
 
 범위: 1 ~ 20 (단계 1) / 코드 기본값: `10`
 
@@ -411,15 +411,15 @@ LFA 버튼의 짧은 누름 기능입니다. 0은 조향 활성 상태 전환, 1
 
 사용처: [cruise.py](../../../openpilot/selfdrive/car/cruise.py)
 
-### 에코 크루즈 보정 · `CruiseEcoControl`
+### 에코 크루즈 보정 · `CruiseRecoverySpeedBoost`
 
 범위: 0 ~ 10 (단계 1) / 코드 기본값: `0`
 
 설정 속도보다 느린 상태에서 재가속할 때 계획 속도에 일시적으로 더하는 값입니다(단위 km/h). 원래 목표 속도에 도달하면 해제합니다. 0은 끄기이며 고정된 도로 제한 속도 오프셋과는 별도입니다.
 
-사용처: [carrot_functions.py](../../../openpilot/selfdrive/kisapilot/carrot_functions.py)
+사용처: [driving_policy.py](../../../openpilot/selfdrive/kisapilot/driving_policy.py)
 
-### 자동 속도 상승 비율 · `AutoSpeedUptoRoadSpeedLimit`
+### 자동 속도 상승 비율 · `LeadSpeedIncreaseLimitPct`
 
 범위: 0 ~ 200 (단계 10) / 코드 기본값: `10`
 
@@ -427,45 +427,45 @@ LFA 버튼의 짧은 누름 기능입니다. 0은 조향 활성 상태 전환, 1
 
 사용처: [cruise.py](../../../openpilot/selfdrive/car/cruise.py)
 
-### 차간 거리 GAP 1 · `TFollowGap1`
+### 차간 거리 GAP 1 · `FollowingTimeGap1`
 
 범위: 0.7 ~ 3 (단계 0.05) / 코드 기본값: `0.9`
 
 차간 단계 1의 기본 추종 시간입니다(단위 초). 속도에 곱해 거리 항으로 사용하고 정차 여유·제동 거리 등을 더합니다. 속도별 GAP·동적 GAP 설정에 따라 실제 사용 시간은 달라질 수 있습니다.
 
-사용처: [carrot_functions.py](../../../openpilot/selfdrive/kisapilot/carrot_functions.py)
+사용처: [driving_policy.py](../../../openpilot/selfdrive/kisapilot/driving_policy.py)
 
-### 차간 거리 GAP 2 · `TFollowGap2`
+### 차간 거리 GAP 2 · `FollowingTimeGap2`
 
 범위: 0.7 ~ 3 (단계 0.05) / 코드 기본값: `1.1`
 
 차간 단계 2의 기본 추종 시간입니다(단위 초). 속도에 곱해 거리 항으로 사용하고 정차 여유·제동 거리 등을 더합니다. 속도별 GAP·동적 GAP 설정에 따라 실제 사용 시간은 달라질 수 있습니다.
 
-사용처: [carrot_functions.py](../../../openpilot/selfdrive/kisapilot/carrot_functions.py)
+사용처: [driving_policy.py](../../../openpilot/selfdrive/kisapilot/driving_policy.py)
 
-### 차간 거리 GAP 3 · `TFollowGap3`
+### 차간 거리 GAP 3 · `FollowingTimeGap3`
 
 범위: 0.7 ~ 3 (단계 0.05) / 코드 기본값: `1.3`
 
 차간 단계 3의 기본 추종 시간입니다(단위 초). 속도에 곱해 거리 항으로 사용하고 정차 여유·제동 거리 등을 더합니다. 속도별 GAP·동적 GAP 설정에 따라 실제 사용 시간은 달라질 수 있습니다.
 
-사용처: [carrot_functions.py](../../../openpilot/selfdrive/kisapilot/carrot_functions.py)
+사용처: [driving_policy.py](../../../openpilot/selfdrive/kisapilot/driving_policy.py)
 
-### 차간 거리 GAP 4 · `TFollowGap4`
+### 차간 거리 GAP 4 · `FollowingTimeGap4`
 
 범위: 0.7 ~ 3 (단계 0.05) / 코드 기본값: `1.6`
 
 차간 단계 4의 기본 추종 시간입니다(단위 초). 속도에 곱해 거리 항으로 사용하고 정차 여유·제동 거리 등을 더합니다. 속도별 GAP·동적 GAP 설정에 따라 실제 사용 시간은 달라질 수 있습니다.
 
-사용처: [carrot_functions.py](../../../openpilot/selfdrive/kisapilot/carrot_functions.py)
+사용처: [driving_policy.py](../../../openpilot/selfdrive/kisapilot/driving_policy.py)
 
-### 속도별 차간거리 설정 · `EnableSpeedTF`
+### 속도별 차간거리 설정 · `SpeedBasedFollowingGap`
 
 범위: -3 ~ 50 (단계 1) / 코드 기본값: `0`
 
 0은 선택한 GAP의 기본 시간 사용입니다. -1·-2·-3은 각각 [0,30,60,90]·[0,40,80,120]·[0,50,100,150]km/h에서 GAP 1~4 시간을 보간합니다. 양수는 저속 추종 시간을 해당 비율(%)만큼 줄이고 100km/h에 가까워질수록 원래 시간으로 복귀합니다.
 
-사용처: [carrot_functions.py](../../../openpilot/selfdrive/kisapilot/carrot_functions.py)
+사용처: [driving_policy.py](../../../openpilot/selfdrive/kisapilot/driving_policy.py)
 
 ### 동적 차간 거리 제어 · `DynamicTFollow`
 
@@ -473,7 +473,7 @@ LFA 버튼의 짧은 누름 기능입니다. 0은 조향 활성 상태 전환, 1
 
 앞차 저크에 따라 기본 추종 시간에 더하거나 빼는 동적 보정량입니다(단위 초). 앞차 감속 변화에는 여유를 늘리고 가속 변화에는 줄입니다. 0은 이 보정만 끕니다.
 
-사용처: [carrot_functions.py](../../../openpilot/selfdrive/kisapilot/carrot_functions.py)
+사용처: [driving_policy.py](../../../openpilot/selfdrive/kisapilot/driving_policy.py)
 
 ### 차로 변경 시 동적 GAP 제어 · `DynamicTFollowLC`
 
@@ -481,43 +481,43 @@ LFA 버튼의 짧은 누름 기능입니다. 0은 조향 활성 상태 전환, 1
 
 차선변경 desire가 활성화될 때 추종 시간과 저크 계수에 곱하는 비율입니다. 1은 원래 값, 작을수록 간격·변화 비용을 줄입니다. 계산에서 최소 0.2로 제한하므로 0은 끄기가 아니라 0.2배로 적용됩니다.
 
-사용처: [carrot_functions.py](../../../openpilot/selfdrive/kisapilot/carrot_functions.py)
+사용처: [driving_policy.py](../../../openpilot/selfdrive/kisapilot/driving_policy.py)
 
-### 주행 모드 선택 · `MyDrivingMode`
+### 주행 모드 선택 · `DrivingProfile`
 
 범위: 1 ~ 4 (단계 1) / 코드 기본값: `3`
 
 1 ECO, 2 SAFE, 3 NORMAL, 4 HIGH 주행 모드입니다. 가속 상한과 추종·신호 정지 판단에 영향을 줍니다. 현재 HIGH는 가속 비율을 높이며 모델 신호 정지 상태를 사용하지 않는 분기도 있으므로 단순 화면 테마 설정이 아닙니다.
 
-사용처: [cruise.py](../../../openpilot/selfdrive/car/cruise.py), [carrot_functions.py](../../../openpilot/selfdrive/kisapilot/carrot_functions.py)
+사용처: [cruise.py](../../../openpilot/selfdrive/car/cruise.py), [driving_policy.py](../../../openpilot/selfdrive/kisapilot/driving_policy.py)
 
-### 주행 모드 자동 전환 · `MyDrivingModeAuto`
+### 주행 모드 자동 전환 · `AdaptiveDrivingProfile`
 
 범위: 0 ~ 1 (단계 1) / 코드 기본값: `0`
 
 NORMAL 모드에서 상황에 따른 SAFE 성향 자동 조절을 허용합니다. 운전자가 주행 중 모드를 직접 바꾸면 해당 세션의 자동 모드 적용이 제한될 수 있습니다. 설정 속도를 임의로 높이는 기능은 아닙니다.
 
-사용처: [carrot_functions.py](../../../openpilot/selfdrive/kisapilot/carrot_functions.py)
+사용처: [driving_policy.py](../../../openpilot/selfdrive/kisapilot/driving_policy.py)
 
-### 신호등 인식 모드 · `TrafficLightDetectMode`
+### 신호등 인식 모드 · `TrafficSignalControlMode`
 
 범위: 0 ~ 2 (단계 1) / 코드 기본값: `2`
 
 신호 정지 상태 처리를 선택합니다. 0: 사용 안 함, 1: 정지 판단만, 2: 정지와 출발 판단. 모델 예측과 유효한 내비 신호를 기존 조건에 따라 활용하며, 티맵 UI 표시 여부 자체를 제어하는 설정은 아닙니다.
 
-사용처: [carcontroller.py](../../../opendbc_repo/opendbc/car/hyundai/carcontroller.py), [carrot_functions.py](../../../openpilot/selfdrive/kisapilot/carrot_functions.py)
+사용처: [carcontroller.py](../../../opendbc_repo/opendbc/car/hyundai/carcontroller.py), [driving_policy.py](../../../openpilot/selfdrive/kisapilot/driving_policy.py)
 
-### 신호 정지 거리 보정(m) · `TrafficStopDistanceAdjust`
+### 신호 정지 거리 보정(m) · `SignalStopDistanceOffsetM`
 
 범위: -10 ~ 10 (단계 0.1) / 코드 기본값: `0.0`
 
 모델 신호 정지 위치에 더하는 거리 보정입니다(단위 m). 양수는 목표를 더 앞쪽으로 보내 더 진행하게 하고, 음수는 목표를 가까이 당겨 일찍 멈추게 합니다. 주행 중 MPC 정지 장애물 위치에 적용하며 실제 정차 간격을 보장하는 값은 아닙니다.
 
-사용처: [carrot_functions.py](../../../openpilot/selfdrive/kisapilot/carrot_functions.py)
+사용처: [driving_policy.py](../../../openpilot/selfdrive/kisapilot/driving_policy.py)
 
 ## Curv/Safety/Nav
 
-### 차선 인식 모드 적용 속도 · `UseLaneLineSpeed`
+### 차선 인식 모드 적용 속도 · `LaneModeMinSpeedKph`
 
 범위: 0 ~ 200 (단계 2) / 코드 기본값: `20`
 
@@ -525,7 +525,7 @@ NORMAL 모드에서 상황에 따른 SAFE 성향 자동 조절을 허용합니�
 
 사용처: [cruise.py](../../../openpilot/selfdrive/car/cruise.py), [lateral_planner.py](../../../openpilot/selfdrive/controls/lib/lateral_planner.py)
 
-### 예측 커브 속도별 레인모드 기준 · `UseLaneLineCurveSpeed`
+### 예측 커브 속도별 레인모드 기준 · `LaneModeCurveThresholdKph`
 
 범위: 0 ~ 200 (단계 5) / 코드 기본값: `60`
 
@@ -533,7 +533,7 @@ NORMAL 모드에서 상황에 따른 SAFE 성향 자동 조절을 허용합니�
 
 사용처: [controlsd.py](../../../openpilot/selfdrive/controls/controlsd.py)
 
-### 차선 변경 토크 요구 방식 · `LaneChangeNeedTorque`
+### 차선 변경 토크 요구 방식 · `LaneChangeRequiresTorque`
 
 범위: -1 ~ 1 (단계 1) / 코드 기본값: `0`
 
@@ -541,7 +541,7 @@ NORMAL 모드에서 상황에 따른 SAFE 성향 자동 조절을 허용합니�
 
 사용처: [desire_helper.py](../../../openpilot/selfdrive/controls/lib/desire_helper.py)
 
-### 차선 변경 대기 시간 · `LaneChangeDelay`
+### 차선 변경 대기 시간 · `LaneChangeDelaySec`
 
 범위: 0 ~ 10 (단계 0.5) / 코드 기본값: `0.5`
 
@@ -549,7 +549,7 @@ NORMAL 모드에서 상황에 따른 SAFE 성향 자동 조절을 허용합니�
 
 사용처: [desire_helper.py](../../../openpilot/selfdrive/controls/lib/desire_helper.py), [selfdrived.py](../../../openpilot/selfdrive/selfdrived/selfdrived.py)
 
-### BSD 기반 차선 변경 제한 · `LaneChangeBsd`
+### BSD 기반 차선 변경 제한 · `LaneChangeBlindspotPolicy`
 
 범위: -1 ~ 1 (단계 1) / 코드 기본값: `0`
 
@@ -557,31 +557,31 @@ NORMAL 모드에서 상황에 따른 SAFE 성향 자동 조절을 허용합니�
 
 사용처: [desire_helper.py](../../../openpilot/selfdrive/controls/lib/desire_helper.py)
 
-### 곡선 감속 최소 속도 · `AutoCurveSpeedLowerLimit`
+### 곡선 감속 최소 속도 · `CurveSpeedFloorKph`
 
 범위: 30 ~ 200 (단계 5) / 코드 기본값: `40`
 
 커브 감속 계산의 속도 하한입니다(단위 km/h). 커브 때문에 계산하는 제한 속도만 이 값 아래로 낮추지 않습니다. 앞차·신호·카메라 등 다른 이유로 차량은 더 느리게 주행하거나 정지할 수 있습니다.
 
-사용처: [carrot_serv.py](../../../openpilot/selfdrive/kisapilot/carrot_serv.py)
+사용처: [nav_guidance.py](../../../openpilot/selfdrive/kisapilot/nav_guidance.py)
 
-### 곡선 자동 감속 비율 · `AutoCurveSpeedFactor`
+### 곡선 자동 감속 비율 · `VisionCurveSensitivityPct`
 
 범위: 50 ~ 300 (단계 1) / 코드 기본값: `80`
 
 모델의 예상 회전율에 곱하는 커브 민감도입니다(단위 %, 100이 기준). 크게 하면 같은 궤적을 더 강한 커브로 계산해 허용 속도가 낮아지는 방향으로 작용합니다. 실제 제한에는 커브 속도 하한과 다른 감속 조건도 적용합니다.
 
-사용처: [carrot_man.py](../../../openpilot/selfdrive/kisapilot/carrot_man.py)
+사용처: [nav_service.py](../../../openpilot/selfdrive/kisapilot/nav_service.py)
 
-### 도로 제한 속도 오프셋 · `AutoRoadSpeedLimitOffset`
+### 도로 제한 속도 오프셋 · `RoadLimitOffsetKph`
 
 범위: -1 ~ 100 (단계 1) / 코드 기본값: `10`
 
 도로 제한 속도에 더하는 설정 속도 오프셋입니다(단위 km/h). 0은 제한 속도 그대로, 10은 +10km/h입니다. -1은 가산 오프셋을 사용하지 않으며 도로속도 동기화에서는 안전 속도 비율로 대체하므로 자동 연동 전체를 끄는 값은 아닙니다. 카메라·방지턱·앞차 감속은 따로 계산합니다.
 
-사용처: [cruise.py](../../../openpilot/selfdrive/car/cruise.py), [carrot_serv.py](../../../openpilot/selfdrive/kisapilot/carrot_serv.py)
+사용처: [cruise.py](../../../openpilot/selfdrive/car/cruise.py), [nav_guidance.py](../../../openpilot/selfdrive/kisapilot/nav_guidance.py)
 
-### 도로 제한 속도 자동 보정 비율 · `AutoRoadSpeedAdjust`
+### 도로 제한 속도 자동 보정 비율 · `SpeedLimitSetpointPolicy`
 
 범위: -1 ~ 100 (단계 1) / 코드 기본값: `-1`
 
@@ -589,53 +589,53 @@ NORMAL 모드에서 상황에 따른 SAFE 성향 자동 조절을 허용합니�
 
 사용처: [cruise.py](../../../openpilot/selfdrive/car/cruise.py)
 
-### 과속 카메라 감속 완료 시점 · `AutoNaviSpeedCtrlEnd`
+### 과속 카메라 감속 완료 시점 · `EnforcementArrivalMarginSec`
 
 범위: 3 ~ 20 (단계 1) / 코드 기본값: `8`
 
 과속카메라 목표 속도를 미리 맞추기 위한 시간 여유입니다(단위 초). 차량 속도와 곱해 거리로 환산하므로 크게 하면 카메라보다 더 앞에서 감속을 완료하는 방향으로 작용합니다. 방지턱은 별도의 접근 시간과 감속 계산을 사용합니다.
 
-사용처: [carrot_serv.py](../../../openpilot/selfdrive/kisapilot/carrot_serv.py)
+사용처: [nav_guidance.py](../../../openpilot/selfdrive/kisapilot/nav_guidance.py)
 
-### 내비 기반 감속 제어 모드 · `AutoNaviSpeedCtrlMode`
+### 내비 기반 감속 제어 모드 · `NavSpeedControlScope`
 
 범위: 0 ~ 3 (단계 1) / 코드 기본값: `2`
 
 내비 기반 속도 제한의 대상입니다. 0: 끄기, 1: 과속카메라, 2: 카메라와 방지턱, 3: 이동식 단속까지 포함. 유효한 위치·거리·제한 속도 정보가 있어야 해당 감속을 적용합니다.
 
-사용처: [carrot_serv.py](../../../openpilot/selfdrive/kisapilot/carrot_serv.py)
+사용처: [nav_guidance.py](../../../openpilot/selfdrive/kisapilot/nav_guidance.py)
 
-### 과속 카메라 감속률 · `AutoNaviSpeedDecelRate`
+### 과속 카메라 감속률 · `NavSpeedDecelMps2`
 
 범위: 0.1 ~ 20 (단계 0.1) / 코드 기본값: `1.2`
 
 내비 감속 곡선 계산에 사용하는 감속도 크기입니다(단위 m/s²). 작으면 더 멀리서 완만하게, 크면 더 가까이서 강하게 감속하는 곡선을 계산합니다. 방지턱은 이 값에 별도 보정·한계를 적용하므로 카메라와 동일한 곡선이 아닙니다.
 
-사용처: [carrot_functions.py](../../../openpilot/selfdrive/kisapilot/carrot_functions.py), [carrot_serv.py](../../../openpilot/selfdrive/kisapilot/carrot_serv.py)
+사용처: [driving_policy.py](../../../openpilot/selfdrive/kisapilot/driving_policy.py), [nav_guidance.py](../../../openpilot/selfdrive/kisapilot/nav_guidance.py)
 
-### 과속 카메라 안전 계수 · `AutoNaviSpeedSafetyFactor`
+### 과속 카메라 안전 계수 · `EnforcementTargetPct`
 
 범위: 80 ~ 120 (단계 1) / 코드 기본값: `102`
 
 단속 제한 속도에 곱하는 목표 속도 비율입니다(단위 %). 100은 제한 속도 그대로, 102는 제한 속도의 1.02배입니다. 감속 거리 여유나 센서 신뢰도를 뜻하는 값은 아닙니다.
 
-사용처: [cruise.py](../../../openpilot/selfdrive/car/cruise.py), [carrot_serv.py](../../../openpilot/selfdrive/kisapilot/carrot_serv.py)
+사용처: [cruise.py](../../../openpilot/selfdrive/car/cruise.py), [nav_guidance.py](../../../openpilot/selfdrive/kisapilot/nav_guidance.py)
 
-### 방지턱 접근 시간 거리 · `AutoNaviSpeedBumpTime`
+### 방지턱 접근 시간 거리 · `BumpArrivalMarginSec`
 
 범위: 1 ~ 50 (단계 1) / 코드 기본값: `2`
 
 방지턱 목표 속도에 도달할 시간 여유를 계산하는 값입니다(단위 초). 거리로 환산하고 반응 지연·감속 한계와 함께 사용합니다. 크게 하면 더 앞에서 속도를 맞추는 방향이며 단순 감속 시작 타이머는 아닙니다.
 
-사용처: [carrot_serv.py](../../../openpilot/selfdrive/kisapilot/carrot_serv.py)
+사용처: [nav_guidance.py](../../../openpilot/selfdrive/kisapilot/nav_guidance.py)
 
-### 방지턱 통과 속도 · `AutoNaviSpeedBumpSpeed`
+### 방지턱 통과 속도 · `BumpTargetKph`
 
 범위: 10 ~ 100 (단계 5) / 코드 기본값: `30`
 
 내비 방지턱 감속의 기본 통과 목표 속도입니다(단위 km/h). 학습이 켜져 있고 해당 위치에 기록이 있으면 위치별 학습 목표가 사용될 수 있습니다. 앞차 등 다른 제약이 더 낮으면 그 제약이 우선합니다.
 
-사용처: [carrot_serv.py](../../../openpilot/selfdrive/kisapilot/carrot_serv.py)
+사용처: [nav_guidance.py](../../../openpilot/selfdrive/kisapilot/nav_guidance.py)
 
 ### 방지턱 충격 학습 · `BumpLearningEnabled`
 
@@ -643,31 +643,31 @@ NORMAL 모드에서 상황에 따른 SAFE 성향 자동 조절을 허용합니�
 
 방향별 방지턱 위치·통과 속도·충격을 로컬에 저장해 다음 접근 목표를 조절합니다. 큰 충격이나 수동 감속에는 목표를 낮추고, 조건을 만족한 반복적인 부드러운 통과·가속 페달 개입은 증속 후보로 사용합니다. 영상 모델을 실시간 재학습하는 기능은 아닙니다.
 
-사용처: [carrot_serv.py](../../../openpilot/selfdrive/kisapilot/carrot_serv.py)
+사용처: [nav_guidance.py](../../../openpilot/selfdrive/kisapilot/nav_guidance.py)
 
-### 학습 방지턱 접근 알림음 · `BumpLearningSound`
+### 학습 방지턱 접근 알림음 · `LearnedBumpAudioEnabled`
 
 범위: 켜기/끄기 / 코드 기본값: `1`
 
 학습된 위치에 접근할 때 알림음을 허용합니다. 학습 기록 저장·목표 속도 조절을 켜고 끄는 설정은 아니며 BumpLearningEnabled와 별도로 소리만 제어합니다.
 
-사용처: [carrot_serv.py](../../../openpilot/selfdrive/kisapilot/carrot_serv.py)
+사용처: [nav_guidance.py](../../../openpilot/selfdrive/kisapilot/nav_guidance.py)
 
-### 방지턱 학습 최대 증속 · `BumpLearningRaise`
+### 방지턱 학습 최대 증속 · `BumpLearningMaxIncreaseKph`
 
 범위: 0 ~ 10 (단계 5) / 코드 기본값: `10`
 
 기본 방지턱 속도보다 학습으로 높일 수 있는 최대 증가량입니다(단위 km/h). 0은 기본 속도 초과 증속을 막습니다. 부드러운 통과 3회 또는 조건을 만족한 독립적인 페달 개입 3회 이상을 확인하며, 위치별 수동 상한과 학습 속도 상한 40km/h도 적용합니다.
 
-사용처: [carrot_serv.py](../../../openpilot/selfdrive/kisapilot/carrot_serv.py)
+사용처: [nav_guidance.py](../../../openpilot/selfdrive/kisapilot/nav_guidance.py)
 
-### 내비 카운트다운 안내 범위 · `AutoNaviCountDownMode`
+### 내비 카운트다운 안내 범위 · `NavCountdownScope`
 
 범위: 0 ~ 2 (단계 1) / 코드 기본값: `0`
 
 내비 접근 카운트다운 이벤트의 범위입니다. 0: 끄기, 1: TBT·단속 안내(방지턱 제외), 2: 방지턱도 포함. 속도 제한 제어의 활성 여부와는 별도이며 실제 표시·음성은 이벤트 처리에 따릅니다.
 
-사용처: [carrot_serv.py](../../../openpilot/selfdrive/kisapilot/carrot_serv.py)
+사용처: [nav_guidance.py](../../../openpilot/selfdrive/kisapilot/nav_guidance.py)
 
 ### 회전 속도 제어 모드 · `TurnSpeedControlMode`
 
@@ -675,17 +675,17 @@ NORMAL 모드에서 상황에 따른 SAFE 성향 자동 조절을 허용합니�
 
 커브 속도 제한에 사용할 입력입니다. 0: 끄기, 1: 비전 궤적, 2: 비전과 지도 경로, 3: 지도 경로. 경로·모델 정보가 유효해야 적용하며 TBT 회전 속도 제어와는 별도 설정입니다.
 
-사용처: [carrot_serv.py](../../../openpilot/selfdrive/kisapilot/carrot_serv.py)
+사용처: [nav_guidance.py](../../../openpilot/selfdrive/kisapilot/nav_guidance.py)
 
-### 지도 회전 속도 계수 · `MapTurnSpeedFactor`
+### 지도 회전 속도 계수 · `MapCurveTargetPct`
 
 범위: 50 ~ 300 (단계 5) / 코드 기본값: `90`
 
 지도 경로에서 계산한 커브 속도에 곱하는 비율입니다(단위 %, 100이 기준). 크게 하면 지도 기반 허용 속도가 높아집니다. 지도 경로 기반 모드를 사용하고 경로 정보가 있을 때 반영합니다.
 
-사용처: [carrot_serv.py](../../../openpilot/selfdrive/kisapilot/carrot_serv.py)
+사용처: [nav_guidance.py](../../../openpilot/selfdrive/kisapilot/nav_guidance.py)
 
-### 모델 회전 속도 예측 시간(초) · `ModelTurnSpeedFactor`
+### 모델 회전 속도 예측 시간(초) · `VisionTurnLookaheadSec`
 
 범위: 0 ~ 8 (단계 0.1) / 코드 기본값: `0.0`
 
@@ -693,13 +693,13 @@ NORMAL 모드에서 상황에 따른 SAFE 성향 자동 조절을 허용합니�
 
 사용처: [desire_helper.py](../../../openpilot/selfdrive/controls/lib/desire_helper.py)
 
-### TBT 자동 방향지시등 (실험) · `TbtBlinkerExperiment`
+### TBT 자동 방향지시등 (실험) · `NavTurnSignalExperiment`
 
 범위: 켜기/끄기 / 코드 기본값: `0`
 
 아이오닉 5 PE에서 내비 TBT 좌·우회전 정보로 SPAS 방향지시등 자동 점등을 시험합니다. 차선변경·추월 자동 조향 설정과는 별도입니다. 처음 활성화한 뒤 C4를 재시작해야 차량 송신 구성이 반영되며, 끄기는 실행 중에도 반영됩니다.
 
-사용처: [interface.py](../../../opendbc_repo/opendbc/car/hyundai/interface.py), [carrot_serv.py](../../../openpilot/selfdrive/kisapilot/carrot_serv.py)
+사용처: [interface.py](../../../opendbc_repo/opendbc/car/hyundai/interface.py), [nav_guidance.py](../../../openpilot/selfdrive/kisapilot/nav_guidance.py)
 
 ### 주행 중 방향지시등 시험 · `MovingBlinkerRoadTest`
 
@@ -717,37 +717,37 @@ NORMAL 모드에서 상황에 따른 SAFE 성향 자동 조절을 허용합니�
 
 사용처: [plannerd.py](../../../openpilot/selfdrive/controls/plannerd.py)
 
-### 자동 회전 제어 모드 · `AutoTurnControl`
+### 자동 회전 제어 모드 · `NavTurnAssistMode`
 
 범위: 0 ~ 3 (단계 1) / 코드 기본값: `0`
 
 TBT 회전 요청과 감속 사용 범위입니다. 0: 끄기, 1: 횡방향 회전 요청, 2: 횡방향 요청과 속도 제어, 3: 속도 제어만. 횡방향은 기존 desire·차선·운전자 개입 조건을 통과한 요청이며 교차로 회전 완료를 보장하지 않습니다.
 
-사용처: [carrot_serv.py](../../../openpilot/selfdrive/kisapilot/carrot_serv.py)
+사용처: [nav_guidance.py](../../../openpilot/selfdrive/kisapilot/nav_guidance.py)
 
-### 자동 회전 목표 속도 · `AutoTurnControlSpeedTurn`
+### 자동 회전 목표 속도 · `NavTurnTargetKph`
 
 범위: 0 ~ 100 (단계 5) / 코드 기본값: `20`
 
 TBT 좌·우회전의 기본 목표 속도입니다(단위 km/h). 유효한 회전 진행각이 약 45도 이상이고 커브 조건이 허용하면 해당 회전의 TBT 속도 제한을 최대 9km/h까지 점진 완화합니다. 원래 설정 속도·다음 회전·앞차·신호·단속 등 다른 제한은 유지합니다. AutoTurnControl의 속도 제어 모드에서 사용합니다.
 
-사용처: [carrot_serv.py](../../../openpilot/selfdrive/kisapilot/carrot_serv.py)
+사용처: [nav_guidance.py](../../../openpilot/selfdrive/kisapilot/nav_guidance.py)
 
-### TBT 목표속도 도달 여유(초) · `AutoTurnControlTurnEnd`
+### TBT 목표속도 도달 여유(초) · `NavTurnArrivalMarginSec`
 
 범위: 0 ~ 30 (단계 1) / 코드 기본값: `6`
 
 TBT 감속 목표를 미리 맞출 거리의 시간 계수입니다(단위 초). 회전 목표 속도 또는 분기 속도와 곱해 거리로 환산하고 남은 거리에서 뺍니다. 크게 하면 더 앞에서 목표 속도에 맞추는 방향이며 깜빡이 해제 타이머는 아닙니다.
 
-사용처: [carrot_serv.py](../../../openpilot/selfdrive/kisapilot/carrot_serv.py)
+사용처: [nav_guidance.py](../../../openpilot/selfdrive/kisapilot/nav_guidance.py)
 
-### 자동 지도 전환 · `AutoTurnMapChange`
+### 자동 지도 전환 · `NavTurnMapDisplay`
 
 범위: 0 ~ 1 (단계 1) / 코드 기본값: `0`
 
 TBT 회전 준비·해제 상태에 맞춰 연결 앱에 MAP/ROAD 화면 전환 명령을 보냅니다. 앱이 해당 명령을 지원해야 동작하며 차량 경로나 조향 방식을 바꾸는 설정은 아닙니다.
 
-사용처: [carrot_serv.py](../../../openpilot/selfdrive/kisapilot/carrot_serv.py)
+사용처: [nav_guidance.py](../../../openpilot/selfdrive/kisapilot/nav_guidance.py)
 
 ## DEV
 

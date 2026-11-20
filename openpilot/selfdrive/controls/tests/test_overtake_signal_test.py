@@ -116,7 +116,7 @@ class TestProductionSignalGuard(unittest.TestCase):
             steeringPressed=False, gasPressed=False, brakePressed=False, leftLaneLine=10, leftBlindspot=False,
             leftBlinker=False, rightBlinker=False)
     sm = SM(carState=cs, carControl=NS(latActive=True, longActive=True),
-            carrotMan=NS(naviHighway=True, xTurnInfo=-1, xDistToTurn=10000.),
+            kisaNavigation=NS(naviHighway=True, xTurnInfo=-1, xDistToTurn=10000.),
             modelV2=NS(meta=NS(laneChangeState='off')), radarState=NS(leadOne=NS(radarTrackId=63)))
     sm.logMonoTime = {k:100_000_000_000 for k in sm}
     class Probe:

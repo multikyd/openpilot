@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 from openpilot.selfdrive.kisapilot.bump_approach import BumpApproach
 
 ROOT=Path(__file__).parents[2]
-PATH=ROOT/'kisapilot/carrot_serv.py'
+PATH=ROOT/'kisapilot/nav_guidance.py'
 TREE=ast.parse(PATH.read_text(encoding='utf8'))
 SERV=next(n for n in TREE.body if isinstance(n,ast.ClassDef) and any(isinstance(m,ast.FunctionDef) and m.name=='_update_sdi' for m in n.body))
 UPDATE=next(n for n in SERV.body if isinstance(n,ast.FunctionDef) and n.name=='update_navi')
@@ -27,7 +27,7 @@ def instance():
   h.nSdiPlusBlockType=-1;h.nSdiPlusBlockSpeed=h.nSdiPlusBlockDist=0
   h.nSdiPlusType=22;h.nSdiPlusDist=16;h.autoNaviSpeedCtrlMode=2;h.autoNaviSpeedSafetyFactor=1.01
   h.roadcate=3;h.autoNaviSpeedBumpSpeed=30.;h.autoNaviSpeedBumpTime=4.;h.autoNaviSpeedDecelRate=1.2
-  h.autoNaviSpeedCtrlEnd=9.;h.active_carrot=2;h.last_update_gps_time_navi=100.
+  h.autoNaviSpeedCtrlEnd=9.;h.guidance_level=2;h.last_update_gps_time_navi=100.
   h.bump_display=None;h.bump_memory=NS(position=None);h.bump_passage=NS(matches=MagicMock(return_value=False),event=None)
   h.autoTurnControl=0;h.xTurnInfo=h.xTurnInfoNext=-1;h.xDistToTurn=h.xDistToTurnNext=1000
   h.update_auto_turn=lambda *a:(250.,'none',0,0)
@@ -70,7 +70,7 @@ class TestSecondaryBump(unittest.TestCase):
   def test_stale_future_and_inactive_data_are_rejected(self):
     for now in (99.9,103.01):
       self.assertIsNone(instance()._live_plus_bump(now,10.))
-    h=instance();h.active_carrot=1
+    h=instance();h.guidance_level=1
     self.assertIsNone(h._live_plus_bump(100.,10.))
   def test_bad_measurements_are_rejected(self):
     for distance in (0,-1,math.nan,math.inf):

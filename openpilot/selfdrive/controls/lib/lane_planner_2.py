@@ -129,7 +129,7 @@ class LanePlanner:
     self.timer += DT_MDL
     if self.timer > 2.0:
       self.timer = 0.0
-      self.camera_offset = self.params.get("CameraOffsetAdj", return_default=True)
+      self.camera_offset = self.params.get("CameraLateralOffsetM", return_default=True)
       self.path_offset = self.camera_offset - 0.04
       self.adjustLaneOffset = self.params.get("AdjustLaneOffset")
       self.adjustCurveOffset = self.adjustLaneOffset #self.params.get("AdjustCurveOffset")
@@ -250,7 +250,7 @@ class LanePlanner:
     return float(filtered * confidence * width_factor)
 
   def _get_lane_position_offset(self, CS, laneline_active):
-    # Reproduce manual CameraOffsetAdj choices without writing global Params.
+    # Reproduce manual CameraLateralOffsetM choices without writing global Params.
     geometry = self.lane_position_geometry
     values = (self.lane_width_left, self.lane_width_right, self.l_prob, self.r_prob,
               self.total_camera_offset, self.d_prob)
@@ -309,7 +309,7 @@ class LanePlanner:
     target = self.lane_position_offset if enabled and self.lane_position_class != 'unknown' and self.lane_position_missing <= 1.5 else 0.
     if enabled and valid:
       self.lane_position_camera_target = LANE_CAMERA_PROFILES[self.lane_position_class]
-      # CameraOffsetAdj currently contributes once to lane geometry (weighted
+      # CameraLateralOffsetM currently contributes once to lane geometry (weighted
       # by d_prob), and twice through legacy calibration. Compensate exactly
       # once, including the old edge offset, rather than stacking preferences.
       target = (self.lane_position_camera_target-self.total_camera_offset)*(2.+self.d_prob)

@@ -325,7 +325,7 @@ def main(demo=False):
   # messaging
   pub_socks = ["modelV2", "drivingModelData", "cameraOdometry"] + (["chestnutGpuState"] if CHESTNUT else [])
   pm = PubMaster(pub_socks)
-  sm = SubMaster(["deviceState", "carState", "narrowRoadCameraState", "extrinsicsCalibration", "driverMonitoringState", "carControl", "lateralDelay", "carrotMan", "radarState"])
+  sm = SubMaster(["deviceState", "carState", "narrowRoadCameraState", "extrinsicsCalibration", "driverMonitoringState", "carControl", "lateralDelay", "kisaNavigation", "radarState"])
 
   publish_state = PublishState()
   params = Params()
@@ -362,17 +362,17 @@ def main(demo=False):
   custom_lat_delay = 0.0
   lat_smooth_seconds_dynamic = 0.0
   lat_smooth_seconds = LAT_SMOOTH_SECONDS
-  vEgoStopping = params.get("VEgoStopping")
+  vEgoStopping = params.get("ModelStopThresholdMps")
   camera_yaw_trim_deg = params.get("CameraYawTrimDeg")
   pipeline_timing = PipelineTiming()
   while True:
     receive_start = time.monotonic()
     if time.monotonic() - last_time >= 2:
       last_time = time.monotonic()
-      custom_lat_delay = params.get("SteerActuatorDelay")
-      lat_smooth_seconds = params.get("LatSmoothSec")
-      long_delay = params.get("LongActuatorDelay")
-      vEgoStopping = params.get("VEgoStopping")
+      custom_lat_delay = params.get("SteeringDelaySec")
+      lat_smooth_seconds = params.get("LateralSmoothingSec")
+      long_delay = params.get("LongitudinalDelaySec")
+      vEgoStopping = params.get("ModelStopThresholdMps")
       camera_yaw_trim_deg = params.get("CameraYawTrimDeg")
 
     # Keep receiving frames until we are at least 1 frame ahead of previous extra frame
@@ -509,7 +509,7 @@ def main(demo=False):
       l_lane_change_prob = desire_state[log.Desire.laneChangeLeft]
       r_lane_change_prob = desire_state[log.Desire.laneChangeRight]
       lane_change_prob = l_lane_change_prob + r_lane_change_prob
-      DH.update(sm['carState'], modelv2_send.modelV2, sm['carControl'].latActive, lane_change_prob, sm['carrotMan'], sm['radarState'])
+      DH.update(sm['carState'], modelv2_send.modelV2, sm['carControl'].latActive, lane_change_prob, sm['kisaNavigation'], sm['radarState'])
       modelv2_send.modelV2.meta.laneChangeState = DH.lane_change_state
       modelv2_send.modelV2.meta.laneChangeDirection = DH.lane_change_direction
       modelv2_send.modelV2.meta.laneChangeCrossed = DH.lane_change_crossed

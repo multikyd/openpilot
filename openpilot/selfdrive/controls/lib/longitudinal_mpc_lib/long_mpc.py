@@ -11,8 +11,8 @@ from openpilot.common.swaglog import cloudlog
 # WARNING: imports outside of constants will not trigger a rebuild
 from openpilot.selfdrive.modeld.constants import index_function
 from openpilot.selfdrive.controls.radard import _LEAD_ACCEL_TAU
-# from openpilot.selfdrive.kisapilot.carrot_functions import CarrotPlanner
-from openpilot.selfdrive.kisapilot.carrot_functions import XState
+# from openpilot.selfdrive.kisapilot.driving_policy import KisaLongitudinalPolicy
+from openpilot.selfdrive.kisapilot.driving_policy import XState
 
 
 if __name__ == '__main__':  # generating code
@@ -46,7 +46,7 @@ A_CHANGE_COST = 200.
 A_CHANGE_COST_STARTING = 10. #30.
 DANGER_ZONE_COST = 100.
 CRASH_DISTANCE = .25
-# Code generation must not read device parameters; CarrotPlanner supplies the runtime value.
+# Code generation must not read device parameters; KisaLongitudinalPolicy supplies the runtime value.
 LEAD_DANGER_FACTOR = 0.75
 LIMIT_COST = 1e6
 ACADOS_SOLVER_TYPE = 'SQP_RTI'
@@ -607,12 +607,12 @@ class LongitudinalMpc:
       self.early_lead_decel = 0.0
     return min(normal_max, -self.early_lead_decel) if self.early_lead_decel else normal_max
 
-  def update(self, carrot, reset_state, radarstate, v_cruise, x, v, a, j, personality=log.LongitudinalPersonality.standard,
+  def update(self, driving_policy, reset_state, radarstate, v_cruise, x, v, a, j, personality=log.LongitudinalPersonality.standard,
              prev_accel_constraint=True, future_curvature=None, allow_turn_resume=False, allow_congestion=False, cutin_accel_limit=None,
              turn_exit_strength=0., allow_stop_approach=False, radar_stamp=0., observation_time=0., highway_queue=False):
     v_ego = self.x0[1]
     a_ego = self.x0[2]
-    t_follow = carrot.get_T_FOLLOW(personality, v_ego, a_ego)
+    t_follow = driving_policy.get_T_FOLLOW(personality, v_ego, a_ego)
     self.status = radarstate.leadOne.present or radarstate.leadTwo.present
 
     if radarstate.leadOne.present:
@@ -621,26 +621,26 @@ class LongitudinalMpc:
     else:
       self.j_lead = 0.0
 
-    lead_xv_0, lead_v_0 = self.process_lead(radarstate.leadOne, np.clip(self.j_lead * carrot.j_lead_factor, -1.0, 1.0))
+    lead_xv_0, lead_v_0 = self.process_lead(radarstate.leadOne, np.clip(self.j_lead * driving_policy.j_lead_factor, -1.0, 1.0))
     lead_xv_1, _ = self.process_lead(radarstate.leadTwo, 0.0)
 
     mode = self.mode
-    comfort_brake = carrot.comfort_brake
-    stop_distance = carrot.stop_distance
-    a_change_cost2 = carrot.a_change_cost2
-    lead_danger_factor2 = carrot.lead_danger_factor2
+    comfort_brake = driving_policy.comfort_brake
+    stop_distance = driving_policy.stop_distance
+    a_change_cost2 = driving_policy.a_change_cost2
+    lead_danger_factor2 = driving_policy.lead_danger_factor2
     
     if mode == 'blended':
       stop_x = 1000.0
     else:
-      v_cruise, stop_x, mode = carrot.v_cruise, carrot.stop_dist, carrot.mode
+      v_cruise, stop_x, mode = driving_policy.v_cruise, driving_policy.stop_dist, driving_policy.mode
       desired_distance = desired_follow_distance(v_ego, lead_v_0, comfort_brake, stop_distance, t_follow)
-      t_follow = carrot.dynamic_t_follow(t_follow, radarstate.leadOne, desired_distance, self.a_prev)
+      t_follow = driving_policy.dynamic_t_follow(t_follow, radarstate.leadOne, desired_distance, self.a_prev)
 
     jam_follow, jam_accel = self.congestion_follow.update(
       radarstate.leadOne, v_ego, self.max_a, t_follow,
-      allow_congestion and mode == 'acc' and carrot.desireState <= .1 and
-      carrot.xState not in [XState.e2eStop, XState.e2eStopped], self.dt, highway=highway_queue)
+      allow_congestion and mode == 'acc' and driving_policy.desireState <= .1 and
+      driving_policy.xState not in [XState.e2eStop, XState.e2eStopped], self.dt, highway=highway_queue)
     if not reset_state:
       t_follow = jam_follow
 
@@ -659,22 +659,22 @@ class LongitudinalMpc:
     cruise_max_a = self.cruise_accel_after_lead_loss(
       radarstate.leadOne, radarstate.leadTwo, v_ego, reset_state, mode)
     if mode == 'acc' and not reset_state:
-      cruise_max_a = min(cruise_max_a, carrot.signal_follow.cruise_accel(self.max_a))
-      if carrot.signal_follow.strength > 0:
+      cruise_max_a = min(cruise_max_a, driving_policy.signal_follow.cruise_accel(self.max_a))
+      if driving_policy.signal_follow.strength > 0:
         # Also bound the solver's acceleration: a nearby lead must not undo the signal cap.
         self.params[:,1] = np.minimum(self.params[:,1], max(0.0, cruise_max_a))
 
     cruise_max_a = self.cruise_accel_for_approaching_lead(
       radarstate.leadOne, v_ego, self.desired_distance, cruise_max_a,
-      mode == 'acc' and not reset_state and carrot.desireState <= .1 and
-      carrot.xState not in [XState.e2eStop, XState.e2eStopped])
+      mode == 'acc' and not reset_state and driving_policy.desireState <= .1 and
+      driving_policy.xState not in [XState.e2eStop, XState.e2eStopped])
 
     cruise_max_a = self.cruise_accel_in_turn_after_lead_loss(
-      radarstate.leadOne, radarstate.leadTwo, v_ego, a_ego, carrot.steering_angle, cruise_max_a,
-      mode == 'acc' and not reset_state and carrot.desireState <= .1,
+      radarstate.leadOne, radarstate.leadTwo, v_ego, a_ego, driving_policy.steering_angle, cruise_max_a,
+      mode == 'acc' and not reset_state and driving_policy.desireState <= .1,
       future_curvature=future_curvature,
-      allow_resume=(allow_turn_resume and carrot.xState not in [XState.e2eStop, XState.e2eStopped] and
-                    carrot.signal_follow.strength <= 0.))
+      allow_resume=(allow_turn_resume and driving_policy.xState not in [XState.e2eStop, XState.e2eStopped] and
+                    driving_policy.signal_follow.strength <= 0.))
     if self.turn_loss_limit is not None:
       # Also constrain acceleration if another lead/cruise objective becomes dominant.
       self.params[:,1] = np.minimum(self.params[:,1], max(0., cruise_max_a))
@@ -700,7 +700,7 @@ class LongitudinalMpc:
                                  v_upper)
       cruise_obstacle = np.cumsum(T_DIFFS * v_cruise_clipped) + get_safe_obstacle_distance(v_cruise_clipped, t_follow, comfort_brake, stop_distance)
 
-      adjust_dist = carrot.trafficStopDistanceAdjust if v_ego > 0.1 else -2.0
+      adjust_dist = driving_policy.trafficStopDistanceAdjust if v_ego > 0.1 else -2.0
       if 50 < stop_x + adjust_dist < cruise_obstacle[0]:
         stop_x = cruise_obstacle[0] - adjust_dist
       x2 = stop_x * np.ones(N+1) + adjust_dist
@@ -710,7 +710,7 @@ class LongitudinalMpc:
       self.source = MPC_SOURCES[min_idx]
 
       if v_cruise == 0 and self.source == LongitudinalPlanSource.cruise:
-        self.params[:,0] = - carrot.autoNaviSpeedDecelRate
+        self.params[:,0] = - driving_policy.autoNaviSpeedDecelRate
       #elif self.source in [LongitudinalPlanSource.cruise, LongitudinalPlanSource.e2e]:
       #  self.params[:,0] = - COMFORT_BRAKE
 
@@ -755,8 +755,8 @@ class LongitudinalMpc:
       radarstate.leadOne, radarstate.leadTwo, v_ego, a_ego, self.desired_distance, stop_distance,
       radar_stamp, observation_time,
       enabled=(allow_stop_approach and mode == 'acc' and not reset_state and
-               carrot.xState not in [XState.e2eStop, XState.e2eStopped, XState.e2ePrepare] and
-               carrot.signal_follow.strength <= 0. and
+               driving_policy.xState not in [XState.e2eStop, XState.e2eStopped, XState.e2ePrepare] and
+               driving_policy.signal_follow.strength <= 0. and
                self.turn_loss_limit is None and cutin_accel_limit is None and
                # A queue acceleration cap must not block easing behind a moving
                # lead; retain the queue's original stopped-lead distance goal.
@@ -799,8 +799,8 @@ class LongitudinalMpc:
     exit_strength = exit_strength if (mode == 'acc' and not reset_state and
                                      self.turn_loss_limit is None and cruise_max_a >= self.max_a-1e-6) else 0.
     self.set_weights(prev_accel_constraint, personality=personality,
-                     jerk_factor=carrot.jerk_factor_apply*(1.-.35*exit_strength),
-                     a_change_cost_starting=carrot.aChangeCostStarting)
+                     jerk_factor=driving_policy.jerk_factor_apply*(1.-.35*exit_strength),
+                     a_change_cost_starting=driving_policy.aChangeCostStarting)
     self.run()
     if (np.any(lead_xv_0[FCW_IDXS,0] - self.x_sol[FCW_IDXS,0] < CRASH_DISTANCE) and
             radarstate.leadOne.modelProb > 0.9):

@@ -129,7 +129,7 @@ class TestMpcIntegration(unittest.TestCase):
                max_a=1.,_stop_approach_active=False,params=np.ones((4,8)))
     env=dict(np=np,self=planner,radarstate=NS(leadOne=lead(aLeadK=-.5),leadTwo=lead(present=False)),v_ego=5.,a_ego=-.5,
              stop_distance=3.6,radar_stamp=10.,observation_time=10.,allow_stop_approach=True,mode='acc',reset_state=False,
-             carrot=NS(xState=0,signal_follow=NS(strength=0.),signal_stop_approach=NS(accel_cap=None)),
+             driving_policy=NS(xState=0,signal_follow=NS(strength=0.),signal_stop_approach=NS(accel_cap=None)),
              XState=NS(e2eStop=1,e2eStopped=2,e2ePrepare=3),cutin_accel_limit=None,jam_accel=1.,
              lead_xv_0=np.column_stack([np.arange(4),np.full(4,5.)]),lead_0_obstacle=np.full(4,20.),
              lead_1_obstacle=np.full(4,100.),cruise_obstacle=np.full(4,50.),x2=np.full(4,1000.),N=3,cloudlog=MagicMock(),
@@ -149,7 +149,7 @@ class TestMpcIntegration(unittest.TestCase):
     env['radarstate'].leadOne.vLead=.2;exec(block,env)
     self.assertFalse(helper.update.call_args.kwargs['enabled'])
     env['radarstate'].leadOne.vLead=5.;env['jam_accel']=1.
-    env['carrot'].signal_follow.strength=.2;exec(block,env)
+    env['driving_policy'].signal_follow.strength=.2;exec(block,env)
     self.assertFalse(helper.update.call_args.kwargs['enabled'])
 
 
@@ -164,13 +164,13 @@ class TestPlannerApproachGate(unittest.TestCase):
     sm=SM(selfdriveState=NS(enabled=True));sm.checks=True
     cs=NS(gasPressed=False,brakePressed=False,leftBlinker=False,rightBlinker=False,steeringPressed=False,steeringAngleDeg=0.)
     planner=NS(CP=NS(openpilotLongitudinalControl=True),output_should_stop=False)
-    carrot=NS(desireState=0.,myDrivingMode=NS(value=3))
-    env=dict(sm=sm,cs=cs,self=planner,carrot=carrot,reset_state=False,force_slow_decel=False,fresh=True)
+    driving_policy=NS(desireState=0.,myDrivingMode=NS(value=3))
+    env=dict(sm=sm,cs=cs,self=planner,driving_policy=driving_policy,reset_state=False,force_slow_decel=False,fresh=True)
     self.assertTrue(eval(code,env))
     for obj,key,value in [(cs,'gasPressed',True),(cs,'brakePressed',True),(cs,'leftBlinker',True),
                           (cs,'rightBlinker',True),(cs,'steeringPressed',True),(cs,'steeringAngleDeg',40.),
-                          (carrot,'desireState',1.),(carrot.myDrivingMode,'value',1),
-                          (carrot.myDrivingMode,'value',2),(carrot.myDrivingMode,'value',4),
+                          (driving_policy,'desireState',1.),(driving_policy.myDrivingMode,'value',1),
+                          (driving_policy.myDrivingMode,'value',2),(driving_policy.myDrivingMode,'value',4),
                           (planner,'output_should_stop',True),(sm['selfdriveState'],'enabled',False)]:
       old=getattr(obj,key);setattr(obj,key,value);self.assertFalse(eval(code,env),key);setattr(obj,key,old)
     for key in ('reset_state','force_slow_decel'):

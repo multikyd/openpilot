@@ -12,7 +12,7 @@ import time
 
 MAX_FILE = 256 * 1024 * 1024
 MAX_TOTAL = 512 * 1024 * 1024
-ROOTS = (Path('/data/carrot_crash'), Path('/var/crash'), Path('/data/tombstones'), Path('/data/crashes'))
+ROOTS = (Path('/data/kisa_crash'), Path('/var/crash'), Path('/data/tombstones'), Path('/data/crashes'))
 
 
 def select_files(roots, now, max_file=None, max_total=None):
@@ -27,7 +27,7 @@ def select_files(roots, now, max_file=None, max_total=None):
         stat = path.stat()
         if not 0 <= now-stat.st_mtime <= 7*86400:
           continue
-        if root.name == 'carrot_crash' or path.suffix in ('.crash', '.log', '.txt') or path.name.startswith('tombstone'):
+        if root.name == 'kisa_crash' or path.suffix in ('.crash', '.log', '.txt') or path.name.startswith('tombstone'):
           candidates.append((stat.st_mtime, stat.st_size, path))
     except OSError as error:
       skipped.append(dict(path=str(root), reason=str(error)))
@@ -103,7 +103,7 @@ def collect(destination, roots=ROOTS, event=None, automatic=False):
   if automatic and event:
     filename = destination / f"process-crash-report-{int(event['wall']*1e6)}-{event['pid']}.tar.gz"
   else:
-    filename = destination / f'carrot-crash-report-{time.strftime("%Y%m%d-%H%M%S")}-{os.getpid()}.tar.gz'
+    filename = destination / f'kisa-crash-report-{time.strftime("%Y%m%d-%H%M%S")}-{os.getpid()}.tar.gz'
   partial = filename.with_suffix(filename.suffix + '.partial')
   with tarfile.open(partial, 'w:gz', compresslevel=1 if automatic else 9) as archive:
     for path in chosen:

@@ -13,11 +13,11 @@ class TestNavSourceBadge(unittest.TestCase):
     cls.body = [n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == '_draw_navigation_status']
     cls.bases = []
     class SM(dict):
-      valid = {'carrotMan': True}
-      alive = {'carrotMan': True}
-      recv_frame = {'carrotMan': 20}
-      recv_time = {'carrotMan': 100.-age}
-    sm = SM(carrotMan=NS(naviConnected=connected, naviHighway=highway, naviSource=source))
+      valid = {'kisaNavigation': True}
+      alive = {'kisaNavigation': True}
+      recv_frame = {'kisaNavigation': 20}
+      recv_time = {'kisaNavigation': 100.-age}
+    sm = SM(kisaNavigation=NS(naviConnected=connected, naviHighway=highway, naviSource=source))
     ray = MagicMock()
     ray.Vector2 = lambda x, y: NS(x=x, y=y)
     state = NS(sm=sm, started=True, started_frame=10)

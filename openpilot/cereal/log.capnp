@@ -2746,7 +2746,7 @@ struct Event {
     # DO change the name of the field and struct
     # DON'T change the ID (e.g. @107)
     # DON'T change which struct it points to
-    carrotMan @107 :Custom.CarrotMan;
+    kisaNavigation @107 :Custom.KisaNavigation;
     customReserved1 @108 :Custom.CustomReserved1;
     customReserved2 @109 :Custom.CustomReserved2;
     customReserved3 @110 :Custom.CustomReserved3;

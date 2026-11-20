@@ -26,7 +26,7 @@ class TestAutoCrashCapture(unittest.TestCase):
     self.service = auto.AutoCrashCapture(self.events, self.logs, self.spawn, self.route)
 
   def record(self):
-    self.service.record('carrot_man', 123, -6, 'SIGABRT')
+    self.service.record('kisa_navigation', 123, -6, 'SIGABRT')
     self.service.step()
     return self.service.pending()[0]
 
@@ -34,7 +34,7 @@ class TestAutoCrashCapture(unittest.TestCase):
     import time
     self.service.start()
     self.addCleanup(self.service.close)
-    self.service.record('carrot_man', 123, -6, 'SIGABRT')
+    self.service.record('kisa_navigation', 123, -6, 'SIGABRT')
     deadline = time.monotonic() + 3
     while not self.service.pending() and time.monotonic() < deadline:
       time.sleep(.01)
@@ -97,7 +97,7 @@ class TestAutoCrashCapture(unittest.TestCase):
     self.assertEqual(len(self.service.pending()), 2)
 
   def test_failed_storage_keeps_event_for_retry(self):
-    self.service.record('carrot_man', 123, -6, 'SIGABRT')
+    self.service.record('kisa_navigation', 123, -6, 'SIGABRT')
     with patch.object(auto, 'atomic_json', side_effect=OSError('disk full')):
       with self.assertRaises(OSError):
         self.service.step()
@@ -121,26 +121,26 @@ class TestAutoCrashCapture(unittest.TestCase):
     self.assertEqual(collector.nearby_segments(self.logs, '../bad'), [])
 
   def test_automatic_archive_contains_event_fault_and_existing_logs(self):
-    fault = self.root / 'carrot_crash'
+    fault = self.root / 'kisa_crash'
     fault.mkdir()
-    (fault / 'carrot-fault-test.log').write_text('fatal stack')
+    (fault / 'kisa-fault-test.log').write_text('fatal stack')
     segment = self.logs / 'route--abc--1'
     segment.mkdir()
     (segment / 'rlog.zst').write_bytes(b'original')
-    event = dict(process='carrot_man', pid=123, exit_code=-6, wall=1234., segments=[segment.name])
+    event = dict(process='kisa_navigation', pid=123, exit_code=-6, wall=1234., segments=[segment.name])
     with patch.object(collector, 'command', return_value={'fixture': True}):
       archive = collector.collect(self.logs, roots=(fault,), event=event, automatic=True)
     with tarfile.open(archive) as bundle:
       report = json.load(bundle.extractfile('report.json'))
       self.assertEqual(report['event']['exit_code'], -6)
       self.assertTrue(any(name.endswith('rlog.zst') for name in bundle.getnames()))
-      self.assertTrue(any(name.endswith('carrot-fault-test.log') for name in bundle.getnames()))
+      self.assertTrue(any(name.endswith('kisa-fault-test.log') for name in bundle.getnames()))
     self.assertFalse(archive.with_suffix('.gz.partial').exists())
     self.assertEqual((segment / 'rlog.zst').read_bytes(), b'original')
 
   def test_package_marks_done_and_limits_only_automatic_archives(self):
     event = self.record()
-    manual = self.logs / 'carrot-crash-report-manual.tar.gz'
+    manual = self.logs / 'kisa-crash-report-manual.tar.gz'
     manual.touch()
     for n in range(6):
       (self.logs / f'process-crash-report-{n}.tar.gz').touch()
@@ -160,7 +160,7 @@ class TestAutoCrashCapture(unittest.TestCase):
     self.assertFalse(event.with_suffix('.done').exists())
 
   def test_file_and_total_limits_preserve_oversize_original(self):
-    fault = self.root / 'carrot_crash'
+    fault = self.root / 'kisa_crash'
     fault.mkdir()
     original = fault / 'large.log'
     original.write_bytes(b'123456')
@@ -186,7 +186,7 @@ class TestManagerCrashHook(unittest.TestCase):
   def owner(self, code=-6, shutting_down=False):
     from types import SimpleNamespace
     return SimpleNamespace(proc=SimpleNamespace(pid=123, exitcode=code),
-                           shutting_down=shutting_down, _reported_exit_proc=None, name='carrot_man')
+                           shutting_down=shutting_down, _reported_exit_proc=None, name='kisa_navigation')
 
   def test_unexpected_exit_is_enqueued_once(self):
     service = Mock()
@@ -196,7 +196,7 @@ class TestManagerCrashHook(unittest.TestCase):
     with patch.object(auto, 'capture_service', return_value=service):
       method(owner)
       method(owner)
-    service.record.assert_called_once_with('carrot_man', 123, -int(signal.SIGABRT), 'SIGABRT')
+    service.record.assert_called_once_with('kisa_navigation', 123, -int(signal.SIGABRT), 'SIGABRT')
 
   def test_normal_shutdown_does_not_enqueue(self):
     with patch.object(auto, 'capture_service') as service:

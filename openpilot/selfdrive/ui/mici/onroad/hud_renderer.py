@@ -216,9 +216,9 @@ class HudRenderer(Widget):
     if ui_state.started:
       self._bookmark_transfer.draw(rect, self._font_bold)
     if (self._can_draw_top_icons and ui_state.started and
-        ui_state.sm.valid['carrotMan'] and ui_state.sm.alive['carrotMan'] and
-        0 <= time.monotonic()-ui_state.sm.recv_time['carrotMan'] < 1):
-      nav = ui_state.sm['carrotMan']
+        ui_state.sm.valid['kisaNavigation'] and ui_state.sm.alive['kisaNavigation'] and
+        0 <= time.monotonic()-ui_state.sm.recv_time['kisaNavigation'] < 1):
+      nav = ui_state.sm['kisaNavigation']
       if getattr(nav, 'naviHighway', False):
         now = time.monotonic()
         fresh_plan = (ui_state.sm.valid['longitudinalPlan'] and ui_state.sm.alive['longitudinalPlan'] and
@@ -269,13 +269,13 @@ class HudRenderer(Widget):
     if not self._can_draw_top_icons or not ui_state.started or rect.width < 440:
       return
     sm = ui_state.sm
-    fresh = (sm.valid['carrotMan'] and sm.alive['carrotMan'] and
-             sm.recv_frame['carrotMan'] >= ui_state.started_frame and
-             0 <= time.monotonic()-sm.recv_time['carrotMan'] < 1)
-    connected = fresh and getattr(sm['carrotMan'], 'naviConnected', False)
-    highway = connected and sm['carrotMan'].naviHighway
+    fresh = (sm.valid['kisaNavigation'] and sm.alive['kisaNavigation'] and
+             sm.recv_frame['kisaNavigation'] >= ui_state.started_frame and
+             0 <= time.monotonic()-sm.recv_time['kisaNavigation'] < 1)
+    connected = fresh and getattr(sm['kisaNavigation'], 'naviConnected', False)
+    highway = connected and sm['kisaNavigation'].naviHighway
     badges = [("NAV", 48, connected)]
-    source = getattr(sm["carrotMan"], "naviSource", "") if connected else ""
+    source = getattr(sm["kisaNavigation"], "naviSource", "") if connected else ""
     source_letter = {"tmap": "T", "naver-map": "N"}.get(source)
     if source_letter:
       badges.append((source_letter, 28, True))
@@ -467,8 +467,8 @@ class HudRenderer(Widget):
   def _draw_lower_left(self, rect: rl.Rectangle) -> None:
     s = ui_state
     sm = s.sm
-    fresh = (sm.valid['carrotMan'] and sm.alive['carrotMan'] and
-             0 <= time.monotonic()-sm.recv_time['carrotMan'] < 1)
+    fresh = (sm.valid['kisaNavigation'] and sm.alive['kisaNavigation'] and
+             0 <= time.monotonic()-sm.recv_time['kisaNavigation'] < 1)
     notice = select_road_notice(s.xSpdType, s.xSpdLimitOrg, s.xSpdLimit, s.xSpdDist,
                                 s.bumpTarget, s.bumpDistance) if fresh else None
     # A critical steering instruction retains priority over advisory road notices.

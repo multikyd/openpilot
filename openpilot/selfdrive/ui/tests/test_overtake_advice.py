@@ -17,10 +17,10 @@ spec.loader.exec_module(layout)
 class TestAdviceHUD(unittest.TestCase):
   def select(self, highway=True, recommended=True, plan_age=.05, nav_age=.05, plan_valid=True, old_schema=False):
     class SM(dict):
-      valid = {'carrotMan': True, 'longitudinalPlan': plan_valid}
-      alive = {'carrotMan': True, 'longitudinalPlan': True}
-      recv_time = {'carrotMan': 10.-nav_age, 'longitudinalPlan': 10.-plan_age}
-    sm = SM(carState=NS(standstill=False), carrotMan=NS(naviHighway=highway, signalDisplay='signal'),
+      valid = {'kisaNavigation': True, 'longitudinalPlan': plan_valid}
+      alive = {'kisaNavigation': True, 'longitudinalPlan': True}
+      recv_time = {'kisaNavigation': 10.-nav_age, 'longitudinalPlan': 10.-plan_age}
+    sm = SM(carState=NS(standstill=False), kisaNavigation=NS(naviHighway=highway, signalDisplay='signal'),
             longitudinalPlan=NS() if old_schema else NS(overtakeAdvised=recommended))
     tree = ast.parse((ROOT/'hud_renderer.py').read_text(encoding='utf8'))
     cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'HudRenderer')

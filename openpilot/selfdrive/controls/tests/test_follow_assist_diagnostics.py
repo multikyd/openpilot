@@ -53,8 +53,8 @@ class TestFollowAssistanceIntegration(unittest.TestCase):
       sm=SM(radarState=NS(leadOne=NS()),selfdriveState=NS(enabled=True))
       sm.logMonoTime={'radarState':int(100e9)}
       env=dict(self=planner,sm=sm,cs=cs,now=100.,fresh=True,reset_state=False,
-               carrot=NS(stop_distance=3.6,desireState=0.,xState=0),XState=NS(e2eStop=2,e2eStopped=3),
-               output_a_target=base,output_v_target_now=12.,action_t=.2,apply_lead_gap_cap=apply_lead_gap_cap)
+               driving_policy=NS(stop_distance=3.6,desireState=0.,xState=0),XState=NS(e2eStop=2,e2eStopped=3),
+               output_a_target=base,output_v_target_now=12.,output_j_target=0.,action_t=.2,apply_lead_gap_cap=apply_lead_gap_cap)
       exec(compile(ast.Module(body=statements,type_ignores=[]),'actual_planner_gap_integration','exec'),env)
       self.assertEqual(mock.call_args.kwargs['desired_distance'],8.)
       self.assertEqual(mock.call_args.kwargs['planned_accel'],base)

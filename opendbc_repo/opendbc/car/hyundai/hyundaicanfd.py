@@ -37,7 +37,7 @@ class CanBus(CanBusBase):
     # have a different harness than the LFA steering variants in order to split
     # a different bus, since the steering is done by different ECUs.
     self._a, self._e = 1, 0
-    if lka_steering and Params().get("HyundaiCameraSCC") == 0:  #배선개조는 무조건 Bus0가 ECAN임.
+    if lka_steering and Params().get("HyundaiCameraCruiseMode") == 0:  #배선개조는 무조건 Bus0가 ECAN임.
       self._a, self._e = 0, 1
 
     self._a += self.offset
@@ -291,13 +291,13 @@ def create_acc_control_scc2(packer, CAN, enabled, accel_last, accel, stopping, g
 
   acc_mode = 0 if not enabled else (2 if gas_override else 1)
 
-  if hyundai_jerk.carrot_cruise == 1:
+  if hyundai_jerk.kisa_cruise_mode == 1:
     acc_mode = 4 if enabled else 0
     enabled = False
     accel = accel_last = 0.5
 
-  elif hyundai_jerk.carrot_cruise == 2:
-    accel = accel_last = hyundai_jerk.carrot_cruise_accel
+  elif hyundai_jerk.kisa_cruise_mode == 2:
+    accel = accel_last = hyundai_jerk.kisa_cruise_accel
 
   jerk_u = hyundai_jerk.jerk_u
   jerk_l = hyundai_jerk.jerk_l
@@ -579,10 +579,10 @@ def create_ccnc_messages(CP, packer, CAN, frame, CC, CS, hud_control, disp_angle
         main_enabled = CS.out.cruiseState.available
         cruise_enabled = CC.enabled
         lat_enabled = CS.out.latEnabled
-        nav_active = hud_control.activeCarrot > 1
+        nav_active = hud_control.guidanceLevel > 1
 
         # hdpuse carrot
-        hdp_use = int(Params().get("HDPuse"))
+        hdp_use = int(Params().get("StockHudAssistDisplayMode"))
         hdp_active = False
         if hdp_use == 1:
             hdp_active = cruise_enabled and nav_active

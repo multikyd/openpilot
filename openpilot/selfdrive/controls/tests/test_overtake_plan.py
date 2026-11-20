@@ -272,7 +272,7 @@ class TestOvertakePlan(unittest.TestCase):
     env=dict(OvertakeInput=m.OvertakeInput,OvertakeAdviceConfirmation=lambda:NS(update=lambda *a:False),observe_original_vehicle=m.observe_original_vehicle,assess_traffic=lambda **kw:NS(eligible=False,reason="unknown",ahead_gap=0.,left_faster=False,right_faster=False),math=__import__('math'),cloudlog=NS(event=lambda *a,**kw:events.append(kw)))
     exec(compile(ast.Module(body=[f],type_ignores=[]),'actual_overtake_observer','exec'),env)
     class SM(dict):
-      logMonoTime={k:int(10e9) for k in ('modelV2','carState','carControl','carrotMan','radarState')}
+      logMonoTime={k:int(10e9) for k in ('modelV2','carState','carControl','kisaNavigation','radarState')}
       def all_checks(self,services):
         return True
     cs=NS(vEgo=27.,vCruise=108.,canValid=True,gasPressed=False,brakePressed=False,
@@ -280,7 +280,7 @@ class TestOvertakePlan(unittest.TestCase):
           leftBlinker=False,rightBlinker=False,leftLaneLine=10,rightLaneLine=10,oemLaneChangeStateValid=False,
           leftOemLaneChangeReady=True,rightOemLaneChangeReady=True,leftBlindspot=False,rightBlindspot=False)
     sm=SM(carState=cs,carControl=NS(latActive=True,longActive=True),
-          carrotMan=NS(roadLimitSpeedRaw=110,roadLimitSpeedValid=True,naviHighway=True,xTurnInfo=-1,xDistToTurn=-1),
+          kisaNavigation=NS(roadLimitSpeedRaw=110,roadLimitSpeedValid=True,naviHighway=True,xTurnInfo=-1,xDistToTurn=-1),
           modelV2=NS(meta=NS(laneWidthLeft=3.5,laneWidthRight=3.5,laneChangeCrossed=False,
                             laneChangeState=NS(raw=0),laneChangeDirection=NS(raw=0)),laneLineProbs=[.95]*4),
           radarState=NS(leadsRight=[],leadsLeft=[],leadsCenter=[],frontRadarLeadsLeft=[],frontRadarLeadsRight=[],leadOne=NS(radarTrackId=40,vLead=24.,dRel=55.,present=True,radar=True,modelProb=.99)))

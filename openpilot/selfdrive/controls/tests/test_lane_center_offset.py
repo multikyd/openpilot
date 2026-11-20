@@ -13,7 +13,7 @@ class TestLaneCenterOffset(unittest.TestCase):
   def setUp(self):
     self.values = {
       'LaneCenterOffset': -0.03, 'LeftEdgeOffset': 0.0, 'RightEdgeOffset': 0.0,
-      'CameraOffsetAdj': 0.04, 'AdjustLaneOffset': 0.0,
+      'CameraLateralOffsetM': 0.04, 'AdjustLaneOffset': 0.0,
     }
     params = SimpleNamespace(get=lambda key, **kwargs: self.values[key])
     with patch.object(lane_module, 'Params', lambda: params):

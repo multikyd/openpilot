@@ -202,7 +202,7 @@ def get_car(can_recv: CanRecvCallable, can_send: CanSendCallable, set_obd_multip
   CP.fingerprintSource = source
   CP.fuzzyFingerprint = not exact_match
 
-  print("Carrot GitBranch = {}, {}".format(Params().get("GitBranch"), Params().get("GitCommitDate")))
+  print("Kisa GitBranch = {}, {}".format(Params().get("GitBranch"), Params().get("GitCommitDate")))
 
   return interfaces[CP.carFingerprint](CP)
 

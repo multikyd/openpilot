@@ -187,7 +187,7 @@ class RadarInterfaceBase(ABC):
       self.init_samples.append(rcv_time)
 
      
-  def update_carrot(self, v_ego, a_ego, rcv_time, can_packets: list[tuple[int, list[CanData]]]) -> structs.RadarDataT | None:
+  def update_with_ego_motion(self, v_ego, a_ego, rcv_time, can_packets: list[tuple[int, list[CanData]]]) -> structs.RadarDataT | None:
     self.v_ego_hist.append(v_ego)
     self.v_ego = self.v_ego_hist[0]
     self.a_ego_hist.append(a_ego)
@@ -259,7 +259,7 @@ class CarInterfaceBase(ABC):
     dbc_names = {bus: cp.dbc_name for bus, cp in self.can_parsers.items()}
     self.CC: CarControllerBase = self.CarController(dbc_names, CP)
 
-    Params().put('LongitudinalPersonalityMax', 3)
+    Params().put('MaxFollowingPersonality', 3)
 
   def apply(self, c: structs.CarControl, now_nanos: int | None = None, MD = None) -> tuple[structs.CarControl.Actuators, list[CanData]]:
     if now_nanos is None:
@@ -295,7 +295,7 @@ class CarInterfaceBase(ABC):
 
     ret = cls._get_params(ret, candidate, fingerprint, car_fw, alpha_long, is_release, docs)
 
-    if Params().get_bool("DisableMinSteerSpeed"):
+    if Params().get_bool("IgnoreMinimumSteeringSpeed"):
       ret.minSteerSpeed = 0.
 
     # Vehicle mass is published curb weight plus assumed payload such as a human driver; notCars have no assumed payload

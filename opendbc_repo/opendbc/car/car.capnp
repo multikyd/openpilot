@@ -244,7 +244,7 @@ struct CarState {
   rightLatDist @73 : Float32; # distance to right lane line
   leftLongDist @74 : Float32; # distance to left lane line in the direction of travel
   rightLongDist @75 : Float32; # distance to right lane line in the direction of travel
-  carrotCruise @76 : Int16;
+  kisaCruise @76 : Int16;
   leftLaneLine @77 : Int16; # -1: no lane, 0: dashed, 1: solid, +10: white, +20: yellow, ex) 21: solid yellow
   rightLaneLine @78 : Int16; # -1: no lane, 0: dashed, 1: solid, +10: white, +20: yellow, ex) 21: solid yellow
   datetime @79 :UInt64; # timestamp in milliseconds since epoch
@@ -468,7 +468,7 @@ struct CarControl {
     leftLaneDepart @9: Bool;
     leadDistanceBars @10: Int8;  # 1-3: 1 is closest, 3 is farthest. some ports may utilize 2-4 bars instead
 
-    activeCarrot @11: Int16;
+    guidanceLevel @11: Int16;
     leadDistance @12: Float32;
     leadRelSpeed @13: Float32;
     leadDPath @14: Float32;

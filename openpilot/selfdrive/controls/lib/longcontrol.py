@@ -74,7 +74,7 @@ class LongControl:
     if CP.brand == "toyota":
       self.use_accel_pid = True
 
-    self.stopping_accel = self.params.get("StoppingAccel")
+    self.stopping_accel = self.params.get("StoppingStateAccelMps2")
 
   def reset(self):
     self.pid.reset()
@@ -100,11 +100,11 @@ class LongControl:
     self.readParamCount += 1
     if self.readParamCount >= 100:
       self.readParamCount = 0
-      self.stopping_accel = self.params.get("StoppingAccel")
+      self.stopping_accel = self.params.get("StoppingStateAccelMps2")
     elif self.readParamCount == 50:
       if len(self.CP.longitudinalTuning.kpBP) == 1 and len(self.CP.longitudinalTuning.kiBP) == 1:
-        longitudinalTuningKpV = self.params.get("LongTuningKpV")
-        longitudinalTuningKiV = self.params.get("LongTuningKiV")
+        longitudinalTuningKpV = self.params.get("LongitudinalSpeedKp")
+        longitudinalTuningKiV = self.params.get("LongitudinalSpeedKi")
         self.pid._k_p = (self.CP.longitudinalTuning.kpBP, [longitudinalTuningKpV])
         self.pid._k_i = (self.CP.longitudinalTuning.kiBP, [longitudinalTuningKiV])
 

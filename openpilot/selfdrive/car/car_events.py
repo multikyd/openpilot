@@ -29,7 +29,7 @@ class CarEvents:
     self.mute_door = False
     self.mute_seatbelt = False
     self.vCruise_prev = 250
-    self.carrotCruise_prev = False
+    self.previous_kisa_cruise = False
 
     self.mute_seatbelt = self.params.get_bool("MuteSeatbelt")
     self.mute_door = self.params.get_bool("MuteDoor")
@@ -111,10 +111,10 @@ class CarEvents:
         if self.vCruise_prev == 0 and CS.vCruise > 0:
           events.add(EventName.audioPrompt)
 
-      if self.carrotCruise_prev != CS.carrotCruise:
+      if self.previous_kisa_cruise != CS.kisaCruise:
         events.add(EventName.audioPrompt)
 
-      self.carrotCruise_prev = CS.carrotCruise
+      self.previous_kisa_cruise = CS.kisaCruise
       self.vCruise_prev = CS.vCruise
 
     return events

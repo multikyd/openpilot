@@ -10,8 +10,8 @@ $Cxx.namespace("cereal");
 # DO rename the structs
 # DON'T change the identifier (e.g. @0x81c2f05a394cf4af)
 
-struct CarrotMan @0x81c2f05a394cf4af {
-	activeCarrot @0 : Int32;
+struct KisaNavigation @0x81c2f05a394cf4af {
+	guidanceLevel @0 : Int32;
 	nRoadLimitSpeed @1 : Int32;
 	remote @2 : Text;
 	xSpdType @3 : Int32;
@@ -27,9 +27,9 @@ struct CarrotMan @0x81c2f05a394cf4af {
 	szTBTMainText @13 : Text;
 	desiredSpeed @14 : Int32;
 	desiredSource @15 : Text;
-	carrotCmdIndex @16 : Int32;
-	carrotCmd @17 : Text;
-	carrotArg @18 : Text;
+	commandIndex @16 : Int32;
+	commandName @17 : Text;
+	commandArgument @18 : Text;
 	xPosLat @19 : Float32;
 	xPosLon @20 : Float32;
 	xPosAngle @21 : Float32;

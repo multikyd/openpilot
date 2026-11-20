@@ -76,9 +76,9 @@ class TrafficState(Enum):
   def __str__(self):
     return self.name
 
-A_CRUISE_MAX_BP_CARROT = [0., 10 * CV.KPH_TO_MS, 40 * CV.KPH_TO_MS, 60 * CV.KPH_TO_MS, 80 * CV.KPH_TO_MS, 110 * CV.KPH_TO_MS, 140 * CV.KPH_TO_MS]
+CRUISE_ACCEL_SPEED_POINTS = [0., 10 * CV.KPH_TO_MS, 40 * CV.KPH_TO_MS, 60 * CV.KPH_TO_MS, 80 * CV.KPH_TO_MS, 110 * CV.KPH_TO_MS, 140 * CV.KPH_TO_MS]
 
-class CarrotPlanner:
+class KisaLongitudinalPolicy:
   def __init__(self):
     self.params = Params()
     self.params_count = 0
@@ -116,7 +116,7 @@ class CarrotPlanner:
     self.stopSignCount = 0
 
     self.stop_distance = 6.0
-    self.trafficStopDistanceAdjust = 2.5 #params.get("TrafficStopDistanceAdjust")
+    self.trafficStopDistanceAdjust = 2.5 #params.get("SignalStopDistanceOffsetM")
     self.comfortBrake = 2.4
     self.comfort_brake = self.comfortBrake
     self.a_change_cost2 = 50
@@ -124,7 +124,7 @@ class CarrotPlanner:
 
     self.soft_hold_active = 0
     self.events = Events()
-    self.myDrivingMode = DrivingMode(self.params.get("MyDrivingMode"))
+    self.myDrivingMode = DrivingMode(self.params.get("DrivingProfile"))
     self.myDrivingMode_last = self.myDrivingMode
     self.myDrivingMode_disable_auto = False
     self.myEcoModeFactor = 0.9
@@ -156,8 +156,8 @@ class CarrotPlanner:
     self.aChangeCostStarting = 10.0
 
     self.trafficLightDetectMode = 2 # 0: None, 1:Stop, 2:Stop&Go
-    self.trafficState_carrot = 0
-    self.carrot_stay_stop = False
+    self.previous_navigation_signal = 0
+    self.navigation_hold_stop = False
 
     self.eco_over_speed = 2
     self.eco_target_speed = 0
@@ -171,7 +171,7 @@ class CarrotPlanner:
 
     self.j_lead_factor = 0.0
 
-    self.activeCarrot = 0
+    self.guidanceLevel = 0
     self.xDistToTurn = 0
     self.atcType = ""
     self.atc_active = False
@@ -191,12 +191,12 @@ class CarrotPlanner:
     self.frame += 1
     self.params_count += 1
     if self.params_count % 10 == 0:
-      myDrivingMode = DrivingMode(self.params.get("MyDrivingMode"))
+      myDrivingMode = DrivingMode(self.params.get("DrivingProfile"))
       if myDrivingMode != self.myDrivingMode_last:
         self.myDrivingMode_disable_auto = True
       self.myDrivingMode_last = myDrivingMode
       
-      self.myDrivingModeAuto = self.params.get("MyDrivingModeAuto")
+      self.myDrivingModeAuto = self.params.get("AdaptiveDrivingProfile")
       if self.myDrivingModeAuto > 0 and not self.myDrivingMode_disable_auto:
         self.myDrivingMode = self.drivingModeDetector.get_mode()
       else:
@@ -204,31 +204,31 @@ class CarrotPlanner:
 
     if self.params_count == 10:
       self.myHighModeFactor = 1.2 #self.params.get("MyHighModeFactor")
-      self.trafficLightDetectMode = self.params.get("TrafficLightDetectMode") # 0: None, 1:Stop, 2:Stop&Go
+      self.trafficLightDetectMode = self.params.get("TrafficSignalControlMode") # 0: None, 1:Stop, 2:Stop&Go
     elif self.params_count == 20:
-      self.tFollowGap1 = self.params.get("TFollowGap1")
-      self.tFollowGap2 = self.params.get("TFollowGap2")
-      self.tFollowGap3 = self.params.get("TFollowGap3")
-      self.tFollowGap4 = self.params.get("TFollowGap4")
+      self.tFollowGap1 = self.params.get("FollowingTimeGap1")
+      self.tFollowGap2 = self.params.get("FollowingTimeGap2")
+      self.tFollowGap3 = self.params.get("FollowingTimeGap3")
+      self.tFollowGap4 = self.params.get("FollowingTimeGap4")
       self.dynamicTFollow = self.params.get("DynamicTFollow")
       self.dynamicTFollowLC = self.params.get("DynamicTFollowLC")
-      self.enableSpeedTF = self.params.get("EnableSpeedTF")
+      self.enableSpeedTF = self.params.get("SpeedBasedFollowingGap")
     elif self.params_count == 30:
-      self.cruiseMaxVals0 = self.params.get("CruiseMaxVals0")
-      self.cruiseMaxVals1 = self.params.get("CruiseMaxVals1")
-      self.cruiseMaxVals2 = self.params.get("CruiseMaxVals2")
-      self.cruiseMaxVals3 = self.params.get("CruiseMaxVals3")
-      self.cruiseMaxVals4 = self.params.get("CruiseMaxVals4")
-      self.cruiseMaxVals5 = self.params.get("CruiseMaxVals5")
-      self.cruiseMaxVals6 = self.params.get("CruiseMaxVals6")
+      self.cruiseMaxVals0 = self.params.get("MaxAccelAt0Kph")
+      self.cruiseMaxVals1 = self.params.get("MaxAccelAt10Kph")
+      self.cruiseMaxVals2 = self.params.get("MaxAccelAt40Kph")
+      self.cruiseMaxVals3 = self.params.get("MaxAccelAt60Kph")
+      self.cruiseMaxVals4 = self.params.get("MaxAccelAt80Kph")
+      self.cruiseMaxVals5 = self.params.get("MaxAccelAt110Kph")
+      self.cruiseMaxVals6 = self.params.get("MaxAccelAt140Kph")
     elif self.params_count == 40:
-      self.stop_distance = self.params.get("StopDistanceCarrot")
-      self.j_lead_factor = self.params.get("JLeadFactor3")
-      self.eco_over_speed = self.params.get("CruiseEcoControl")
-      self.autoNaviSpeedDecelRate = self.params.get("AutoNaviSpeedDecelRate")
-      self.aChangeCostStarting = self.params.get("AChangeCostStarting")
-      self.trafficStopDistanceAdjust = self.params.get("TrafficStopDistanceAdjust")
-      self.a_change_cost2 = self.params.get("AChangeCost2")
+      self.stop_distance = self.params.get("KisaStandstillDistance")
+      self.j_lead_factor = self.params.get("LeadJerkWeight")
+      self.eco_over_speed = self.params.get("CruiseRecoverySpeedBoost")
+      self.autoNaviSpeedDecelRate = self.params.get("NavSpeedDecelMps2")
+      self.aChangeCostStarting = self.params.get("LaunchAccelChangeCost")
+      self.trafficStopDistanceAdjust = self.params.get("SignalStopDistanceOffsetM")
+      self.a_change_cost2 = self.params.get("LeadJerkAccelChangeCost")
       self.lead_danger_factor2 = self.params.get("LeadDangerFactor")
     elif self.params_count >= 100:
 
@@ -251,7 +251,7 @@ class CarrotPlanner:
       except (ValueError, TypeError):
         self._signal_snapshot = {}
     cs = sm['carState']
-    active = bool(sm.alive['carControl'] and sm.alive['radarState'] and sm.alive['carrotMan'] and
+    active = bool(sm.alive['carControl'] and sm.alive['radarState'] and sm.alive['kisaNavigation'] and
                   sm['carControl'].longActive and not sm['selfdriveState'].experimentalMode and
                   self.trafficLightDetectMode > 0)
     override = cs.gasPressed or cs.brakePressed or cs.leftBlinker or cs.rightBlinker or self.desireState > .1
@@ -267,10 +267,10 @@ class CarrotPlanner:
                      accel_cap=float(self.signal_follow.cruise_accel(1.0)))
     self._signal_was_active = is_active
 
-  def get_carrot_accel(self, v_ego):
+  def get_cruise_accel(self, v_ego):
     cruiseMaxVals = [self.cruiseMaxVals0, self.cruiseMaxVals1, self.cruiseMaxVals2, self.cruiseMaxVals3, self.cruiseMaxVals4, self.cruiseMaxVals5, self.cruiseMaxVals6]
     factor = self.myHighModeFactor if self.myDrivingMode == DrivingMode.High else self.mySafeFactor
-    return np.interp(v_ego, A_CRUISE_MAX_BP_CARROT, cruiseMaxVals) * factor
+    return np.interp(v_ego, CRUISE_ACCEL_SPEED_POINTS, cruiseMaxVals) * factor
 
   def _get_base_t_follow(self, personality, v_ego):
     if self.enableSpeedTF < 0:
@@ -469,22 +469,22 @@ class CarrotPlanner:
     else:
       self.trafficState = TrafficState.off
 
-  def _update_carrot_man(self, sm, v_ego_kph, v_cruise_kph):
+  def _update_navigation(self, sm, v_ego_kph, v_cruise_kph):
     atc_active = False
-    if sm.alive['carrotMan']:
-      carrot_man = sm['carrotMan']
-      atc_turn_left = carrot_man.atcType in ["turn left", "atc left"]
-      trigger_start = self.carrot_stay_stop = False
+    if sm.alive['kisaNavigation']:
+      navigation = sm['kisaNavigation']
+      atc_turn_left = navigation.atcType in ["turn left", "atc left"]
+      trigger_start = self.navigation_hold_stop = False
       if atc_turn_left or sm['carState'].leftBlinker:
-        if self.trafficState_carrot == 1 and carrot_man.trafficState == 3: # red -> left triggered
+        if self.previous_navigation_signal == 1 and navigation.trafficState == 3: # red -> left triggered
           trigger_start = True
-        elif carrot_man.trafficState in [1, 2]:
-          self.carrot_stay_stop = True
-      elif self.trafficState_carrot == 1 and carrot_man.trafficState == 2:  # red -> green triggered
+        elif navigation.trafficState in [1, 2]:
+          self.navigation_hold_stop = True
+      elif self.previous_navigation_signal == 1 and navigation.trafficState == 2:  # red -> green triggered
         trigger_start = True
       else:
         trigger_start = False
-      self.trafficState_carrot = carrot_man.trafficState
+      self.previous_navigation_signal = navigation.trafficState
 
       if trigger_start:
         if self.soft_hold_active > 0:
@@ -493,12 +493,12 @@ class CarrotPlanner:
           self.xState = XState.e2eCruise
           self.traffic_starting_count = 10.0 / DT_MDL
 
-      self.activeCarrot = carrot_man.activeCarrot
-      self.xDistToTurn = carrot_man.xDistToTurn
-      atc_active = self.activeCarrot > 1 and 0 < self.xDistToTurn < 100
-      self.atcType = carrot_man.atcType
+      self.guidanceLevel = navigation.guidanceLevel
+      self.xDistToTurn = navigation.xDistToTurn
+      atc_active = self.guidanceLevel > 1 and 0 < self.xDistToTurn < 100
+      self.atcType = navigation.atcType
 
-      v_cruise_kph = min(v_cruise_kph, carrot_man.desiredSpeed)
+      v_cruise_kph = min(v_cruise_kph, navigation.desiredSpeed)
 
     return v_cruise_kph, atc_active
 
@@ -564,7 +564,7 @@ class CarrotPlanner:
     self.drivingModeDetector.update_data(carstate, leadOne)
 
     v_cruise_kph = self.cruise_eco_control(v_ego_cluster_kph, v_cruise_kph)
-    v_cruise_kph, atc_active = self._update_carrot_man(sm, v_ego_kph, v_cruise_kph)
+    v_cruise_kph, atc_active = self._update_navigation(sm, v_ego_kph, v_cruise_kph)
     
     #if atc_active and not self.atc_active and self.xState not in [XState.e2eStop, XState.e2eStopped, XState.lead]:
     #  if self.atcType in ["turn left", "turn right", "atc left", "atc right"]:
@@ -619,7 +619,7 @@ class CarrotPlanner:
       elif lead_detected and (radarstate.leadOne.dRel - stop_model_x_raw) < 2.0:
         self.xState = XState.lead
       elif self.stopping_count == 0:
-        if self.trafficState == TrafficState.green and not self.carrot_stay_stop and not carstate.leftBlinker and self.trafficLightDetectMode != 1:
+        if self.trafficState == TrafficState.green and not self.navigation_hold_stop and not carstate.leftBlinker and self.trafficLightDetectMode != 1:
           #self.xState = XState.e2ePrepare
           self.xState = XState.e2eCruise  # 실험모드를 거치지 않고 바로 출발.
           self.add_event(EventName.trafficSignGreen)

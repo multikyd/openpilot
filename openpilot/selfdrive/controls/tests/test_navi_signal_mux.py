@@ -1,5 +1,5 @@
 import unittest
-from openpilot.selfdrive.kisapilot.navi_transport import NaviSourceMux
+from openpilot.selfdrive.kisapilot.nav_transport import NaviSourceMux
 
 
 class TestNaviSignalMux(unittest.TestCase):

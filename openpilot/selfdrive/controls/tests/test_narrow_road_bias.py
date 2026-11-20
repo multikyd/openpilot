@@ -129,7 +129,7 @@ class TestNarrowPathIntegration(unittest.TestCase):
     import sys
     from unittest.mock import patch
     sys.path.insert(0,str(Path(__file__).parents[4]))
-    params=dict(CameraOffsetAdj=.01,LaneCenterOffset=-.05,LeftEdgeOffset=0.,RightEdgeOffset=0.,AdjustLaneOffset=0.)
+    params=dict(CameraLateralOffsetM=.01,LaneCenterOffset=-.05,LeftEdgeOffset=0.,RightEdgeOffset=0.,AdjustLaneOffset=0.)
     dependencies={
       'openpilot.cereal':NS(log=NS(Desire=NS(laneChangeLeft=3,laneChangeRight=4))),
       'openpilot.common.realtime':NS(DT_MDL=.05),
@@ -164,7 +164,7 @@ class TestNarrowPathIntegration(unittest.TestCase):
       np.testing.assert_allclose(delta,np.full(33,delta[0]))
       before,after=step(md(3.6,3.2,.8))
       np.testing.assert_allclose(before,after)
-    self.assertEqual(params['CameraOffsetAdj'],.01)
+    self.assertEqual(params['CameraLateralOffsetM'],.01)
     self.assertEqual(params['LaneCenterOffset'],-.05)
 
 

@@ -103,7 +103,7 @@ class TestLaneReleaseAndDiagnostics(unittest.TestCase):
   def test_lane_loss_eases_then_fully_releases_to_model(self):
     import sys
     from unittest.mock import patch
-    params=dict(CameraOffsetAdj=.01,LaneCenterOffset=0.,LeftEdgeOffset=0.,RightEdgeOffset=0.,AdjustLaneOffset=0.)
+    params=dict(CameraLateralOffsetM=.01,LaneCenterOffset=0.,LeftEdgeOffset=0.,RightEdgeOffset=0.,AdjustLaneOffset=0.)
     dependencies={'openpilot.cereal':NS(log=NS(Desire=NS(laneChangeLeft=3,laneChangeRight=4))),
                   'openpilot.common.realtime':NS(DT_MDL=.05),
                   'openpilot.common.params':NS(Params=lambda:NS(get=lambda k,**kw:params[k]))}
@@ -127,7 +127,7 @@ class TestLaneReleaseAndDiagnostics(unittest.TestCase):
     self.assertAlmostEqual(step(),-.06);self.assertEqual(p.lane_release_remaining,0.)
   def test_memory_source_is_logged_on_change_and_release_only(self):
     import textwrap
-    source=(ROOT.parent/'kisapilot/carrot_serv.py').read_text(encoding='utf8')
+    source=(ROOT.parent/'kisapilot/nav_guidance.py').read_text(encoding='utf8')
     start=source.index('    # Record source changes once per encounter')
     end=source.index('    # A secondary bump can drive passage',start)
     block=compile(textwrap.dedent(source[start:end]),'real_memory_diagnostics','exec')

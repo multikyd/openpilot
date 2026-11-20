@@ -5,7 +5,7 @@
       "ko": "HYUNDAI: 카메라 SCC",
       "en": "HYUNDAI: Camera SCC"
     },
-    "param": "HyundaiCameraSCC",
+    "param": "HyundaiCameraCruiseMode",
     "min_value": 0,
     "max_value": 3,
     "step": 1,
@@ -28,7 +28,7 @@
       "ko": "CANFD: HDA2 모드",
       "en": "CANFD: HDA2 Mode"
     },
-    "param": "CanfdHDA2",
+    "param": "CanfdHighwayAssistMode",
     "min_value": 0,
     "max_value": 2,
     "step": 1,
@@ -74,7 +74,7 @@
       "ko": "자동 크루즈 제어",
       "en": "Auto Cruise Control"
     },
-    "param": "AutoCruiseControl",
+    "param": "AutoCruiseResumeMode",
     "min_value": 0,
     "max_value": 2,
     "step": 1,
@@ -96,15 +96,15 @@
       "ko": "크루즈 자동 ON 거리(m)",
       "en": "Auto Cruise ON Distance(m)"
     },
-    "param": "CruiseOnDist",
+    "param": "AutoResumeLeadDistanceM",
     "min_value": 0,
     "max_value": 25,
     "step": 0.5,
     "decimal_places": 1,
     "value_type": "FLOAT",
     "description": {
-      "ko": "페달을 놓은 상태에서 크루즈 자동 재개를 판단하는 앞차 거리입니다(단위 m). 0은 거리 조건으로 재개하지 않습니다. AutoCruiseControl 및 차량 상태 조건을 만족해야 하며, 정차 목표 간격을 설정하는 항목은 아닙니다.",
-      "en": "Lead-distance threshold for automatic cruise re-engagement with pedals released, in metres. 0 disables this distance trigger. AutoCruiseControl and vehicle-state gates still apply. This is not the target standstill gap."
+      "ko": "페달을 놓은 상태에서 크루즈 자동 재개를 판단하는 앞차 거리입니다(단위 m). 0은 거리 조건으로 재개하지 않습니다. AutoCruiseResumeMode 및 차량 상태 조건을 만족해야 하며, 정차 목표 간격을 설정하는 항목은 아닙니다.",
+      "en": "Lead-distance threshold for automatic cruise re-engagement with pedals released, in metres. 0 disables this distance trigger. AutoCruiseResumeMode and vehicle-state gates still apply. This is not the target standstill gap."
     }
   },
   {
@@ -113,7 +113,7 @@
       "ko": "자동 인게이지",
       "en": "Auto Engage on Start"
     },
-    "param": "AutoEngage",
+    "param": "StartupEngagementMode",
     "min_value": 0,
     "max_value": 2,
     "step": 1,
@@ -135,7 +135,7 @@
       "ko": "자동 GasTok 활성화 속도",
       "en": "Auto GasTok Enable Speed"
     },
-    "param": "AutoGasTokSpeed",
+    "param": "PedalTapResumeThreshold",
     "min_value": 0,
     "max_value": 200,
     "step": 5,
@@ -143,7 +143,7 @@
     "value_type": "INT",
     "description": {
       "ko": "가속 페달을 짧게 밟았다 놓는 GasTok 및 페달 해제 자동 재개 조건에 사용하는 속도 기준입니다(단위 km/h). 값이 높을수록 저속에서 해당 재개 조건이 제한됩니다. AutoCruiseControl이 꺼져 있으면 자동 재개하지 않습니다.",
-      "en": "Speed threshold, in km/h, for GasTok (a short accelerator tap) and pedal-release re-engagement conditions. Higher values restrict these triggers at lower speeds. Automatic re-engagement requires AutoCruiseControl."
+      "en": "Speed threshold, in km/h, for GasTok (a short accelerator tap) and pedal-release re-engagement conditions. Higher values restrict these triggers at lower speeds. Automatic re-engagement requires AutoCruiseResumeMode."
     }
   },
   {
@@ -152,7 +152,7 @@
       "ko": "사운드 볼륨(기본 100%)",
       "en": "Sound Volume (100%)"
     },
-    "param": "SoundVolumeAdjust",
+    "param": "AlertVolumePct",
     "min_value": 5,
     "max_value": 200,
     "step": 5,
@@ -169,7 +169,7 @@
       "ko": "화면 밝기(%)",
       "en": "Brightness Ratio(%)"
     },
-    "param": "ShowCustomBrightness",
+    "param": "DisplayBrightnessPct",
     "min_value": 10,
     "max_value": 100,
     "step": 10,
@@ -186,7 +186,7 @@
       "ko": "HDP(CCNC) 사용",
       "en": "Use HDP (CCNC)"
     },
-    "param": "HDPuse",
+    "param": "StockHudAssistDisplayMode",
     "min_value": 0,
     "max_value": 2,
     "step": 1,
@@ -208,7 +208,7 @@
       "ko": "크루즈 속도 자동 동기화",
       "en": "Auto Sync Cruise Speed"
     },
-    "param": "AutoGasSyncSpeed",
+    "param": "SyncSetSpeedOnAccelerator",
     "value_type": "BOOL",
     "description": {
       "ko": "가속 페달을 일정 시간 이상 밟는 동안 현재 속도가 설정 속도를 넘으면 크루즈 설정 속도를 현재 속도에 맞춥니다. 주변 차량 속도를 따라 설정 속도를 계속 올리는 기능은 아닙니다.",
@@ -221,7 +221,7 @@
       "ko": "카메라 오프셋",
       "en": "Camera Offset"
     },
-    "param": "CameraOffsetAdj",
+    "param": "CameraLateralOffsetM",
     "min_value": -5,
     "max_value": 5,
     "step": 0.01,
@@ -261,7 +261,7 @@
       "ko": "Steer Ratio(Manual)",
       "en": "Steer Ratio(Manual)"
     },
-    "param": "CustomSR",
+    "param": "ManualSteeringRatio",
     "min_value": 0,
     "max_value": 30,
     "step": 0.05,
@@ -272,7 +272,7 @@
     },
     "description": {
       "ko": "수동 조향비입니다. 1보다 큰 값은 실시간 추정 조향비 대신 사용하며, 0~1은 실시간 추정값에 SteerRatioRate를 곱해 사용합니다. 조향 계산의 차량 모델에 반영되며 핸들 각도 자체를 고정하지 않습니다.",
-      "en": "Manual steering ratio. Values above 1 replace the live estimate; values from 0 to 1 use the live estimate multiplied by SteerRatioRate. Changes the steering vehicle model, not a fixed steering-wheel angle."
+      "en": "Manual steering ratio. Values above 1 replace the live estimate; values from 0 to 1 use the live estimate multiplied by LiveSteeringRatioPct. Changes the steering vehicle model, not a fixed steering-wheel angle."
     }
   },
   {
@@ -281,7 +281,7 @@
       "ko": "Live Steer Ratio 적용 비율(%)",
       "en": "Live Steer Ratio Apply Rate(%)"
     },
-    "param": "SteerRatioRate",
+    "param": "LiveSteeringRatioPct",
     "min_value": 30,
     "max_value": 170,
     "step": 1,
@@ -292,7 +292,7 @@
     },
     "description": {
       "ko": "실시간 추정 조향비에 곱하는 비율입니다(단위 %). 100은 추정값 그대로 사용합니다. CustomSR가 1보다 크면 수동 조향비가 우선하므로 이 비율은 적용되지 않습니다.",
-      "en": "Percentage multiplier of the live steering-ratio estimate. 100 uses the estimate unchanged. A CustomSR above 1 overrides the live ratio and this multiplier."
+      "en": "Percentage multiplier of the live steering-ratio estimate. 100 uses the estimate unchanged. A ManualSteeringRatio above 1 overrides the live ratio and this multiplier."
     }
   },
   {
@@ -321,7 +321,7 @@
       "ko": "Steer Actuator Delay",
       "en": "Steer Actuator Delay"
     },
-    "param": "SteerActuatorDelay",
+    "param": "SteeringDelaySec",
     "min_value": 0,
     "max_value": 1,
     "step": 0.05,
@@ -341,7 +341,7 @@
       "ko": "Lateral 스무딩 시간",
       "en": "Lateral Smoothing Time"
     },
-    "param": "LatSmoothSec",
+    "param": "LateralSmoothingSec",
     "min_value": -0.01,
     "max_value": 3,
     "step": 0.01,
@@ -361,7 +361,7 @@
       "ko": "Steer Max",
       "en": "Steer Max"
     },
-    "param": "CustomSteerMax",
+    "param": "SteeringTorqueLimit",
     "min_value": 0,
     "max_value": 1024,
     "step": 1,
@@ -381,7 +381,7 @@
       "ko": "Steer Delta Up",
       "en": "Steer Delta Up"
     },
-    "param": "CustomSteerDeltaUp",
+    "param": "SteeringTorqueRiseLimit",
     "min_value": 0,
     "max_value": 50,
     "step": 1,
@@ -401,7 +401,7 @@
       "ko": "Steer Delta Down",
       "en": "Steer Delta Down"
     },
-    "param": "CustomSteerDeltaDown",
+    "param": "SteeringTorqueFallLimit",
     "min_value": 0,
     "max_value": 50,
     "step": 1,
@@ -421,7 +421,7 @@
       "ko": "레이더 컷인 감도 계수",
       "en": "Radar Track Cut-in Factor"
     },
-    "param": "RadarLatFactor",
+    "param": "RadarCutInLateralFactor",
     "min_value": 0,
     "max_value": 10,
     "step": 0.1,
@@ -454,7 +454,7 @@
     },
     "description": {
       "ko": "지원 코너레이더 CAN 정보를 사용합니다. 0: 사용 안 함, 1: 객체 정보 수신, 2: 수신한 객체를 끼어들기 판단에도 사용. 끼어들기 예측에는 RadarLatFactor도 0보다 커야 합니다. 장착·배선·메시지 지원이 필요하며 수신 구성 변경 후 재시작해야 합니다.",
-      "en": "Uses supported corner-radar CAN data. 0 off; 1 receive objects; 2 also use objects for cut-in detection. Cut-in prediction additionally requires RadarLatFactor above zero. Requires compatible hardware, wiring and messages; restart after changing reception configuration."
+      "en": "Uses supported corner-radar CAN data. 0 off; 1 receive objects; 2 also use objects for cut-in detection. Cut-in prediction additionally requires RadarCutInLateralFactor above zero. Requires compatible hardware, wiring and messages; restart after changing reception configuration."
     }
   },
   {
@@ -497,7 +497,7 @@
       "ko": "Longitudinal P Gain",
       "en": "Longitudinal P Gain"
     },
-    "param": "LongTuningKpV",
+    "param": "LongitudinalSpeedKp",
     "min_value": 0,
     "max_value": 1.5,
     "step": 0.05,
@@ -514,7 +514,7 @@
       "ko": "Longitudinal I Gain",
       "en": "Longitudinal I Gain"
     },
-    "param": "LongTuningKiV",
+    "param": "LongitudinalSpeedKi",
     "min_value": 0,
     "max_value": 2,
     "step": 0.01,
@@ -534,7 +534,7 @@
       "ko": "Longitudinal Actuator Delay",
       "en": "Longitudinal Actuator Delay"
     },
-    "param": "LongActuatorDelay",
+    "param": "LongitudinalDelaySec",
     "min_value": 0,
     "max_value": 2,
     "step": 0.05,
@@ -551,7 +551,7 @@
       "ko": "모델 정지 판정 속도(m/s)",
       "en": "Model Stop Threshold (m/s)"
     },
-    "param": "VEgoStopping",
+    "param": "ModelStopThresholdMps",
     "min_value": 0.01,
     "max_value": 1,
     "step": 0.05,
@@ -588,7 +588,7 @@
       "ko": "정지 상태 감속 목표(m/s²)",
       "en": "Stopping-State Target (m/s²)"
     },
-    "param": "StoppingAccel",
+    "param": "StoppingStateAccelMps2",
     "min_value": -1,
     "max_value": 0,
     "step": 0.05,
@@ -608,7 +608,7 @@
       "ko": "정지 거리(m)",
       "en": "Stop Distance(m)"
     },
-    "param": "StopDistanceCarrot",
+    "param": "KisaStandstillDistance",
     "min_value": 0.3,
     "max_value": 10,
     "step": 0.1,
@@ -625,7 +625,7 @@
       "ko": "선행 차량 저크 계수",
       "en": "Lead Vehicle Jerk Factor"
     },
-    "param": "JLeadFactor3",
+    "param": "LeadJerkWeight",
     "min_value": 0,
     "max_value": 1,
     "step": 0.05,
@@ -645,7 +645,7 @@
       "ko": "앞차 저크별 가속 변화 비용",
       "en": "Lead-Jerk Acceleration Change Cost"
     },
-    "param": "AChangeCost2",
+    "param": "LeadJerkAccelChangeCost",
     "min_value": 10,
     "max_value": 500,
     "step": 5,
@@ -679,7 +679,7 @@
       "ko": "가속 상한 기준점 0km/h",
       "en": "Acceleration Limit at 0 km/h"
     },
-    "param": "CruiseMaxVals0",
+    "param": "MaxAccelAt0Kph",
     "min_value": 0,
     "max_value": 2.5,
     "step": 0.05,
@@ -696,7 +696,7 @@
       "ko": "가속 상한 기준점 10km/h",
       "en": "Acceleration Limit at 10 km/h"
     },
-    "param": "CruiseMaxVals1",
+    "param": "MaxAccelAt10Kph",
     "min_value": 0,
     "max_value": 2.5,
     "step": 0.05,
@@ -713,7 +713,7 @@
       "ko": "가속 상한 기준점 40km/h",
       "en": "Acceleration Limit at 40 km/h"
     },
-    "param": "CruiseMaxVals2",
+    "param": "MaxAccelAt40Kph",
     "min_value": 0,
     "max_value": 2.5,
     "step": 0.05,
@@ -730,7 +730,7 @@
       "ko": "가속 상한 기준점 60km/h",
       "en": "Acceleration Limit at 60 km/h"
     },
-    "param": "CruiseMaxVals3",
+    "param": "MaxAccelAt60Kph",
     "min_value": 0,
     "max_value": 2.5,
     "step": 0.05,
@@ -747,7 +747,7 @@
       "ko": "가속 상한 기준점 80km/h",
       "en": "Acceleration Limit at 80 km/h"
     },
-    "param": "CruiseMaxVals4",
+    "param": "MaxAccelAt80Kph",
     "min_value": 0,
     "max_value": 2.5,
     "step": 0.05,
@@ -764,7 +764,7 @@
       "ko": "가속 상한 기준점 110km/h",
       "en": "Acceleration Limit at 110 km/h"
     },
-    "param": "CruiseMaxVals5",
+    "param": "MaxAccelAt110Kph",
     "min_value": 0,
     "max_value": 2.5,
     "step": 0.05,
@@ -781,7 +781,7 @@
       "ko": "가속 상한 기준점 140km/h",
       "en": "Acceleration Limit at 140 km/h"
     },
-    "param": "CruiseMaxVals6",
+    "param": "MaxAccelAt140Kph",
     "min_value": 0,
     "max_value": 2.5,
     "step": 0.05,
@@ -862,7 +862,7 @@
       "ko": "크루즈 속도 단위(기본)",
       "en": "Cruise Speed Unit (Basic)"
     },
-    "param": "CruiseSpeedUnitBasic",
+    "param": "CruiseButtonBasicStep",
     "min_value": 1,
     "max_value": 20,
     "step": 1,
@@ -870,7 +870,7 @@
     "value_type": "INT",
     "description": {
       "ko": "크루즈 속도 버튼의 기본 증감 폭입니다. 미터법에서는 km/h 단위이며, 비미터법에서는 버튼 계산에서 mph에 맞춰 환산합니다. 길게 누름·확장 동작은 CruiseSpeedUnit과 버튼 모드도 함께 사용합니다.",
-      "en": "Basic cruise-speed button increment. In metric mode the unit is km/h; nonmetric button calculations convert for mph. Long-press/extended behavior also uses CruiseSpeedUnit and the button mode."
+      "en": "Basic cruise-speed button increment. In metric mode the unit is km/h; nonmetric button calculations convert for mph. Long-press/extended behavior also uses CruiseButtonExtendedStep and the button mode."
     }
   },
   {
@@ -879,7 +879,7 @@
       "ko": "크루즈 속도 단위(확장)",
       "en": "Cruise Speed Unit (Extra)"
     },
-    "param": "CruiseSpeedUnit",
+    "param": "CruiseButtonExtendedStep",
     "min_value": 1,
     "max_value": 20,
     "step": 1,
@@ -896,7 +896,7 @@
       "ko": "에코 크루즈 보정",
       "en": "Cruise Eco Control"
     },
-    "param": "CruiseEcoControl",
+    "param": "CruiseRecoverySpeedBoost",
     "min_value": 0,
     "max_value": 10,
     "step": 1,
@@ -913,7 +913,7 @@
       "ko": "자동 속도 상승 비율",
       "en": "Auto Speed Increase Ratio"
     },
-    "param": "AutoSpeedUptoRoadSpeedLimit",
+    "param": "LeadSpeedIncreaseLimitPct",
     "min_value": 0,
     "max_value": 200,
     "step": 10,
@@ -930,7 +930,7 @@
       "ko": "차간 거리 GAP 1",
       "en": "Following Gap 1"
     },
-    "param": "TFollowGap1",
+    "param": "FollowingTimeGap1",
     "min_value": 0.7,
     "max_value": 3,
     "step": 0.05,
@@ -947,7 +947,7 @@
       "ko": "차간 거리 GAP 2",
       "en": "Following Gap 2"
     },
-    "param": "TFollowGap2",
+    "param": "FollowingTimeGap2",
     "min_value": 0.7,
     "max_value": 3,
     "step": 0.05,
@@ -964,7 +964,7 @@
       "ko": "차간 거리 GAP 3",
       "en": "Following Gap 3"
     },
-    "param": "TFollowGap3",
+    "param": "FollowingTimeGap3",
     "min_value": 0.7,
     "max_value": 3,
     "step": 0.05,
@@ -981,7 +981,7 @@
       "ko": "차간 거리 GAP 4",
       "en": "Following Gap 4"
     },
-    "param": "TFollowGap4",
+    "param": "FollowingTimeGap4",
     "min_value": 0.7,
     "max_value": 3,
     "step": 0.05,
@@ -998,7 +998,7 @@
       "ko": "속도별 차간거리 설정",
       "en": "Speed Based TFollow"
     },
-    "param": "EnableSpeedTF",
+    "param": "SpeedBasedFollowingGap",
     "min_value": -3,
     "max_value": 50,
     "step": 1,
@@ -1058,7 +1058,7 @@
       "ko": "주행 모드 선택",
       "en": "Driving Mode Select"
     },
-    "param": "MyDrivingMode",
+    "param": "DrivingProfile",
     "min_value": 1,
     "max_value": 4,
     "step": 1,
@@ -1081,7 +1081,7 @@
       "ko": "주행 모드 자동 전환",
       "en": "Driving Mode Auto"
     },
-    "param": "MyDrivingModeAuto",
+    "param": "AdaptiveDrivingProfile",
     "min_value": 0,
     "max_value": 1,
     "step": 1,
@@ -1098,7 +1098,7 @@
       "ko": "신호등 인식 모드",
       "en": "Traffic Light Detection Mode"
     },
-    "param": "TrafficLightDetectMode",
+    "param": "TrafficSignalControlMode",
     "min_value": 0,
     "max_value": 2,
     "step": 1,
@@ -1120,7 +1120,7 @@
       "ko": "신호 정지 거리 보정(m)",
       "en": "Traffic Stop Distance Adjust(m)"
     },
-    "param": "TrafficStopDistanceAdjust",
+    "param": "SignalStopDistanceOffsetM",
     "min_value": -10,
     "max_value": 10,
     "step": 0.1,
@@ -1137,7 +1137,7 @@
       "ko": "차선 인식 모드 적용 속도",
       "en": "Lane Line Mode Speed"
     },
-    "param": "UseLaneLineSpeed",
+    "param": "LaneModeMinSpeedKph",
     "min_value": 0,
     "max_value": 200,
     "step": 2,
@@ -1154,7 +1154,7 @@
       "ko": "예측 커브 속도별 레인모드 기준",
       "en": "Lane-Mode Predicted Curve-Speed Threshold"
     },
-    "param": "UseLaneLineCurveSpeed",
+    "param": "LaneModeCurveThresholdKph",
     "min_value": 0,
     "max_value": 200,
     "step": 5,
@@ -1171,7 +1171,7 @@
       "ko": "차선 변경 토크 요구 방식",
       "en": "Lane Change Torque Requirement"
     },
-    "param": "LaneChangeNeedTorque",
+    "param": "LaneChangeRequiresTorque",
     "min_value": -1,
     "max_value": 1,
     "step": 1,
@@ -1193,7 +1193,7 @@
       "ko": "차선 변경 대기 시간",
       "en": "Lane Change Delay"
     },
-    "param": "LaneChangeDelay",
+    "param": "LaneChangeDelaySec",
     "min_value": 0,
     "max_value": 10,
     "step": 0.5,
@@ -1213,7 +1213,7 @@
       "ko": "BSD 기반 차선 변경 제한",
       "en": "BSD Lane Change Control"
     },
-    "param": "LaneChangeBsd",
+    "param": "LaneChangeBlindspotPolicy",
     "min_value": -1,
     "max_value": 1,
     "step": 1,
@@ -1235,7 +1235,7 @@
       "ko": "곡선 감속 최소 속도",
       "en": "Curve Speed Lower Limit"
     },
-    "param": "AutoCurveSpeedLowerLimit",
+    "param": "CurveSpeedFloorKph",
     "min_value": 30,
     "max_value": 200,
     "step": 5,
@@ -1252,7 +1252,7 @@
       "ko": "곡선 자동 감속 비율",
       "en": "Auto Curve Control Ratio"
     },
-    "param": "AutoCurveSpeedFactor",
+    "param": "VisionCurveSensitivityPct",
     "min_value": 50,
     "max_value": 300,
     "step": 1,
@@ -1269,7 +1269,7 @@
       "ko": "도로 제한 속도 오프셋",
       "en": "Road Speed Limit Offset"
     },
-    "param": "AutoRoadSpeedLimitOffset",
+    "param": "RoadLimitOffsetKph",
     "min_value": -1,
     "max_value": 100,
     "step": 1,
@@ -1289,7 +1289,7 @@
       "ko": "도로 제한 속도 자동 보정 비율",
       "en": "Auto Road Speed Adjust Ratio"
     },
-    "param": "AutoRoadSpeedAdjust",
+    "param": "SpeedLimitSetpointPolicy",
     "min_value": -1,
     "max_value": 100,
     "step": 1,
@@ -1312,7 +1312,7 @@
       "ko": "과속 카메라 감속 완료 시점",
       "en": "Speed Camera Decel End"
     },
-    "param": "AutoNaviSpeedCtrlEnd",
+    "param": "EnforcementArrivalMarginSec",
     "min_value": 3,
     "max_value": 20,
     "step": 1,
@@ -1329,7 +1329,7 @@
       "ko": "내비 기반 감속 제어 모드",
       "en": "Navigation Speed Control Mode"
     },
-    "param": "AutoNaviSpeedCtrlMode",
+    "param": "NavSpeedControlScope",
     "min_value": 0,
     "max_value": 3,
     "step": 1,
@@ -1352,7 +1352,7 @@
       "ko": "과속 카메라 감속률",
       "en": "Speed Camera Decel Rate"
     },
-    "param": "AutoNaviSpeedDecelRate",
+    "param": "NavSpeedDecelMps2",
     "min_value": 0.1,
     "max_value": 20,
     "step": 0.1,
@@ -1369,7 +1369,7 @@
       "ko": "과속 카메라 안전 계수",
       "en": "Speed Camera Safety Factor"
     },
-    "param": "AutoNaviSpeedSafetyFactor",
+    "param": "EnforcementTargetPct",
     "min_value": 80,
     "max_value": 120,
     "step": 1,
@@ -1386,7 +1386,7 @@
       "ko": "방지턱 접근 시간 거리",
       "en": "Speed Bump Time Distance"
     },
-    "param": "AutoNaviSpeedBumpTime",
+    "param": "BumpArrivalMarginSec",
     "min_value": 1,
     "max_value": 50,
     "step": 1,
@@ -1403,7 +1403,7 @@
       "ko": "방지턱 통과 속도",
       "en": "Speed Bump Speed"
     },
-    "param": "AutoNaviSpeedBumpSpeed",
+    "param": "BumpTargetKph",
     "min_value": 10,
     "max_value": 100,
     "step": 5,
@@ -1433,7 +1433,7 @@
       "ko": "학습 방지턱 접근 알림음",
       "en": "Learned Bump Sound"
     },
-    "param": "BumpLearningSound",
+    "param": "LearnedBumpAudioEnabled",
     "value_type": "BOOL",
     "description": {
       "ko": "학습된 위치에 접근할 때 알림음을 허용합니다. 학습 기록 저장·목표 속도 조절을 켜고 끄는 설정은 아니며 BumpLearningEnabled와 별도로 소리만 제어합니다.",
@@ -1446,7 +1446,7 @@
       "ko": "방지턱 학습 최대 증속",
       "en": "Bump Maximum Speed Increase"
     },
-    "param": "BumpLearningRaise",
+    "param": "BumpLearningMaxIncreaseKph",
     "value_type": "INT",
     "min_value": 0,
     "max_value": 10,
@@ -1463,7 +1463,7 @@
       "ko": "내비 카운트다운 안내 범위",
       "en": "Navigation Countdown Scope"
     },
-    "param": "AutoNaviCountDownMode",
+    "param": "NavCountdownScope",
     "min_value": 0,
     "max_value": 2,
     "step": 1,
@@ -1508,7 +1508,7 @@
       "ko": "지도 회전 속도 계수",
       "en": "Map Turn Speed Factor"
     },
-    "param": "MapTurnSpeedFactor",
+    "param": "MapCurveTargetPct",
     "min_value": 50,
     "max_value": 300,
     "step": 5,
@@ -1525,7 +1525,7 @@
       "ko": "모델 회전 속도 예측 시간(초)",
       "en": "Model Turn-Speed Look-ahead (s)"
     },
-    "param": "ModelTurnSpeedFactor",
+    "param": "VisionTurnLookaheadSec",
     "min_value": 0,
     "max_value": 8,
     "step": 0.1,
@@ -1542,7 +1542,7 @@
       "ko": "TBT 자동 방향지시등 (실험)",
       "en": "TBT Auto Turn Signals (Experimental)"
     },
-    "param": "TbtBlinkerExperiment",
+    "param": "NavTurnSignalExperiment",
     "value_type": "BOOL",
     "description": {
       "ko": "아이오닉 5 PE에서 내비 TBT 좌·우회전 정보로 SPAS 방향지시등 자동 점등을 시험합니다. 차선변경·추월 자동 조향 설정과는 별도입니다. 처음 활성화한 뒤 C4를 재시작해야 차량 송신 구성이 반영되며, 끄기는 실행 중에도 반영됩니다.",
@@ -1581,7 +1581,7 @@
       "ko": "자동 회전 제어 모드",
       "en": "Auto Turn Control Mode"
     },
-    "param": "AutoTurnControl",
+    "param": "NavTurnAssistMode",
     "min_value": 0,
     "max_value": 3,
     "step": 1,
@@ -1604,7 +1604,7 @@
       "ko": "자동 회전 목표 속도",
       "en": "Auto Turn Speed"
     },
-    "param": "AutoTurnControlSpeedTurn",
+    "param": "NavTurnTargetKph",
     "min_value": 0,
     "max_value": 100,
     "step": 5,
@@ -1612,7 +1612,7 @@
     "value_type": "INT",
     "description": {
       "ko": "TBT 좌·우회전의 기본 목표 속도입니다(단위 km/h). 유효한 회전 진행각이 약 45도 이상이고 커브 조건이 허용하면 해당 회전의 TBT 속도 제한을 최대 9km/h까지 점진 완화합니다. 원래 설정 속도·다음 회전·앞차·신호·단속 등 다른 제한은 유지합니다. AutoTurnControl의 속도 제어 모드에서 사용합니다.",
-      "en": "Base TBT left/right-turn target speed in km/h. After about 45 degrees of estimated heading change, eligible curve conditions allow progressive relaxation of this turn cap by up to 9 km/h. The original set speed, next turn, leads, signals and enforcement constraints remain. Used in AutoTurnControl speed-control modes."
+      "en": "Base TBT left/right-turn target speed in km/h. After about 45 degrees of estimated heading change, eligible curve conditions allow progressive relaxation of this turn cap by up to 9 km/h. The original set speed, next turn, leads, signals and enforcement constraints remain. Used in NavTurnAssistMode speed-control modes."
     }
   },
   {
@@ -1621,7 +1621,7 @@
       "ko": "TBT 목표속도 도달 여유(초)",
       "en": "TBT Target-Speed Allowance (s)"
     },
-    "param": "AutoTurnControlTurnEnd",
+    "param": "NavTurnArrivalMarginSec",
     "min_value": 0,
     "max_value": 30,
     "step": 1,
@@ -1638,7 +1638,7 @@
       "ko": "자동 지도 전환",
       "en": "Auto Map Change"
     },
-    "param": "AutoTurnMapChange",
+    "param": "NavTurnMapDisplay",
     "min_value": 0,
     "max_value": 1,
     "step": 1,

@@ -16,14 +16,14 @@ from openpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPl
 from openpilot.selfdrive.controls.lib.lateral_planner import LateralPlanner
 import openpilot.cereal.messaging as messaging
 
-from openpilot.selfdrive.kisapilot.carrot_functions import CarrotPlanner
+from openpilot.selfdrive.kisapilot.driving_policy import KisaLongitudinalPolicy
 
 
 def log_highway_overtake_candidate(sm, last_logged):
   """Observe opportunities without issuing a lane-change or signal request."""
   now = sm.logMonoTime['modelV2'] * 1e-9
-  services = ('carState', 'carControl', 'carrotMan', 'radarState')
-  if (now - last_logged < 1. or not sm['carrotMan'].naviHighway or
+  services = ('carState', 'carControl', 'kisaNavigation', 'radarState')
+  if (now - last_logged < 1. or not sm['kisaNavigation'].naviHighway or
       not sm.all_checks(services) or
       any(abs(now - sm.logMonoTime[s] * 1e-9) > .3 for s in services)):
     return last_logged
@@ -52,9 +52,9 @@ def log_highway_overtake_candidate(sm, last_logged):
 def observe_overtake_plan(sm, plan, last_logged):
   """Evaluate prerequisites only; this function cannot request any actuation."""
   now = sm.logMonoTime['modelV2']*1e-9
-  cs, cc, nav = sm['carState'], sm['carControl'], sm['carrotMan']
+  cs, cc, nav = sm['carState'], sm['carControl'], sm['kisaNavigation']
   md, lead = sm['modelV2'], sm['radarState'].leadOne
-  services = ('carState','carControl','carrotMan','radarState','modelV2')
+  services = ('carState','carControl','kisaNavigation','radarState','modelV2')
   fresh = sm.all_checks(services) and all(0. <= now-sm.logMonoTime[k]*1e-9 <= .3 for k in services)
   near_route = nav.xTurnInfo >= 0 and 0. <= nav.xDistToTurn <= max(500.,20.*cs.vEgo)
   override = (cs.gasPressed or cs.brakePressed or cs.steeringPressed or
@@ -130,8 +130,8 @@ def observe_overtake_plan(sm, plan, last_logged):
 
 def update_overtake_signal_test(sm, test, enabled, supported, candidate):
   now = sm.logMonoTime['modelV2']*1e-9
-  cs, cc, nav = sm['carState'], sm['carControl'], sm['carrotMan']
-  services = ('carState', 'carControl', 'carrotMan', 'radarState', 'modelV2')
+  cs, cc, nav = sm['carState'], sm['carControl'], sm['kisaNavigation']
+  services = ('carState', 'carControl', 'kisaNavigation', 'radarState', 'modelV2')
   fresh = sm.all_checks(services) and all(0. <= now-sm.logMonoTime[k]*1e-9 <= .3 for k in services)
   near_route = nav.xTurnInfo >= 0 and 0. <= nav.xDistToTurn <= max(500., 20.*cs.vEgo)
   eligible = (fresh and nav.naviHighway and not near_route and cs.canValid and
@@ -174,10 +174,10 @@ def main():
 
   pm = messaging.PubMaster(['longitudinalPlan', 'driverAssistance', 'lateralPlan'])
   sm = messaging.SubMaster(['carControl', 'carState', 'controlsState', 'vehicleParameters', 'radarState',
-                            'modelV2', 'selfdriveState', 'carrotMan', 'leadBrakeObservation'],
+                            'modelV2', 'selfdriveState', 'kisaNavigation', 'leadBrakeObservation'],
                            poll='modelV2', ignore_avg_freq=['radarState'],
                            ignore_alive=['leadBrakeObservation'], ignore_valid=['leadBrakeObservation'])
-  carrot = CarrotPlanner()
+  driving_policy = KisaLongitudinalPolicy()
   observe_overtake = CP.carFingerprint == 'HYUNDAI_IONIQ_5_PE' and CP.openpilotLongitudinalControl
   last_overtake_log = -1.
   overtake_plan = OvertakePlan()
@@ -190,12 +190,12 @@ def main():
   while True:
     sm.update()
     if sm.updated['modelV2']:
-      lateral_planner.update(sm, carrot)
+      lateral_planner.update(sm, driving_policy)
       lateral_planner.publish(sm, pm)
       if observe_overtake:
         last_overtake_log = log_highway_overtake_candidate(sm, last_overtake_log)
         last_overtake_plan_log = observe_overtake_plan(sm, overtake_plan, last_overtake_plan_log)
-      longitudinal_planner.update(sm, carrot, overtake_plan.decision() if observe_overtake else None)
+      longitudinal_planner.update(sm, driving_policy, overtake_plan.decision() if observe_overtake else None)
       signal_now = sm.logMonoTime['modelV2']*1e-9
       if signal_now-signal_test_param_time >= .5:
         signal_test_enabled = params.get_bool('OvertakeBlinkerSignalTest')
@@ -205,7 +205,7 @@ def main():
       signal_announce = update_overtake_signal_test(
         sm, signal_test, signal_test_enabled, signal_test_supported, overtake_plan.pass_advised)
       longitudinal_planner.overtake_announce |= signal_announce
-      longitudinal_planner.publish(sm, pm, carrot)
+      longitudinal_planner.publish(sm, pm, driving_policy)
 
       ldw.update(sm.frame, sm['modelV2'], sm['carState'], sm['carControl'])
       msg = messaging.new_message('driverAssistance')

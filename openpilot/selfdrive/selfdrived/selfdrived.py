@@ -94,7 +94,7 @@ class SelfdriveD:
     self.sm = messaging.SubMaster(['deviceState', 'pandaStates', 'peripheralState', 'modelV2', 'extrinsicsCalibration',
                                    'carOutput', 'driverMonitoringState', 'longitudinalPlan', 'deviceMotion', 'lateralDelay',
                                    'managerState', 'vehicleParameters', 'radarState', 'lateralTorqueParameters',
-                                   'controlsState', 'carControl', 'driverAssistance', 'alertDebug', 'userBookmark', 'carrotMan',
+                                   'controlsState', 'carControl', 'driverAssistance', 'alertDebug', 'userBookmark', 'kisaNavigation',
                                    'lateralManeuverPlan'] + \
                                    self.camera_packets + self.sensor_packets + self.gps_packets,
                                   ignore_alive=ignore, ignore_avg_freq=ignore,
@@ -148,7 +148,7 @@ class SelfdriveD:
     self.rx_checks_ok = False
     self.mismatch_counter_ok = False
 
-    self.lane_change_delay = self.params.get("LaneChangeDelay", return_default=True)
+    self.lane_change_delay = self.params.get("LaneChangeDelaySec", return_default=True)
 
     self.ignored_processes = set()
     if HARDWARE.get_device_type() == 'tici' and os.path.exists('/dev/nvme0'):
@@ -531,13 +531,13 @@ class SelfdriveD:
         direction in ("left", "right") and voice_id != self.last_blinker_voice_id):
       self.last_blinker_voice_id = voice_id
       self.events.add(EventName.tbtBlinkerLeft if direction == "left" else EventName.tbtBlinkerRight)
-    cm = self.sm['carrotMan']
+    cm = self.sm['kisaNavigation']
     sequence = cm.bumpSoundSequence
     changed = self.bump_sound_sequence is not None and sequence > self.bump_sound_sequence
     self.bump_sound_sequence = sequence
     if (changed and cm.bumpSoundEnabled and not 0 <= cm.leftSec <= 11 and
-        self.sm.valid['carrotMan'] and self.sm.alive['carrotMan'] and
-        0 <= now - self.sm.recv_time['carrotMan'] < 1):
+        self.sm.valid['kisaNavigation'] and self.sm.alive['kisaNavigation'] and
+        0 <= now - self.sm.recv_time['kisaNavigation'] < 1):
       self.events.add(EventName.bumpApproaching)
 
     active = (self.sm.valid['longitudinalPlan'] and self.sm.alive['longitudinalPlan'] and

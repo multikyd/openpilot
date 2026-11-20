@@ -83,7 +83,7 @@ def check_selfdrive_timeout_alert(sm):
 
 class Soundd:
   def __init__(self):
-    self.soundVolumeAdjust = float(Params().get("SoundVolumeAdjust"))/100.
+    self.soundVolumeAdjust = float(Params().get("AlertVolumePct"))/100.
     self.load_sounds()
 
     self.current_alert = AudibleAlert.none

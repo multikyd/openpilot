@@ -19,7 +19,7 @@ from opendbc.car.fw_versions import ObdCallback
 from opendbc.car.car_helpers import get_car, interfaces
 from opendbc.car.interfaces import CarInterfaceBase, RadarInterfaceBase
 from openpilot.selfdrive.pandad import can_capnp_to_list, can_list_to_can_capnp
-from openpilot.selfdrive.car.cruise import VCruiseCarrot
+from openpilot.selfdrive.car.cruise import KisaCruiseHelper
 
 REPLAY = "REPLAY" in os.environ
 
@@ -65,7 +65,7 @@ class Car:
 
   def __init__(self, CI=None, RI=None) -> None:
     self.can_sock = messaging.sub_sock('can', timeout=20)
-    self.sm = messaging.SubMaster(['pandaStates', 'carControl', 'onroadEvents', 'carrotMan', 'longitudinalPlan', 'radarState', 'modelV2'])
+    self.sm = messaging.SubMaster(['pandaStates', 'carControl', 'onroadEvents', 'kisaNavigation', 'longitudinalPlan', 'radarState', 'modelV2'])
     self.pm = messaging.PubMaster(['sendcan', 'carState', 'carParams', 'carOutput', 'radarTracks'])
 
     self.can_rcv_cum_timeout_counter = 0
@@ -149,7 +149,7 @@ class Car:
     self.params.put("CarParamsCache", cp_bytes)
     self.params.put("CarParamsPersistent", cp_bytes)
 
-    self.v_cruise_helper = VCruiseCarrot(self.CP) #VCruiseHelper(self.CP)
+    self.v_cruise_helper = KisaCruiseHelper(self.CP) #VCruiseHelper(self.CP)
 
     self.is_metric = self.params.get_bool("IsMetric")
     self.experimental_mode = self.params.get_bool("ExperimentalMode")
@@ -182,7 +182,7 @@ class Car:
     if can_rcv_valid and REPLAY:
       self.can_log_mono_time = messaging.log_from_bytes(can_strs[0]).logMonoTime
 
-    RD: structs.RadarDataT | None = self.RI.update_carrot(CS.vEgo, CS.aEgo, rcv_time, can_list)
+    RD: structs.RadarDataT | None = self.RI.update_with_ego_motion(CS.vEgo, CS.aEgo, rcv_time, can_list)
     #self.v_cruise_helper.update_v_cruise(CS, self.sm['carControl'].enabled, self.is_metric)
     self.v_cruise_helper.update_v_cruise(CS, self.sm, self.is_metric)
     if self.sm['carControl'].enabled and not self.CC_prev.enabled:
@@ -204,7 +204,7 @@ class Car:
     CS.activateCruise = self.v_cruise_helper._activate_cruise
     CS.latEnabled = self.v_cruise_helper._lat_enabled
     CS.useLaneLineSpeed = self.v_cruise_helper.useLaneLineSpeedApply
-    CS.carrotCruise = 1 if self.v_cruise_helper.carrot_cruise_active else 0
+    CS.kisaCruise = 1 if self.v_cruise_helper.kisa_cruise_active else 0
     CS.cruiseGap = self.v_cruise_helper.cruiseGap if self.sm['longitudinalPlan'].enableSpeedTF >= 0 else int(self.sm['longitudinalPlan'].personality + 1)
     CS.gasTok = self.v_cruise_helper.gas_tok
 

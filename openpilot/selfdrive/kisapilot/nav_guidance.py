@@ -84,14 +84,14 @@ nav_type_mapping = {
 }
 
 import collections
-class CarrotServ:
+class GuidanceProcessor:
   def __init__(self):
     self.params = Params()
     self.tbt_blinker = TbtBlinker()
     self.tbt_blinker_stamp = 0.
     self.signal_params = Params('/dev/shm/params')
-    self.signal_memory = SignalMemory(self.params.get('SignalLearningData'), learn=not PC and 'REPLAY' not in os.environ)
-    self.manual_stop_lines = ManualStopLineMemory(self.params.get("ManualStopLineData"))
+    self.signal_memory = SignalMemory(self.params.get('LearnedSignalCycles'), learn=not PC and 'REPLAY' not in os.environ)
+    self.manual_stop_lines = ManualStopLineMemory(self.params.get("SavedStopLines"))
     self.manual_bookmark_time = None
     self.manual_target_active = False
     self.signal_display = blank_signal()
@@ -99,7 +99,7 @@ class CarrotServ:
     self.signal_vision = {}
     self.signal_lane_points = []
     self.sharp_turn_speed_active = False
-    self.bump_memory = BumpMemory(self.params.get("BumpLearningData"))
+    self.bump_memory = BumpMemory(self.params.get("LearnedBumpLocations"))
     self.bump_display = None
     self.bump_passage = BumpPassage()
     self.bump_save_time = 0.0
@@ -109,7 +109,7 @@ class CarrotServ:
     self.nRoadLimitSpeed_last = 30
     self.nRoadLimitSpeed_counter = 0
 
-    self.active_carrot = 0     ## 1: CarrotMan Active, 2: sdi active , 3: speed decel active, 4: section active, 5: bump active, 6: speed limit active
+    self.guidance_level = 0     ## 1: NavigationService Active, 2: sdi active , 3: speed decel active, 4: section active, 5: bump active, 6: speed limit active
     self.active_count = 0
     self.active_sdi_count = 0
     self.active_sdi_count_max = 200 # 20 sec
@@ -192,11 +192,11 @@ class CarrotServ:
     self.navType, self.navModifier = "invalid", ""
     self.navTypeNext, self.navModifierNext = "invalid", ""
 
-    self.carrotIndex = 0
-    self.carrotCmdIndex = 0
-    self.carrotCmd = ""
-    self.carrotArg = ""
-    self.carrotCmdIndex_last = 0
+    self.guidance_update_index = 0
+    self.command_index = 0
+    self.command_name = ""
+    self.command_argument = ""
+    self.last_command_index = 0
 
     self.traffic_light_q = collections.deque(maxlen=int(2.0/0.1))  # 2 secnods
     self.traffic_light_count = -1
@@ -206,7 +206,7 @@ class CarrotServ:
     self.left_tbt_sec = 0
     self.left_sec = 100
     self.max_left_sec = 100
-    self.carrot_left_sec = 100
+    self.distance_countdown_seconds = 100
     self.sdi_inform = False
 
 
@@ -229,26 +229,26 @@ class CarrotServ:
     self.update_params()
 
   def update_params(self):
-    self.autoNaviSpeedBumpSpeed = float(self.params.get("AutoNaviSpeedBumpSpeed"))
-    self.autoNaviSpeedBumpTime = float(self.params.get("AutoNaviSpeedBumpTime"))
-    self.bump_response_time = min(1.5, max(.8, float(self.params.get("LongActuatorDelay")) + .5))
-    self.autoNaviSpeedCtrlEnd = float(self.params.get("AutoNaviSpeedCtrlEnd"))
-    self.autoNaviSpeedCtrlMode = self.params.get("AutoNaviSpeedCtrlMode")
-    self.autoNaviSpeedSafetyFactor = float(self.params.get("AutoNaviSpeedSafetyFactor")) * 0.01
-    self.autoNaviSpeedDecelRate = self.params.get("AutoNaviSpeedDecelRate")
-    self.autoNaviCountDownMode = self.params.get("AutoNaviCountDownMode")
+    self.autoNaviSpeedBumpSpeed = float(self.params.get("BumpTargetKph"))
+    self.autoNaviSpeedBumpTime = float(self.params.get("BumpArrivalMarginSec"))
+    self.bump_response_time = min(1.5, max(.8, float(self.params.get("LongitudinalDelaySec")) + .5))
+    self.autoNaviSpeedCtrlEnd = float(self.params.get("EnforcementArrivalMarginSec"))
+    self.autoNaviSpeedCtrlMode = self.params.get("NavSpeedControlScope")
+    self.autoNaviSpeedSafetyFactor = float(self.params.get("EnforcementTargetPct")) * 0.01
+    self.autoNaviSpeedDecelRate = self.params.get("NavSpeedDecelMps2")
+    self.autoNaviCountDownMode = self.params.get("NavCountdownScope")
     self.turnSpeedControlMode= self.params.get("TurnSpeedControlMode")
-    self.mapTurnSpeedFactor= self.params.get("MapTurnSpeedFactor") * 0.01
+    self.mapTurnSpeedFactor= self.params.get("MapCurveTargetPct") * 0.01
 
-    self.autoTurnControlSpeedTurn = self.params.get("AutoTurnControlSpeedTurn")
-    self.autoTurnMapChange = self.params.get("AutoTurnMapChange")
-    self.autoTurnControl = self.params.get("AutoTurnControl")
-    self.autoTurnControlTurnEnd = self.params.get("AutoTurnControlTurnEnd")
-    #self.autoNaviSpeedDecelRate = self.params.get("AutoNaviSpeedDecelRate")
-    self.autoCurveSpeedLowerLimit = int(self.params.get("AutoCurveSpeedLowerLimit"))
+    self.autoTurnControlSpeedTurn = self.params.get("NavTurnTargetKph")
+    self.autoTurnMapChange = self.params.get("NavTurnMapDisplay")
+    self.autoTurnControl = self.params.get("NavTurnAssistMode")
+    self.autoTurnControlTurnEnd = self.params.get("NavTurnArrivalMarginSec")
+    #self.autoNaviSpeedDecelRate = self.params.get("NavSpeedDecelMps2")
+    self.autoCurveSpeedLowerLimit = int(self.params.get("CurveSpeedFloorKph"))
     self.is_metric = self.params.get_bool("IsMetric")
-    self.autoRoadSpeedLimitOffset = self.params.get("AutoRoadSpeedLimitOffset")
-    self.autoGasSync = self.params.get_bool("AutoGasSyncSpeed")
+    self.autoRoadSpeedLimitOffset = self.params.get("RoadLimitOffsetKph")
+    self.autoGasSync = self.params.get_bool("SyncSetSpeedOnAccelerator")
 
     try:
       lang_val = self.params.get('LanguageSetting') or self.params.get('lang')
@@ -268,15 +268,15 @@ class CarrotServ:
 
 
   def _update_cmd(self):
-    if self.carrotCmdIndex != self.carrotCmdIndex_last:
-      self.carrotCmdIndex_last = self.carrotCmdIndex
+    if self.command_index != self.last_command_index:
+      self.last_command_index = self.command_index
       command_handlers = {
         "DETECT": self._handle_detect_command,
       }
 
-      handler = command_handlers.get(self.carrotCmd)
+      handler = command_handlers.get(self.command_name)
       if handler:
-        handler(self.carrotArg)
+        handler(self.command_argument)
 
     self.traffic_light_q.append((-1, -1, "none", 0.0))
     self.traffic_light_count -= 1
@@ -712,7 +712,7 @@ class CarrotServ:
   def _live_plus_bump(self, now, v_ego):
     # The secondary navigation notice must be independent of the main camera.
     age = now - self.last_update_gps_time_navi
-    if (self.active_carrot <= 1 or self.nSdiPlusType != 22 or not 0 <= age <= 3. or
+    if (self.guidance_level <= 1 or self.nSdiPlusType != 22 or not 0 <= age <= 3. or
         not math.isfinite(v_ego) or not math.isfinite(self.nSdiPlusDist) or self.nSdiPlusDist <= 0 or
         not math.isfinite(self.autoNaviSpeedBumpSpeed) or self.autoNaviSpeedBumpSpeed <= 0):
       return None
@@ -785,11 +785,11 @@ class CarrotServ:
 
     external_gps_update_timedout = not (gps_updated_phone or gps_updated_navi)
     #print(f"gps_valid = {self.gps_valid}, bearing = {bearing:.1f}, pos = {location.positionGeodetic.value[0]:.6f}, {location.positionGeodetic.value[1]:.6f}")
-    if self.gps_valid and external_gps_update_timedout:    # 내부GPS가 작동하고 carrotman으로부터 gps신호가 없는경우
+    if self.gps_valid and external_gps_update_timedout:    # 내부GPS가 작동하고 내비 서비스에서 gps신호가 없는경우
       self.vpPosPointLatNavi = gps.latitude
       self.vpPosPointLonNavi = gps.longitude
       self.last_calculate_gps_time = now #sm.recv_time[llk]
-    elif gps_updated_navi:  # carrot navi로부터 gps신호가 수신되는 경우..
+    elif gps_updated_navi:  # 내비 앱에서 gps신호가 수신되는 경우..
       if abs(self.bearing_measured - bearing) < 0.1:
           self.diff_angle_count += 1
       else:
@@ -900,13 +900,13 @@ class CarrotServ:
       #print(f"x_dist_to_turn: {x_dist_to_turn}, atc_start_dist: {atc_start_dist}")
       #print(f"atc_activate_count: {self.atc_activate_count}")
       if self.atc_activate_count == 2:
-        self.carrotCmdIndex += 100
-        self.carrotCmd = "DISPLAY";
-        self.carrotArg = "MAP";
+        self.command_index += 100
+        self.command_name = "DISPLAY";
+        self.command_argument = "MAP";
       elif self.atc_activate_count == -50:
-        self.carrotCmdIndex += 100
-        self.carrotCmd = "DISPLAY";
-        self.carrotArg = "ROAD";
+        self.command_index += 100
+        self.command_name = "DISPLAY";
+        self.command_argument = "ROAD";
 
     if check_steer:
       if 0 <= x_dist_to_turn < atc_start_dist and atc_type in ["fork left", "fork right"]:
@@ -1024,7 +1024,7 @@ class CarrotServ:
       bookmark_stamp=mark,enabled=enabled,
       trusted_green=display.get('source') in ('TMAP','VISION') and state==GREEN)
     if saved:
-      self.params.put('ManualStopLineData',self.manual_stop_lines.export())
+      self.params.put('SavedStopLines',self.manual_stop_lines.export())
       self.manual_stop_lines.dirty=False
       cloudlog.event('manual_stop_line_saved',points=len(self.manual_stop_lines.points),movement=movement)
     target=self.manual_stop_lines.target(now,time.time(),position,CS.vEgo,
@@ -1035,7 +1035,7 @@ class CarrotServ:
       cloudlog.event('manual_stop_line_target',active=bool(target),target=target or {})
       self.manual_target_active=bool(target)
     if self.signal_memory.dirty and now-self.signal_save_time > 60:
-      self.params.put('SignalLearningData', self.signal_memory.export())
+      self.params.put('LearnedSignalCycles', self.signal_memory.export())
       self.signal_memory.dirty = False
       self.signal_save_time = now
 
@@ -1063,7 +1063,7 @@ class CarrotServ:
       distanceTraveled = sm['selfdriveState'].distanceTraveled
       delta_dist = distanceTraveled - self.totalDistance
       self.totalDistance = distanceTraveled
-      if CS.roadLimitSpeed > 0 and self.active_carrot <= 1:
+      if CS.roadLimitSpeed > 0 and self.guidance_level <= 1:
         self.nRoadLimitSpeed = CS.roadLimitSpeed
         self.road_limit_raw = CS.roadLimitSpeed
         self.road_limit_stamp = (time.monotonic() if CS.canValid and
@@ -1090,21 +1090,21 @@ class CarrotServ:
     self.active_sdi_count = max(self.active_sdi_count - 1, 0)
     self.active_kisa_count = max(self.active_kisa_count - 1, 0)
     if self.active_kisa_count > 0:
-      self.active_carrot = 2
+      self.guidance_level = 2
 
     elif self.active_count > 0:
-      self.active_carrot = 2 if self.active_sdi_count > 0 else 1
+      self.guidance_level = 2 if self.active_sdi_count > 0 else 1
     else:
-      self.active_carrot = 0
+      self.guidance_level = 0
 
-    if self.autoRoadSpeedLimitOffset >= 0 and self.active_carrot>=2:
+    if self.autoRoadSpeedLimitOffset >= 0 and self.guidance_level>=2:
       if self.nRoadLimitSpeed >= 30:
         road_speed_limit_offset = self.autoRoadSpeedLimitOffset
         if not self.is_metric:
           road_speed_limit_offset *= CV.KPH_TO_MPH
         limit_speed = self.nRoadLimitSpeed + road_speed_limit_offset
 
-    if self.active_carrot <= 1:
+    if self.guidance_level <= 1:
       self.xSpdType = self.navType = self.xTurnInfo = self.xTurnInfoNext = -1
       self.nSdiType = self.nSdiBlockType = self.nSdiPlusBlockType = -1
       self.nTBTTurnType = self.nTBTTurnTypeNext = -1
@@ -1139,7 +1139,7 @@ class CarrotServ:
                      self.autoNaviSpeedCtrlMode >= 2 and self.roadcate > 1 else None)
     if learning_enabled and CS is not None and sm.valid['carState']:
       self.bump_memory.base = self.autoNaviSpeedBumpSpeed
-      self.bump_memory.raise_limit = float(self.params.get("BumpLearningRaise", return_default=True) or 0)
+      self.bump_memory.raise_limit = float(self.params.get("BumpLearningMaxIncreaseKph", return_default=True) or 0)
       button_changed = CS.cruiseButtons != self.bump_button_last and CS.cruiseButtons != 0
       self.bump_button_last = CS.cruiseButtons
       manual = not sm['carControl'].longActive or CS.brakePressed or CS.gasPressed or button_changed
@@ -1148,7 +1148,7 @@ class CarrotServ:
       eligible = (sm.valid['carControl'] and sm.alive['carControl'] and
                   sm.valid['radarState'] and sm.alive['radarState'] and not following and
                   sm['carControl'].longActive and not manual)
-      nav_bump = self.xSpdDist if self.xSpdType == 22 and self.active_carrot > 1 else plus_distance
+      nav_bump = self.xSpdDist if self.xSpdType == 22 and self.guidance_level > 1 else plus_distance
       # Pedal-based learning requires repeated smooth passes without braking.
       override_eligible = (sm.valid['carControl'] and sm.alive['carControl'] and
                            0 <= bump_now-sm.recv_time['carControl'] < .2 and
@@ -1164,13 +1164,13 @@ class CarrotServ:
         cloudlog.event('bump_pedal_override_learning', **event)
       self.bump_memory.override_events.clear()
       if self.bump_memory.dirty and bump_now - self.bump_save_time > 5:
-        self.params.put("BumpLearningData", self.bump_memory.export())
+        self.params.put("LearnedBumpLocations", self.bump_memory.export())
         self.bump_memory.dirty = False
         self.bump_save_time = bump_now
     else:
       self.bump_memory.pending = None
       self.bump_display = None
-    nav_distance = self.xSpdDist if self.xSpdType == 22 and self.active_carrot > 1 else None
+    nav_distance = self.xSpdDist if self.xSpdType == 22 and self.guidance_level > 1 else None
     # Record source changes once per encounter, without logging every frame.
     memory_key = None
     if self.bump_display is not None:
@@ -1225,7 +1225,7 @@ class CarrotServ:
     sdi_speed = 250
     hda_active = False
     ### 과속카메라, 사고방지턱
-    if (self.xSpdDist > 0 or self.xSpdType in [100, 101]) and self.active_carrot > 0 and not nav_bump_passed:
+    if (self.xSpdDist > 0 or self.xSpdType in [100, 101]) and self.guidance_level > 0 and not nav_bump_passed:
       if self.xSpdType == 22 and self.bump_display is not None and abs(self.xSpdDist-self.bump_display['distance']) < 15:
         self.xSpdLimit = self.bump_display['target']
       if self.xSpdType == 22:
@@ -1234,23 +1234,23 @@ class CarrotServ:
       else:
         sdi_speed = min(sdi_speed, self.calculate_current_speed(
           self.xSpdDist, self.xSpdLimit, self.autoNaviSpeedCtrlEnd, self.autoNaviSpeedDecelRate))
-      self.active_carrot = 5 if self.xSpdType == 22 else 3
+      self.guidance_level = 5 if self.xSpdType == 22 else 3
       if self.xSpdType == 4 or (self.xSpdType in [100, 101] and self.xSpdDist <= 0):
         sdi_speed = self.xSpdLimit
-        self.active_carrot = 4
+        self.guidance_level = 4
     elif CS is not None and CS.speedLimit > 0 and CS.speedLimitDistance > 0:
       sdi_speed = min(sdi_speed,
                       self.calculate_current_speed(CS.speedLimitDistance,
                                                    CS.speedLimit * self.autoNaviSpeedSafetyFactor,
                                                    self.autoNaviSpeedCtrlEnd,
                                                    self.autoNaviSpeedDecelRate))
-      #self.active_carrot = 6
+      #self.guidance_level = 6
       hda_active = True
 
-    #print(f"sdi_speed: {sdi_speed}, hda_active: {hda_active}, xSpdType: {self.xSpdType}, xSpdDist: {self.xSpdDist}, active_carrot: {self.active_carrot}, v_ego_kph: {v_ego_kph}, nRoadLimitSpeed: {self.nRoadLimitSpeed}")
+    #print(f"sdi_speed: {sdi_speed}, hda_active: {hda_active}, xSpdType: {self.xSpdType}, xSpdDist: {self.xSpdDist}, guidance_level: {self.guidance_level}, v_ego_kph: {v_ego_kph}, nRoadLimitSpeed: {self.nRoadLimitSpeed}")
     # Keep the section cap while a nearer, lower camera target uses its normal
     # distance-based braking curve. Do not accelerate above the section target.
-    if self.active_carrot > 1 and getattr(self, "section_speed_limit", 0) > 0:
+    if self.guidance_level > 1 and getattr(self, "section_speed_limit", 0) > 0:
       sdi_speed = min(sdi_speed, self.section_speed_limit * self.autoNaviSpeedSafetyFactor)
 
     ### TBT 속도제어
@@ -1260,7 +1260,7 @@ class CarrotServ:
     # model-curve and road caps are still selected independently below.
     atc_desired = self._turn_progress_speed(sm, bump_now, atc_desired)
 
-    if self.nSdiType  >= 0: # or self.active_carrot > 0:
+    if self.nSdiType  >= 0: # or self.guidance_level > 0:
       pass
       # self.debugText = (
       #   f"Atc:{atc_desired:.1f}," +
@@ -1270,7 +1270,7 @@ class CarrotServ:
       #   f"{self.xTurnInfoNext},{self.xDistToTurnNext:.1f}"
       # )
       #self.debugText = "" #f" {self.nSdiType}/{self.nSdiSpeedLimit}/{self.nSdiDist},BLOCK:{self.nSdiBlockType}/{self.nSdiBlockSpeed}/{self.nSdiBlockDist}, PLUS:{self.nSdiPlusType}/{self.nSdiPlusSpeedLimit}/{self.nSdiPlusDist}"
-    #elif self.nGoPosDist > 0 and self.active_carrot > 1:
+    #elif self.nGoPosDist > 0 and self.guidance_level > 1:
     #  self.debugText = " 목적지:{:.1f}km/{:.1f}분 남음".format(self.nGoPosDist/1000., self.nGoPosTime / 60)
     else:
       #self.debugText = ""
@@ -1412,11 +1412,11 @@ class CarrotServ:
 
     if left_sec != self.left_sec:
       if left_sec == self.max_left_sec and self.sdi_inform:
-        self.carrot_left_sec = 11
+        self.distance_countdown_seconds = 11
       elif 1 <= left_sec < self.max_left_sec:
-        self.carrot_left_sec = left_sec
+        self.distance_countdown_seconds = left_sec
       elif left_sec == 0 and self.left_sec == 1:
-        self.carrot_left_sec = left_sec
+        self.distance_countdown_seconds = left_sec
 
       self.left_sec = left_sec
 
@@ -1435,71 +1435,71 @@ class CarrotServ:
     try:
       self.tbt_blinker.update(tbt_now, self.nTBTTurnType, self.xDistToTurn,
                               tbt_now-self.tbt_blinker_stamp, CS,
-                              self.params.get_bool("TbtBlinkerExperiment") and
+                              self.params.get_bool("NavTurnSignalExperiment") and
                               tbt_fresh('carState') and tbt_fresh('selfdriveState'),
                               next_road_width=self.nTBTNextRoadWidth, lane_width=lane_width)
     except OSError:
       # Existing requests expire if IPC cannot be refreshed.
       pass
     self._update_cmd()
-    msg = messaging.new_message('carrotMan')
+    msg = messaging.new_message('kisaNavigation')
     msg.valid = True
-    msg.carrotMan.activeCarrot = self.active_carrot
+    msg.kisaNavigation.guidanceLevel = self.guidance_level
     navigation_stamp = getattr(self, 'navigation_packet_stamp', None)
-    msg.carrotMan.naviConnected = navigation_stamp is not None and 0. <= time.monotonic()-navigation_stamp < 3.
-    msg.carrotMan.naviSource = getattr(self, "navi_source", "") if msg.carrotMan.naviConnected else ""
-    msg.carrotMan.nRoadLimitSpeed = int(self.nRoadLimitSpeed)
-    msg.carrotMan.roadLimitSpeedRaw = int(self.road_limit_raw)
+    msg.kisaNavigation.naviConnected = navigation_stamp is not None and 0. <= time.monotonic()-navigation_stamp < 3.
+    msg.kisaNavigation.naviSource = getattr(self, "navi_source", "") if msg.kisaNavigation.naviConnected else ""
+    msg.kisaNavigation.nRoadLimitSpeed = int(self.nRoadLimitSpeed)
+    msg.kisaNavigation.roadLimitSpeedRaw = int(self.road_limit_raw)
     limit_stamp = self.road_limit_stamp
-    msg.carrotMan.roadLimitSpeedValid = bool(limit_stamp is not None and
+    msg.kisaNavigation.roadLimitSpeedValid = bool(limit_stamp is not None and
                                            0 <= tbt_now-limit_stamp < 2.5 and 0 < self.road_limit_raw <= 140)
     highway_stamp = self.navi_highway_stamp
-    msg.carrotMan.naviHighway = highway_stamp is not None and 0 <= tbt_now - highway_stamp < 2.5
-    msg.carrotMan.remote = remote_ip
-    msg.carrotMan.xSpdType = -1 if nav_bump_passed else int(self.xSpdType)
-    msg.carrotMan.xSpdLimit = 0 if nav_bump_passed else int(self.xSpdLimit)
-    msg.carrotMan.xSpdLimitOrg = 0 if nav_bump_passed else int(self.xSpdLimit_org)
-    msg.carrotMan.xSpdDist = 0 if nav_bump_passed else int(self.xSpdDist)
-    msg.carrotMan.xSpdCountDown = int(left_spd_sec)
-    msg.carrotMan.xTurnInfo = int(self.xTurnInfo)
-    msg.carrotMan.xDistToTurn = int(self.xDistToTurn)
-    msg.carrotMan.xTurnCountDown = int(left_tbt_sec)
-    msg.carrotMan.atcType = self.atcType
-    msg.carrotMan.vTurnSpeed = int(vturn_speed)
-    msg.carrotMan.szPosRoadName = self.szPosRoadName + self.debugText
-    msg.carrotMan.szTBTMainText = self.szTBTMainText
-    msg.carrotMan.desiredSpeed = int(desired_speed)
-    msg.carrotMan.desiredSource = source
-    msg.carrotMan.carrotCmdIndex = int(self.carrotCmdIndex)
-    msg.carrotMan.carrotCmd = self.carrotCmd
-    msg.carrotMan.carrotArg = self.carrotArg
-    msg.carrotMan.trafficState = self.traffic_state
+    msg.kisaNavigation.naviHighway = highway_stamp is not None and 0 <= tbt_now - highway_stamp < 2.5
+    msg.kisaNavigation.remote = remote_ip
+    msg.kisaNavigation.xSpdType = -1 if nav_bump_passed else int(self.xSpdType)
+    msg.kisaNavigation.xSpdLimit = 0 if nav_bump_passed else int(self.xSpdLimit)
+    msg.kisaNavigation.xSpdLimitOrg = 0 if nav_bump_passed else int(self.xSpdLimit_org)
+    msg.kisaNavigation.xSpdDist = 0 if nav_bump_passed else int(self.xSpdDist)
+    msg.kisaNavigation.xSpdCountDown = int(left_spd_sec)
+    msg.kisaNavigation.xTurnInfo = int(self.xTurnInfo)
+    msg.kisaNavigation.xDistToTurn = int(self.xDistToTurn)
+    msg.kisaNavigation.xTurnCountDown = int(left_tbt_sec)
+    msg.kisaNavigation.atcType = self.atcType
+    msg.kisaNavigation.vTurnSpeed = int(vturn_speed)
+    msg.kisaNavigation.szPosRoadName = self.szPosRoadName + self.debugText
+    msg.kisaNavigation.szTBTMainText = self.szTBTMainText
+    msg.kisaNavigation.desiredSpeed = int(desired_speed)
+    msg.kisaNavigation.desiredSource = source
+    msg.kisaNavigation.commandIndex = int(self.command_index)
+    msg.kisaNavigation.commandName = self.command_name
+    msg.kisaNavigation.commandArgument = self.command_argument
+    msg.kisaNavigation.trafficState = self.traffic_state
 
-    msg.carrotMan.xPosSpeed = float(v_ego_kph) #float(self.nPosSpeed)
-    msg.carrotMan.xPosAngle = float(self.bearing)
-    msg.carrotMan.xPosLat = float(self.vpPosPointLat)
-    msg.carrotMan.xPosLon = float(self.vpPosPointLon)
+    msg.kisaNavigation.xPosSpeed = float(v_ego_kph) #float(self.nPosSpeed)
+    msg.kisaNavigation.xPosAngle = float(self.bearing)
+    msg.kisaNavigation.xPosLat = float(self.vpPosPointLat)
+    msg.kisaNavigation.xPosLon = float(self.vpPosPointLon)
 
-    msg.carrotMan.nGoPosDist = self.nGoPosDist
-    msg.carrotMan.nGoPosTime = self.nGoPosTime
-    msg.carrotMan.szSdiDescr = self._get_sdi_descr(-1 if self.nSdiType == 0 and self.nSdiDist == 0 else self.nSdiType)
+    msg.kisaNavigation.nGoPosDist = self.nGoPosDist
+    msg.kisaNavigation.nGoPosTime = self.nGoPosTime
+    msg.kisaNavigation.szSdiDescr = self._get_sdi_descr(-1 if self.nSdiType == 0 and self.nSdiDist == 0 else self.nSdiType)
 
     #coords_str = ";".join([f"{x},{y}" for x, y in coords])
     coords_str = ";".join([f"{x:.2f},{y:.2f},{d:.2f}" for (x, y), d in zip(coords, distances, strict=False)])
-    msg.carrotMan.naviPaths = coords_str
+    msg.kisaNavigation.naviPaths = coords_str
 
     ui_bump_target, ui_bump_distance = self._ui_bump_notice(bump_now, v_ego)
-    msg.carrotMan.bumpTarget = ui_bump_target
-    msg.carrotMan.bumpDistance = ui_bump_distance
-    msg.carrotMan.bumpLearningText = (self.bump_memory.notice if learning_enabled and
+    msg.kisaNavigation.bumpTarget = ui_bump_target
+    msg.kisaNavigation.bumpDistance = ui_bump_distance
+    msg.kisaNavigation.bumpLearningText = (self.bump_memory.notice if learning_enabled and
                                     bump_now < self.bump_memory.notice_until else "")
-    msg.carrotMan.bumpSoundSequence = self.bump_memory.sound_seq if learning_enabled else 0
-    msg.carrotMan.bumpSoundEnabled = bool(self.params.get("BumpLearningSound", return_default=True))
-    msg.carrotMan.bumpImpact = float(self.bump_memory.last_peak)
-    msg.carrotMan.bumpPassSpeed = float(self.bump_memory.last_pass_speed)
-    msg.carrotMan.signalDisplay = self.signal_display
-    msg.carrotMan.leftSec = int(self.carrot_left_sec)
-    pm.send('carrotMan', msg)
+    msg.kisaNavigation.bumpSoundSequence = self.bump_memory.sound_seq if learning_enabled else 0
+    msg.kisaNavigation.bumpSoundEnabled = bool(self.params.get("LearnedBumpAudioEnabled", return_default=True))
+    msg.kisaNavigation.bumpImpact = float(self.bump_memory.last_peak)
+    msg.kisaNavigation.bumpPassSpeed = float(self.bump_memory.last_pass_speed)
+    msg.kisaNavigation.signalDisplay = self.signal_display
+    msg.kisaNavigation.leftSec = int(self.distance_countdown_seconds)
+    pm.send('kisaNavigation', msg)
 
   def _update_system_time(self, epoch_time_remote, timezone_remote):
     epoch_time = int(time.time())
@@ -1560,11 +1560,11 @@ class CarrotServ:
       return default if v is None else str(v)  
     if json is None:
       return
-    if "carrotIndex" in json:
-      self.carrotIndex = int(json.get("carrotIndex") or self.carrotIndex + 1)
+    if "guidanceIndex" in json:
+      self.guidance_update_index = int(json.get("guidanceIndex") or self.guidance_update_index + 1)
 
     #print(json)
-    if self.carrotIndex % 60 == 0 and "epochTime" in json:
+    if self.guidance_update_index % 60 == 0 and "epochTime" in json:
       epoch = json.get("epochTime")
       if epoch is not None:
         # op는 ntp를 사용하기때문에... 필요없는 루틴으로 보임.
@@ -1575,12 +1575,12 @@ class CarrotServ:
 
       #self._update_system_time(int(json.get("epochTime")), timezone_remote)
 
-    if "carrotCmd" in json:
-      #print(json.get("carrotCmd"), json.get("carrotArg"))
-      self.carrotCmdIndex = self.carrotIndex
-      self.carrotCmd = json.get("carrotCmd")
-      self.carrotArg = json.get("carrotArg")
-      print(f"carrotCmd = {self.carrotCmd}, {self.carrotArg}")
+    if "commandName" in json:
+      #print(json.get("commandName"), json.get("commandArgument"))
+      self.command_index = self.guidance_update_index
+      self.command_name = json.get("commandName")
+      self.command_argument = json.get("commandArgument")
+      print(f"commandName = {self.command_name}, {self.command_argument}")
 
     self.active_count = 80
     now = time.monotonic()
@@ -1697,26 +1697,25 @@ class CarrotServ:
         self.nPosSpeed = float(json.get("gps_speed", 0))
         print(f"phone gps: {self.vpPosPointLatNavi}, {self.vpPosPointLonNavi}, {self.phone_gps_accuracy}, {self.nPosSpeed}")
 
-
-import traceback
-
-def main():
-  print("CarrotManager Started")
-  #print("Carrot GitBranch = {}, {}".format(Params().get("GitBranch"), Params().get("GitCommitDate")))
-  # 延迟导入，避免与 carrot_man 中导入 CarrotServ 的循环依赖
-  from openpilot.selfdrive.kisapilot.carrot_man import CarrotMan
-  carrot_man = CarrotMan()
-
-  print(f"CarrotMan {carrot_man}")
-  #threading.Thread(target=carrot_man.kisa_app_thread).start()
-  while True:
-    try:
-      carrot_man.carrot_man_thread()
-    except Exception as e:
-      print(f"carrot_man error...: {e}")
-      traceback.print_exc()
-      time.sleep(10)
-
-
-if __name__ == "__main__":
-  main()
+  def select_source(self, source):
+    """Clear guidance tied to the previous app when the selected source changes."""
+    self.navi_source = source if source in ("tmap", "naver-map") else ""
+    self.navi_highway_stamp = None
+    self.navigation_packet_stamp = None
+    self.active_count = self.active_sdi_count = 0
+    self.nSdiType = self.nSdiPlusType = self.nSdiBlockType = self.nSdiPlusBlockType = -1
+    self.nSdiDist = self.nSdiPlusDist = self.nSdiBlockDist = self.nSdiPlusBlockDist = 0
+    self.nSdiBlockSpeed = self.nSdiPlusBlockSpeed = 0
+    self.nSdiSpeedLimit = self.nSdiPlusSpeedLimit = 0
+    self.xSpdType = -1
+    self.xSpdLimit = self.xSpdLimit_org = self.xSpdDist = 0
+    self.nTBTTurnType = self.nTBTTurnTypeNext = -1
+    self.nTBTDist = self.nTBTDistNext = 0
+    self.xTurnInfo = self.xTurnInfoNext = -1
+    self.xDistToTurn = self.xDistToTurnNext = 0
+    self.nSdiSection = 0
+    self.signal_lane_points = []
+    self.nRoadLimitSpeed = self.nPosSpeed = 0
+    self.vpPosPointLatNavi = self.vpPosPointLonNavi = 0
+    self.last_update_gps_time_navi = 0
+    self.szSdiDescr = self.szTBTMainText = self.szTBTMainTextNext = ""

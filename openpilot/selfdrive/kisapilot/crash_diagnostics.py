@@ -7,7 +7,7 @@ import signal
 import sys
 import time
 
-FAULT_DIR = Path('/data/carrot_crash')
+FAULT_DIR = Path('/data/kisa_crash')
 _fault_file = None
 
 
@@ -19,9 +19,9 @@ def enable_crash_diagnostics(directory=FAULT_DIR):
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     # Only rotate our own inactive traces; never touch system crash dumps.
-    for old in sorted(directory.glob('carrot-fault-*.log'), key=lambda p: p.stat().st_mtime)[:-4]:
+    for old in sorted(directory.glob('kisa-fault-*.log'), key=lambda p: p.stat().st_mtime)[:-4]:
       old.unlink()
-    path = directory / f'carrot-fault-{time.strftime("%Y%m%d-%H%M%S")}-{os.getpid()}.log'
+    path = directory / f'kisa-fault-{time.strftime("%Y%m%d-%H%M%S")}-{os.getpid()}.log'
     output = path.open('a', encoding='utf-8', buffering=1)
     metadata = dict(pid=os.getpid(), wall=time.time(), monotonic=time.monotonic(),
                     python=sys.version, executable=sys.executable)
@@ -43,7 +43,7 @@ def enable_crash_diagnostics(directory=FAULT_DIR):
         pass
     return str(path)
   except (OSError, RuntimeError, ValueError) as error:
-    print(f'carrot fatal-stack file unavailable: {error}', file=sys.stderr)
+    print(f'kisa fatal-stack file unavailable: {error}', file=sys.stderr)
     try:
       faulthandler.enable(all_threads=True)
     except (OSError, RuntimeError, ValueError):
