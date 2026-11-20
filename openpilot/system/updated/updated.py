@@ -173,6 +173,11 @@ def init_overlay() -> None:
   cloudlog.info(f"git diff output:\n{git_diff}")
 
 
+def lfs_command(checkout: str, action: str) -> list[str]:
+  client = os.path.join(checkout, "tools/lfs.sh")
+  return [client, action] if os.path.isfile(client) else ["git", "lfs", action]
+
+
 def finalize_update() -> None:
   """Take the current OverlayFS merged view and finalize a copy outside of
   OverlayFS, ready to be swapped-in at BASEDIR. Copy using shutil.copytree"""
@@ -193,7 +198,8 @@ def finalize_update() -> None:
   t = time.monotonic()
   try:
     run(["git", "gc"], FINALIZED)
-    run(["git", "lfs", "prune"], FINALIZED)
+    if run(["git", "ls-files", ":(attr:filter=lfs)"], FINALIZED):
+      run(lfs_command(FINALIZED, "prune"), FINALIZED)
     cloudlog.event("Done git cleanup", duration=time.monotonic() - t)
   except subprocess.CalledProcessError:
     cloudlog.exception(f"Failed git cleanup, took {time.monotonic() - t:.3f} s")
@@ -397,10 +403,13 @@ class Updater:
     cloudlog.info("git fetch success: %s", git_fetch_output)
 
     cloudlog.info("git reset in progress")
+    # Hydrate LFS files after checkout using the target branch's client.
+    no_lfs = ["-c", "filter.lfs.process=", "-c", "filter.lfs.smudge=",
+              "-c", "filter.lfs.required=false", "-c", "core.hooksPath=/dev/null"]
     cmds = [
-      ["git", "checkout", "--force", "--no-recurse-submodules", "-B", branch, "FETCH_HEAD"],
+      ["git", *no_lfs, "checkout", "--force", "--no-recurse-submodules", "-B", branch, "FETCH_HEAD"],
       ["git", "branch", "--set-upstream-to", f"origin/{branch}"],
-      ["git", "reset", "--hard"],
+      ["git", *no_lfs, "reset", "--hard"],
       ["git", "clean", "-xdff"],
       ["git", "submodule", "sync"],
       ["git", "submodule", "update", "--init", "--recursive"],
@@ -408,6 +417,9 @@ class Updater:
     ]
     r = [run(cmd, OVERLAY_MERGED) for cmd in cmds]
     cloudlog.info("git reset success: %s", '\n'.join(r))
+
+    if run(["git", "ls-files", ":(attr:filter=lfs)"], OVERLAY_MERGED):
+      run(lfs_command(OVERLAY_MERGED, "pull"), OVERLAY_MERGED)
 
     # TODO: show agnos download progress
     if AGNOS:
