@@ -190,6 +190,10 @@ static bool rx_hook_copy(const CANPacket_t *msg) {
   if (valid && whitelisted) {
     safety_setup.current_hooks->rx(msg);
   }
+  // The Hyundai stalk is optional and must not be added to required RX checks.
+  if (valid && (safety_setup.current_safety_mode == SAFETY_HYUNDAI_CANFD) && (msg->addr == 0x3c1U)) {
+    hyundai_canfd_tbt_stalk_rx(msg);
+  }
 
   // Handles gas, brake, and regen paddle
   generic_rx_checks();

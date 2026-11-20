@@ -39,17 +39,17 @@ int main(void) {
   const unsigned variants[] = {0U, 8U, 16U, 24U, 16U|128U, 24U|128U, 4U, 4U|8U, 4U|16U, 4U|24U};
   for (unsigned v=0; v<sizeof(variants)/sizeof(variants[0]); v++) {
     unsigned f=variants[v], bus=(f&16U) && !(f&8U) ? 1U : 0U;
-    reset(f); int original_rx = current_safety_config.rx_checks_len;
+    reset(f); int original_rx = get_rx_checks_len();
     for (unsigned action=0; action<8; action++) {
       CANPacket_t p=command(bus, action); CHECK(!safety_tx_hook(&p));
     }
     reset(f|1024U);
     if ((f&16U) && (f&8U) && !(f&4U)) {
-      CHECK(current_safety_config.rx_checks_len == original_rx);
+      CHECK(get_rx_checks_len() == original_rx);
       feed(bus,0,true,false,3); set_controls_allowed(false);
       CANPacket_t rejected=command(bus,3); CHECK(!safety_tx_hook(&rejected)); continue;
     }
-    CHECK(current_safety_config.rx_checks_len == original_rx);
+    CHECK(get_rx_checks_len() == original_rx);
     CANPacket_t p=command(bus,3); CHECK(!safety_tx_hook(&p)); // no sensors yet
     feed(bus,0,true,false,3); set_controls_allowed(false);
     p=command(bus,3); CHECK(safety_tx_hook(&p));
@@ -103,7 +103,7 @@ int main(void) {
   set_controls_allowed(false);
   stationary = command(0U, 3U);
   CHECK(safety_tx_hook(&stationary));
-  CHECK(hyundai_canfd_tbt_wait_seen);
+  CHECK(safety_a.state.hyundai_canfd_blinker.wait_seen && safety_b.state.hyundai_canfd_blinker.wait_seen);
   set_timer(timer_cnt + 11000000U);
   feed(0U, 0U, false, false, 0U);
   set_controls_allowed(false);
@@ -173,5 +173,6 @@ int main(void) {
   CHECK(!safety_tx_hook(&tbt)); // high-speed duration ceiling
   release = command(0U, 0U);
   CHECK(safety_tx_hook(&release));
+  CHECK(!safety_redundancy_fault);
   printf("PASS %u native safety checks\n",tests); return 0;
 }

@@ -277,6 +277,23 @@ typedef struct {
 } CurvatureSteeringState;
 
 typedef struct {
+  uint32_t stalk_ts;
+  uint32_t wheel_ts;
+  uint32_t brake_ts;
+  uint32_t gas_ts;
+  uint32_t start;
+  uint32_t last;
+  uint8_t seen;
+  bool moving;
+  bool wait_seen;
+  bool stalk_neutral;
+  bool stalk_seen;
+  bool stopped;
+  bool burst;
+  bool timeout;
+} HyundaiCanfdBlinkerState;
+
+typedef struct {
   // This can be set by the safety hooks
   bool controls_allowed;
   bool relay_malfunction;
@@ -329,6 +346,7 @@ typedef struct {
   bool honda_fwd_brake;
 
   uint8_t hyundai_last_button_interaction;  // button messages since the user pressed an enable button
+  HyundaiCanfdBlinkerState hyundai_canfd_blinker;
 
   bool tesla_stock_aeb;
   // Only rising edges while controls are not allowed are considered for these systems:
@@ -375,6 +393,9 @@ typedef struct {
   bool hyundai_legacy;
   bool hyundai_canfd_alt_buttons;
   bool hyundai_canfd_lka_steer_msg_alt;
+  bool hyundai_canfd_blinker_test;
+  bool hyundai_canfd_tbt_blinker;
+  bool hyundai_canfd_moving_road_test;
 
   bool nissan_alt_eps;
 
