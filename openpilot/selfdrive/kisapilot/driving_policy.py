@@ -252,8 +252,7 @@ class KisaLongitudinalPolicy:
         self._signal_snapshot = {}
     cs = sm['carState']
     active = bool(sm.alive['carControl'] and sm.alive['radarState'] and sm.alive['kisaNavigation'] and
-                  sm['carControl'].longActive and not sm['selfdriveState'].experimentalMode and
-                  self.trafficLightDetectMode > 0)
+                  sm['carControl'].longActive and self.trafficLightDetectMode > 0)
     override = cs.gasPressed or cs.brakePressed or cs.leftBlinker or cs.rightBlinker or self.desireState > .1
     self.signal_follow.update(self._signal_snapshot, now, DT_MDL, cs.vEgo,
                               sm['radarState'].leadOne, active, override)

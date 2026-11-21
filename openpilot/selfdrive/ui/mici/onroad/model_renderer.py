@@ -1,4 +1,3 @@
-import colorsys
 import numpy as np
 import raylib_nb as rl
 from openpilot.cereal import log, messaging
@@ -96,7 +95,6 @@ class ModelRenderer(Widget):
   def __init__(self):
     super().__init__()
     self._longitudinal_control = False
-    self._experimental_mode = False
     self._blend_filter = FirstOrderFilter(1.0, 0.25, 1 / gui_app.target_fps)
     self._prev_allow_throttle = True
     self._path_gradient_key = None
@@ -110,24 +108,12 @@ class ModelRenderer(Widget):
     self._path = ModelPoints()
     self._lane_lines = [ModelPoints() for _ in range(4)]
     self._road_edges = [ModelPoints() for _ in range(2)]
-    self._acceleration_x = np.empty((0,), dtype=np.float32)
-
-    self._acceleration_x_filter = FirstOrderFilter(0.0, 0.1, 1 / gui_app.target_fps)
-    self._acceleration_x_filter2 = FirstOrderFilter(0.0, 1, 1 / gui_app.target_fps)
-
     self._ll_color_filter = FirstOrderFilter(0.0, 0.1, 1 / gui_app.target_fps)
 
     # 3x3 car space -> rect-origin space (draw methods add rect.x/y)
     self._car_space_transform = np.zeros((3, 3), dtype=np.float32)
     self._transform_dirty = True
     self._clip_region = None
-
-    self._exp_gradient = Gradient(
-      start=(0.0, 1.0),  # Bottom of path
-      end=(0.0, 0.0),  # Top of path
-      colors=[],
-      stops=[],
-    )
 
     # Get longitudinal control setting from car parameters
     if car_params := Params().get("CarParams"):
@@ -154,9 +140,6 @@ class ModelRenderer(Widget):
     self._clip_region = rl.Rectangle(
       rect.x - CLIP_MARGIN, rect.y - CLIP_MARGIN, rect.width + 2 * CLIP_MARGIN, rect.height + 2 * CLIP_MARGIN
     )
-
-    # Update state
-    self._experimental_mode = sm['selfdriveState'].experimentalMode
 
     extrinsics_calibration = sm['extrinsicsCalibration']
     self._path_offset_z = extrinsics_calibration.height[0] if extrinsics_calibration.height else HEIGHT_INIT[0]
@@ -206,7 +189,6 @@ class ModelRenderer(Widget):
 
     self._lane_line_probs = np.array(model.laneLineProbs, dtype=np.float32)
     self._road_edge_stds = np.array(model.roadEdgeStds, dtype=np.float32)
-    self._acceleration_x = np.array(model.acceleration.x, dtype=np.float32)
 
   # KYD UI: Use radar lead distance and position to align the path projection.
   def _update_leads(self, sm):
@@ -276,66 +258,10 @@ class ModelRenderer(Widget):
       lead_d = lead.dRel * 2.0
       max_distance = np.clip(lead_d - min(lead_d * 0.35, 10.0), 0.0, max_distance)
 
-    soon_acceleration = self._acceleration_x[len(self._acceleration_x) // 4] if len(self._acceleration_x) > 0 else 0
-    self._acceleration_x_filter.update(soon_acceleration)
-    self._acceleration_x_filter2.update(soon_acceleration)
-
-    # make path width wider/thinner when initially braking/accelerating
-    if self._experimental_mode and False:
-      high_pass_acceleration = self._acceleration_x_filter.x - self._acceleration_x_filter2.x
-      y_off = np.interp(high_pass_acceleration, [-1, 0, 1], [0.9 * 2, 0.9, 0.9 / 2])
-    else:
-      y_off = 0.9
-
     max_idx = self._get_path_length_idx(path_x_array, max_distance)
     self._path.projected_points = self._map_line_to_polygon(
-      self._path.raw_points, y_off, self._path_offset_z, max_idx, allow_invert=False
+      self._path.raw_points, 0.9, self._path_offset_z, max_idx, allow_invert=False
     )
-
-    self._update_experimental_gradient()
-
-  # KYD UI: Build the path gradient from the model trajectory.
-  def _update_experimental_gradient(self):
-    """Pre-calculate experimental mode gradient colors"""
-    if not self._experimental_mode:
-      return
-
-    path_pts = self._path.projected_points + np.array([self._rect.x, self._rect.y], dtype=np.float32)
-    max_len = min(len(path_pts) // 2, len(self._acceleration_x))
-
-    segment_colors = []
-    gradient_stops = []
-
-    i = 0
-    while i < max_len:
-      # Some points (screen space) are out of frame (rect space)
-      track_y = path_pts[i][1]
-      if track_y < self._rect.y or track_y > (self._rect.y + self._rect.height):
-        i += 1
-        continue
-
-      # Calculate color based on acceleration (0 is bottom, 1 is top)
-      lin_grad_point = 1 - (track_y - self._rect.y) / self._rect.height
-
-      # speed up: 120, slow down: 0
-      path_hue = np.clip(60 + self._acceleration_x[i] * 35, 0, 120)
-
-      saturation = min(abs(self._acceleration_x[i] * 1.5), 1)
-      lightness = np.interp(saturation, [0.0, 1.0], [0.95, 0.62])
-      alpha = np.interp(lin_grad_point, [0.75 / 2.0, 0.75], [0.4, 0.0])
-
-      # Use HSL to RGB conversion
-      color = self._hsla_to_color(path_hue / 360.0, saturation, lightness, alpha)
-
-      gradient_stops.append(lin_grad_point)
-      segment_colors.append(color)
-
-      # Skip a point, unless next is last
-      i += 1 + (1 if (i + 2) < max_len else 0)
-
-    # Store the gradient in the path object
-    self._exp_gradient.colors = segment_colors
-    self._exp_gradient.stops = gradient_stops
 
   def _get_ll_color(self, prob, rgb):
     alpha = float(np.clip(prob, 0.0, 0.7)) if np.isfinite(prob) else 0.0
@@ -377,36 +303,27 @@ class ModelRenderer(Widget):
 
     path_pts = self._path.projected_points + np.array([self._rect.x, self._rect.y], dtype=np.float32)
 
-    if self._experimental_mode:
-      # Draw with acceleration coloring
-      if ui_state.status == UIStatus.DISENGAGED:
-        draw_polygon(self._rect, path_pts, rl.Color(0, 0, 0, 90))
-      elif len(self._exp_gradient.colors) > 1:
-        draw_polygon(self._rect, path_pts, gradient=self._exp_gradient)
+    # Blend throttle/no throttle colors based on transition
+    blend_factor = round(self._blend_filter.x * 100) / 100
+    gradient_key = (ui_state.activeLaneLine, blend_factor)
+    if self._path_gradient_key != gradient_key:
+      if ui_state.activeLaneLine:
+        blended_colors = self._blend_colors(NO_THROTTLE_COLORS, THROTTLE_COLORS, blend_factor)
       else:
-        draw_polygon(self._rect, path_pts, rl.Color(255, 255, 255, 30))
-    else:
-      # Blend throttle/no throttle colors based on transition
-      blend_factor = round(self._blend_filter.x * 100) / 100
-      gradient_key = (ui_state.activeLaneLine, blend_factor)
-      if self._path_gradient_key != gradient_key:
-        if ui_state.activeLaneLine:
-          blended_colors = self._blend_colors(NO_THROTTLE_COLORS, THROTTLE_COLORS, blend_factor)
-        else:
-          blended_colors = self._blend_colors(LL_NO_THROTTLE_COLORS, LL_THROTTLE_COLORS, blend_factor)
-        self._path_gradient = Gradient(
-          start=(0.0, 1.0),  # Bottom of path
-          end=(0.0, 0.0),  # Top of path
-          colors=blended_colors,
-          stops=[0.0, 0.5, 1.0],
-        )
-        self._path_gradient_key = gradient_key
-      gradient = self._path_gradient
+        blended_colors = self._blend_colors(LL_NO_THROTTLE_COLORS, LL_THROTTLE_COLORS, blend_factor)
+      self._path_gradient = Gradient(
+        start=(0.0, 1.0),  # Bottom of path
+        end=(0.0, 0.0),  # Top of path
+        colors=blended_colors,
+        stops=[0.0, 0.5, 1.0],
+      )
+      self._path_gradient_key = gradient_key
+    gradient = self._path_gradient
 
-      if ui_state.status == UIStatus.DISENGAGED:
-        draw_polygon(self._rect, path_pts, rl.Color(0, 0, 0, 90))
-      else:
-        draw_polygon(self._rect, path_pts, gradient=gradient)
+    if ui_state.status == UIStatus.DISENGAGED:
+      draw_polygon(self._rect, path_pts, rl.Color(0, 0, 0, 90))
+    else:
+      draw_polygon(self._rect, path_pts, gradient=gradient)
 
   # KYD UI: Keep the local lead indicator behavior near the path.
   def _draw_lead_indicator(self):
@@ -491,16 +408,6 @@ class ModelRenderer(Widget):
       right_screen = right_screen[:, keep]
 
     return np.vstack((left_screen.T, right_screen[:, ::-1].T)).astype(np.float32)
-
-  @staticmethod
-  def _hsla_to_color(h, s, l, a):
-    rgb = colorsys.hls_to_rgb(h, l, s)
-    return rl.Color(
-      int(rgb[0] * 255),
-      int(rgb[1] * 255),
-      int(rgb[2] * 255),
-      int(a * 255)
-    )
 
   @staticmethod
   def _blend_colors(begin_colors, end_colors, t):

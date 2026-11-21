@@ -570,7 +570,6 @@ class KisaCruiseHelper:
         self._cruise_cancel_state = True
         self._lat_enabled = False
         self._paddle_decel_active = False
-        #self.params.put_bool("ExperimentalMode", not self.params.get_bool("ExperimentalMode"))
 
     if self._paddle_mode > 0 and button_type in [ButtonType.paddleLeft, ButtonType.paddleRight]:  # paddle button
       if self._paddle_mode == 3:
