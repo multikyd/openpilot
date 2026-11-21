@@ -127,7 +127,6 @@ class SelfdriveD:
     self.logged_comm_issue = None
     self.last_comm_issue_log_t = -float("inf")
     self.not_running_prev = None
-    self.experimental_mode = False
     self.personality = self.params.get("LongitudinalPersonality", return_default=True)
     self.recalibrating_seen = False
     self.dm_lockout_set = False

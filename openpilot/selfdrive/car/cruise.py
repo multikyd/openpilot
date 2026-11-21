@@ -357,10 +357,6 @@ class KisaCruiseHelper:
     self.cruise_state_available_last = CS.cruiseState.available
     self.enabled_last = CC.enabled
 
-  def initialize_v_cruise(self, CS, experimental_mode: bool) -> None:
-    # Kisa initializes the set speed in its update loop.
-    return
-
   def _prepare_buttons(self, CS, v_cruise_kph):
     button_kph = v_cruise_kph
     button_type = 0

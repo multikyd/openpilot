@@ -70,8 +70,6 @@ class Car:
 
     self.can_rcv_cum_timeout_counter = 0
 
-    self.CC_prev = car.CarControl.new_message()
-    self.CS_prev = car.CarState.new_message()
     self.initialized_prev = False
 
     self.last_actuators_output = structs.CarControl.Actuators()
@@ -149,10 +147,9 @@ class Car:
     self.params.put("CarParamsCache", cp_bytes)
     self.params.put("CarParamsPersistent", cp_bytes)
 
-    self.v_cruise_helper = KisaCruiseHelper(self.CP) #VCruiseHelper(self.CP)
+    self.v_cruise_helper = KisaCruiseHelper(self.CP)
 
     self.is_metric = self.params.get_bool("IsMetric")
-    self.initial_cruise_speed = self.params.get("InitialCruiseSpeedKph", return_default=True)
 
     # card is driven by can recv, expected at 100Hz
     self.rk = Ratekeeper(100, print_delay_threshold=None)
@@ -183,15 +180,7 @@ class Car:
       self.can_log_mono_time = messaging.log_from_bytes(can_strs[0]).logMonoTime
 
     RD: structs.RadarDataT | None = self.RI.update_with_ego_motion(CS.vEgo, CS.aEgo, rcv_time, can_list)
-    #self.v_cruise_helper.update_v_cruise(CS, self.sm['carControl'].enabled, self.is_metric)
     self.v_cruise_helper.update_v_cruise(CS, self.sm, self.is_metric)
-    if self.sm['carControl'].enabled and not self.CC_prev.enabled:
-      # Use CarState w/ buttons from the step selfdrived enables on
-      self.v_cruise_helper.initialize_v_cruise(self.CS_prev, self.experimental_mode)
-
-    # TODO: mirror the carState.cruiseState struct?
-    #CS.vCruise = float(self.v_cruise_helper.v_cruise_kph)
-    #CS.vCruiseCluster = float(self.v_cruise_helper.v_cruise_cluster_kph)
 
     if self.v_cruise_helper._paddle_decel_active:
       v_cruise_kph = v_cruise_cluster_kph = 0
@@ -258,8 +247,6 @@ class Car:
       self.last_actuators_output, can_sends = self.CI.apply(CC, now_nanos, model_v2)
       self.pm.send('sendcan', can_list_to_can_capnp(can_sends, msgtype='sendcan', valid=CS.canValid))
 
-      self.CC_prev = CC
-
   def step(self):
     CS, RD = self.state_update()
 
@@ -271,12 +258,10 @@ class Car:
       self.controls_update(CS, self.sm['carControl'])
 
     self.initialized_prev = initialized
-    self.CS_prev = CS
 
   def params_thread(self, evt):
     while not evt.is_set():
       self.is_metric = self.params.get_bool("IsMetric")
-      self.initial_cruise_speed = self.params.get("InitialCruiseSpeedKph", return_default=True)
       time.sleep(0.1)
 
   def card_thread(self):
