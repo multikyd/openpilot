@@ -113,46 +113,67 @@ def list_bookmarks(root, preserved=is_preserved, recording=None):
             "note": "북마크가 있는 1분 구간입니다. 정확한 이벤트 시각은 원본 로그의 userBookmark/bookmarkButton에 있습니다."}
 
 
-def bookmark_offset(events):
-    """Earliest bookmark relative to this segment's sentinel, not route initData."""
+def bookmark_timing(events):
+    """Return the earliest bookmark's segment offset and recording wall time."""
     start = None
-    bookmarks = []
+    bookmark = None
+    anchor = None
     for event in events:
         kind = event.which()
         if kind == 'sentinel' and str(event.sentinel.type) in ('startOfSegment', 'startOfRoute'):
             start = event.logMonoTime if start is None else min(start, event.logMonoTime)
         elif kind in ('userBookmark', 'bookmarkButton'):
-            bookmarks.append(event.logMonoTime)
-    if start is None or not bookmarks:
-        return None
-    offset = (min(bookmarks) - start) / 1e9
-    return offset if 0 <= offset <= 60 else None
+            bookmark = event.logMonoTime if bookmark is None else min(bookmark, event.logMonoTime)
+        elif kind == 'initData' and event.initData.wallTimeNanos:
+            anchor = (event.logMonoTime, event.initData.wallTimeNanos)
+    if start is None or bookmark is None:
+        return None, None
+    offset = (bookmark - start) / 1e9
+    if not 0 <= offset <= 60:
+        return None, None
+    timestamp = None
+    if anchor is not None and bookmark >= anchor[0]:
+        stamp = (anchor[1] + bookmark - anchor[0]) / 1e9
+        if 946684800 <= stamp < 4102444800:  # Some old logs had no valid wall clock.
+            timestamp = stamp
+    return offset, timestamp
+
+
+def bookmark_offset(events):
+    return bookmark_timing(events)[0]
 
 
 @lru_cache(maxsize=256)
-def _log_bookmark_offset(path, size, modified_ns):
+def _log_bookmark_timing(path, size, modified_ns):
     # Cache only completed files, invalidating if a recovered file changes.
     from openpilot.tools.lib.logreader import LogReader
-    return bookmark_offset(LogReader(path))
+    return bookmark_timing(LogReader(path))
 
 
-def segment_bookmark_offset(root, item):
-    if item['active']:
-        return None
+def segment_bookmark_timing(root, segment, active=False):
+    if active:
+        return None, None
+    offset = None
     # qlog contains both bookmark services and the segment sentinel, and is small.
     for name in ('qlog.zst', 'qlog.bz2', 'qlog', 'rlog.zst', 'rlog.bz2', 'rlog'):
-        path = Path(root, item['id'], name)
+        path = Path(root, segment, name)
         try:
             if path.is_symlink() or not path.is_file():
                 continue
             stat = path.stat()
-            offset = _log_bookmark_offset(str(path), stat.st_size, stat.st_mtime_ns)
-            if offset is not None:
-                return offset
+            log_offset, timestamp = _log_bookmark_timing(str(path), stat.st_size, stat.st_mtime_ns)
+            if timestamp is not None:
+                return log_offset, timestamp
+            if offset is None:
+                offset = log_offset
         except Exception:
             # Older/corrupt logs or unavailable decoders must retain history.
             continue
-    return None
+    return offset, None
+
+
+def segment_bookmark_offset(root, item):
+    return segment_bookmark_timing(root, item['id'], item['active'])[0]
 
 
 def bookmark_segments(root, item, adjacent=1):
@@ -233,9 +254,10 @@ _archive_marker = b'kisa-bookmark-archive-v2:'
 _kst = timezone(timedelta(hours=9))
 
 
-def bookmark_archive_name(timestamp):
+def bookmark_archive_name(timestamp, *, fractional=False):
     """Human-readable creation time in KST; no route ID or content hash."""
-    return datetime.fromtimestamp(timestamp, _kst).strftime('%Y-%m-%d_%H-%M-%S') + '.zip'
+    pattern = '%Y-%m-%d_%H-%M-%S.%f' if fractional else '%Y-%m-%d_%H-%M-%S'
+    return datetime.fromtimestamp(timestamp, _kst).strftime(pattern) + '.zip'
 
 
 def _cached_archive(cache, digest):

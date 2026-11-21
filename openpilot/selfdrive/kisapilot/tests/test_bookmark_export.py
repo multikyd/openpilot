@@ -175,14 +175,22 @@ class BookmarkHistoryTest(BookmarkFixture, unittest.TestCase):
         self.segment(number=1)
         self.assertEqual(self.export_at(5., adjacent=0)['bookmark_metadata']['included_segments'], ['old--1'])
 
-    def event(self, kind, seconds, sentinel_type=None):
+    def event(self, kind, seconds, sentinel_type=None, wall_time=0):
         return SimpleNamespace(which=lambda: kind, logMonoTime=int(seconds * 1e9),
-                               sentinel=SimpleNamespace(type=sentinel_type))
+                               sentinel=SimpleNamespace(type=sentinel_type),
+                               initData=SimpleNamespace(wallTimeNanos=int(wall_time * 1e9)))
 
     def test_uses_segment_sentinel_not_repeated_route_init_time(self):
         events = [self.event('initData', 100), self.event('sentinel', 700, 'startOfSegment'),
                   self.event('userBookmark', 729.999)]
         self.assertAlmostEqual(b.bookmark_offset(events), 29.999)
+
+    def test_wall_time_uses_the_bookmark_event_and_route_clock(self):
+        wall = 1793372706
+        events = [self.event('initData', 100, wall_time=wall),
+                  self.event('sentinel', 700, 'startOfSegment'),
+                  self.event('userBookmark', 729.5)]
+        self.assertEqual(b.bookmark_timing(events), (29.5, wall + 629.5))
 
     def test_multiple_bookmarks_use_earliest_event_including_bookmark_button(self):
         events = [self.event('sentinel', 100, 'startOfRoute'), self.event('userBookmark', 145),
@@ -201,17 +209,17 @@ class BookmarkHistoryTest(BookmarkFixture, unittest.TestCase):
         p = self.segment(number=1)
         (p / 'qlog.zst').write_bytes(b'qlog')
         item = b.snapshot(self.root, preserved=lambda p: True)['old--1']
-        with patch.object(b, '_log_bookmark_offset', return_value=35.) as reader:
+        with patch.object(b, '_log_bookmark_timing', return_value=(35., 1793372706.)) as reader:
             self.assertEqual(b.segment_bookmark_offset(self.root, item), 35.)
             self.assertEqual(reader.call_count, 1)
             self.assertTrue(reader.call_args.args[0].endswith('qlog.zst'))
-        with patch.object(b, '_log_bookmark_offset', side_effect=[ValueError('bad qlog'), 20.]):
+        with patch.object(b, '_log_bookmark_timing', side_effect=[ValueError('bad qlog'), (20., 1793372706.)]):
             self.assertEqual(b.segment_bookmark_offset(self.root, item), 20.)
 
     def test_active_logs_are_never_decoded(self):
         self.segment(locked=True)
         item = b.snapshot(self.root, preserved=lambda p: True, recording={'old'})['old--0']
-        with patch.object(b, '_log_bookmark_offset') as reader:
+        with patch.object(b, '_log_bookmark_timing') as reader:
             self.assertIsNone(b.segment_bookmark_offset(self.root, item))
             reader.assert_not_called()
 

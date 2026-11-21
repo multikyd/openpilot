@@ -8,7 +8,9 @@ import threading
 import time
 import zipfile
 
-from openpilot.selfdrive.kisapilot.bookmark_export import export_bookmarks, is_preserved, split_segment
+from openpilot.selfdrive.kisapilot.bookmark_export import (
+  bookmark_archive_name, export_bookmarks, is_preserved, segment_bookmark_timing, split_segment,
+)
 from openpilot.selfdrive.kisapilot.bookmark_sftp import (
   KEY_DIR, SftpClient, TransferError, atomic_write, destination_id, read_config, validate_config,
 )
@@ -153,9 +155,28 @@ class BookmarkUploader:
       digest=hash_file(temporary)
       archive=self.spool/(identity+'.'+digest+'.zip')
       os.replace(temporary,archive)
+      remote_name=job.get('remote_name')
+      name_sequence=job.get('name_sequence', 0)
+      if job.get('sha256') != digest:
+        _, timestamp=segment_bookmark_timing(self.root, job['bookmark'])
+        if timestamp is None:
+          timestamp=min(stamp for path,_,_,stamp in sources
+                        if path.parent.name==job['bookmark'] and path.name.startswith(('qlog','rlog')))/1e9
+        base=bookmark_archive_name(timestamp, fractional=True).removesuffix('.zip')
+        # A rebuilt ZIP must never resume another archive's partial transfer.
+        name_sequence += int(remote_name is not None)
       with self.lock:
+        if job.get('sha256') != digest:
+          used={j.get('remote_name') for j in self.state['jobs'].values()}
+          while True:
+            suffix=f'-{name_sequence+1}' if name_sequence else ''
+            remote_name=f'{base}{suffix}.zip'
+            if remote_name not in used:
+              break
+            name_sequence+=1
         self.state['jobs'][identity].update(state='ready',segments=included,archive=archive.name,
-                                          sha256=digest,size=archive.stat().st_size,error='',retry_at=0)
+                                          sha256=digest,size=archive.stat().st_size,error='',retry_at=0,
+                                          remote_name=remote_name,name_sequence=name_sequence)
         self.save()
       return True
     finally:
@@ -201,7 +222,7 @@ class BookmarkUploader:
       self.cancel.clear()
       self.save()
     try:
-      self.client_factory(config,key_dir=self.key_dir,cancel=self.cancel).upload(archive,job['sha256'])
+      self.client_factory(config,key_dir=self.key_dir,cancel=self.cancel).upload(archive,job['sha256'],job.get('remote_name'))
       with self.lock:
         job.update(state='done',error='',completed=self.clock())
         self.save()  # Persist completion before discarding the resume source.

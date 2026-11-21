@@ -206,10 +206,15 @@ class SftpClient:
       if len(fields)>=5 and fields[0].startswith('-') and fields[4].isdigit(): return int(fields[4])
     raise TransferError('REMOTE_NOT_FILE')
 
-  def upload(self, local, sha256):
+  def upload(self, local, sha256, remote_name=None):
     local=Path(local)
     if not re.fullmatch(r'[0-9a-f]{64}',sha256):raise TransferError('INVALID_ARCHIVE_ID')
-    final=self.config['remote_dir'].rstrip('/')+'/bookmark-'+sha256+'.zip'
+    if remote_name is None:
+      remote_name='bookmark-'+sha256+'.zip'
+    elif not isinstance(remote_name, str) or not re.fullmatch(
+        r'\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.\d{6}(?:-\d+)?\.zip', remote_name, re.ASCII):
+      raise TransferError('INVALID_ARCHIVE_NAME')
+    final=self.config['remote_dir'].rstrip('/')+'/'+remote_name
     size=local.stat().st_size
     complete=self.stat(final)
     if complete is not None:

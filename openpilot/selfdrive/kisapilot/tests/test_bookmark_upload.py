@@ -32,7 +32,7 @@ class TestBookmarkUpload(unittest.TestCase):
     self.root=Path(self.tmp.name);self.params=Params();self.now=100.;self.marks=set();self.sent=[]
     class Client:
       def __init__(client,*args,**kwargs):pass
-      def upload(client,path,digest):self.sent.append((path.read_bytes(),digest));return 'saved'
+      def upload(client,path,digest,remote_name=None):self.sent.append((path.read_bytes(),digest,remote_name));return 'saved'
     self.factory=Client
     self.worker=self.new_worker();self.worker.load()
     self.offset=patch.object(export,'segment_bookmark_offset',return_value=40.)
@@ -110,6 +110,35 @@ class TestBookmarkUpload(unittest.TestCase):
     self.assertEqual(archive.read_bytes(),original)
     restarted.upload_step()
     self.assertEqual(len(self.sent),1)
+    self.assertEqual(self.sent[0][2], job['remote_name'])
+
+  def test_server_names_use_recorded_kst_time_and_separate_rebuilt_archives(self):
+    from datetime import datetime, timezone
+    stamp = datetime(2026, 11, 21, 0, 18, 27, 123456, tzinfo=timezone.utc).timestamp()
+    first = self.segment(0,True)
+    self.segment(1,True)
+    with patch('openpilot.selfdrive.kisapilot.bookmark_upload.segment_bookmark_timing', return_value=(40., stamp)):
+      self.prepare()
+      self.assertEqual({j['remote_name'] for j in self.worker.state['jobs'].values()},
+                       {'2026-11-21_09-18-27.123456.zip', '2026-11-21_09-18-27.123456-2.zip'})
+      job = next(j for j in self.worker.state['jobs'].values() if j['bookmark'] == first.name)
+      old_name = job['remote_name']
+      (self.worker.spool/job['archive']).write_bytes(b'corrupt')
+      (first/'qcamera.ts').write_bytes(b'changed')
+      self.assertFalse(self.worker.upload_step())
+      self.prepare()
+      self.assertNotEqual(job['remote_name'], old_name)
+      self.assertEqual(job['remote_name'], '2026-11-21_09-18-27.123456-3.zip')
+
+  def test_legacy_queued_archive_keeps_its_remote_path(self):
+    self.segment(0,True)
+    self.prepare()
+    self.job().pop('remote_name')
+    self.worker.save()
+    restarted = self.new_worker()
+    restarted.load()
+    self.assertTrue(restarted.upload_step())
+    self.assertIsNone(self.sent[0][2])
 
   def test_failure_keeps_same_archive_and_persistent_retry(self):
     self.segment(0,True);self.prepare();original=self.job()['archive']
@@ -177,6 +206,22 @@ class TestBookmarkUpload(unittest.TestCase):
 
 
 class TestSftpContract(unittest.TestCase):
+  def test_timestamped_destination_is_used_for_partial_and_final_zip(self):
+    from openpilot.selfdrive.kisapilot.bookmark_sftp import read_config
+    with tempfile.TemporaryDirectory() as directory:
+      archive = Path(directory) / 'bookmark.zip'
+      archive.write_bytes(b'data')
+      client = SftpClient(read_config(Params()))
+      name = '2026-11-21_09-18-27.123456.zip'
+      final = '/incoming/' + name
+      with patch.object(client, 'stat', side_effect=[None, None, 4]) as stat, \
+           patch.object(client, 'batch', return_value=(0, '', '')) as batch:
+        self.assertEqual(client.upload(archive, 'a'*64, name), 'saved')
+        self.assertEqual([call.args[0] for call in stat.call_args_list], [final, final+'.part', final])
+        self.assertEqual(batch.call_args.args[0][-1], f'@rename "{final}.part" "{final}"')
+        with self.assertRaisesRegex(TransferError, 'INVALID_ARCHIVE_NAME'):
+          client.upload(archive, 'a'*64, '../'+name)
+
   def test_upload_uses_resume_only_for_a_shorter_existing_temporary_file(self):
     from openpilot.selfdrive.kisapilot.bookmark_sftp import read_config
     with tempfile.TemporaryDirectory() as directory:
