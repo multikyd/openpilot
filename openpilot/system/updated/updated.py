@@ -70,6 +70,13 @@ def run(cmd: list[str], cwd: str | None = None) -> str:
   return subprocess.check_output(cmd, cwd=cwd, stderr=subprocess.STDOUT, encoding='utf8')
 
 
+def run_lfs(action: str, cwd: str) -> str:
+  script = os.path.join(cwd, "tools", "lfs.sh")
+  if os.path.isfile(script):
+    return run(["bash", script, action], cwd)
+  return run(["git", "lfs", action], cwd)
+
+
 def set_consistent_flag(consistent: bool) -> None:
   os.sync()
   consistent_file = Path(os.path.join(FINALIZED, ".overlay_consistent"))
@@ -192,10 +199,9 @@ def finalize_update() -> None:
   t = time.monotonic()
   try:
     run(["git", "gc"], FINALIZED)
-    lfs = os.path.join(FINALIZED, "tools/lfs.sh")
-    run([lfs, "prune"] if os.path.isfile(lfs) else ["git", "lfs", "prune"], FINALIZED)
+    run_lfs("prune", FINALIZED)
     cloudlog.event("Done git cleanup", duration=time.monotonic() - t)
-  except subprocess.CalledProcessError:
+  except (OSError, subprocess.CalledProcessError):
     cloudlog.exception(f"Failed git cleanup, took {time.monotonic() - t:.3f} s")
 
   set_consistent_flag(True)
@@ -401,8 +407,7 @@ class Updater:
 
     # Only checkouts with LFS files need a client, so release updates don't depend on git-lfs
     if run(["git", "ls-files", ":(attr:filter=lfs)"], OVERLAY_MERGED):
-      lfs = os.path.join(OVERLAY_MERGED, "tools/lfs.sh")
-      run([lfs, "pull"] if os.path.isfile(lfs) else ["git", "lfs", "pull"], OVERLAY_MERGED)
+      run_lfs("pull", OVERLAY_MERGED)
 
     # TODO: show agnos download progress
     if AGNOS:
