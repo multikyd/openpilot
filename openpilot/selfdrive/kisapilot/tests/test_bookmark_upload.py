@@ -177,6 +177,24 @@ class TestBookmarkUpload(unittest.TestCase):
 
 
 class TestSftpContract(unittest.TestCase):
+  def test_upload_status_distinguishes_stat_upload_and_rename_failures(self):
+    from openpilot.selfdrive.kisapilot.bookmark_sftp import read_config
+    with tempfile.TemporaryDirectory() as directory:
+      archive = Path(directory) / 'bookmark.zip'
+      archive.write_bytes(b'data')
+      client = SftpClient(read_config(Params()))
+      missing = (1, '', 'Can\'t ls: No such file or directory')
+      for responses, expected in (
+          ([(1, '', 'private path: unexpected failure')], 'SFTP_STAT_FAILED'),
+          ([(1, '', 'subsystem not found')], 'SFTP_SUBSYSTEM'),
+          ([missing, missing, (1, '', 'private path: unexpected failure')], 'SFTP_UPLOAD_FAILED'),
+          ([missing, missing, (1, '', 'remote rename /private/a to /private/b: Failure')], 'SFTP_RENAME_FAILED'),
+          ([missing, missing, (1, '', 'remote write: Disk quota exceeded')], 'SFTP_SPACE_OR_QUOTA')):
+        with self.subTest(expected=expected), patch.object(client, 'batch', side_effect=responses):
+          with self.assertRaises(TransferError) as error:
+            client.upload(archive, 'a'*64)
+          self.assertEqual(str(error.exception), expected)
+
   def test_config_rejects_batch_and_option_injection(self):
     for field,value in [('host','-Fbad'),('host','user@host'),('user','x\nput bad'),
                         ('remote_dir','/x\nrm y'),('remote_dir','/x/../y'),('key_name','../key')]:

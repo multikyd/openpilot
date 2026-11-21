@@ -106,12 +106,17 @@ def quote(value):
   return '"'+value.replace('\\', '\\\\').replace('"', '\\"')+'"'
 
 
-def error_code(stderr):
+def error_code(stderr, fallback):
+  # Expose fixed codes only. OpenSSH diagnostics can include private paths.
   value = stderr.lower()
+  if 'subsystem request failed' in value or 'subsystem not found' in value: return 'SFTP_SUBSYSTEM'
+  if 'no matching ' in value or 'unable to negotiate' in value: return 'SSH_NEGOTIATION'
   if 'host key' in value or 'host identification' in value: return 'HOST_KEY'
   if 'permission denied' in value or 'load key' in value or 'invalid format' in value: return 'AUTH_OR_PERMISSION'
+  if 'no space left' in value or 'quota exceeded' in value: return 'SFTP_SPACE_OR_QUOTA'
   if 'timed out' in value or 'connection' in value or 'resolve hostname' in value: return 'NETWORK'
-  return 'SFTP_FAILED'
+  if re.search(r'(?m)^(?:remote rename|couldn.t rename|rename .+:)', value): return 'SFTP_RENAME_FAILED'
+  return fallback
 
 
 def password_path(config, directory=KEY_DIR):
@@ -192,8 +197,10 @@ class SftpClient:
   def stat(self, path):
     code, out, err=self.batch(['@ls -ln '+quote(path)], 30)
     if code:
-      if 'no such file' in err.lower() or 'not found' in err.lower(): return None
-      raise TransferError(error_code(err))
+      status = error_code(err, 'SFTP_STAT_FAILED')
+      if status == 'SFTP_STAT_FAILED' and ('no such file' in err.lower() or 'not found' in err.lower()):
+        return None
+      raise TransferError(status)
     for line in out.splitlines():
       fields=line.split()
       if len(fields)>=5 and fields[0].startswith('-') and fields[4].isdigit(): return int(fields[4])
@@ -214,7 +221,7 @@ class SftpClient:
     # after reput succeeds; a power loss never exposes a partial final ZIP.
     code, _, err=self.batch(self.prepare_directory()+['@reput '+quote(local.as_posix())+' '+quote(final+'.part'),
                             '@rename '+quote(final+'.part')+' '+quote(final)])
-    if code: raise TransferError(error_code(err))
+    if code: raise TransferError(error_code(err, 'SFTP_UPLOAD_FAILED'))
     if self.stat(final) != size: raise TransferError('REMOTE_SIZE')
     return 'saved'
 
@@ -231,6 +238,6 @@ class SftpClient:
       with os.fdopen(fd,'wb') as f: f.write(b'kisa-sftp-test\n')
       code, _, err=self.batch(self.prepare_directory()+['@cd '+quote(self.config['remote_dir']),
                               '@put '+quote(Path(name).as_posix())+' '+quote(probe), '@rm '+quote(probe)], 30)
-      if code: raise TransferError(error_code(err))
+      if code: raise TransferError(error_code(err, 'SFTP_CONNECTION_TEST_FAILED'))
     finally:
       Path(name).unlink(missing_ok=True)
