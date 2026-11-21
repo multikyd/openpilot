@@ -107,7 +107,7 @@ class TestLaneReleaseAndDiagnostics(unittest.TestCase):
     dependencies={'openpilot.cereal':NS(log=NS(Desire=NS(laneChangeLeft=3,laneChangeRight=4))),
                   'openpilot.common.realtime':NS(DT_MDL=.05),
                   'openpilot.common.params':NS(Params=lambda:NS(get=lambda k,**kw:params[k]))}
-    with patch.dict(sys.modules,dependencies):planner=module('test7_release_planner',ROOT/'lib/lane_planner_2.py')
+    with patch.dict(sys.modules,dependencies):planner=module('test7_release_planner',ROOT/'lib/lane_path.py')
     p=planner.LanePlanner();p.camera_offset=p.total_camera_offset=.01;p.path_offset=-.03
     md=model();md.meta.desireState=[];md.meta.laneWidthRight=3.;md.laneLineProbs[3]=.8
     t=np.linspace(0,3,33)

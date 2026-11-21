@@ -22,7 +22,7 @@
 ## 위치가 왼쪽으로 갔다 복귀할 수 있는 코드 경로
 
 - `LaneCenterOffset`이 음수일 때 모델모드의 `LanePositionGuard`는 특정 속도·차선 조건에서 왼쪽 복귀 보정을 추가합니다. 기하 정보·신뢰도·운전자 개입 등에 따라 보정이 해제됩니다. [model_lane_guard.py](../controls/lib/model_lane_guard.py)
-- 레인모드에서는 자동 차로 위치 프로필과 수동 중심 선호가 적용됩니다. 자동 프로필은 차로 분류를 약 1.5초 확인하고 목표 보정을 서서히 이동시킵니다. 모델모드로 바뀌면 이 항은 서서히 해제됩니다. [lane_planner_2.py](../controls/lib/lane_planner_2.py)
+- 레인모드에서는 자동 차로 위치 프로필과 수동 중심 선호가 적용됩니다. 자동 프로필은 차로 분류를 약 1.5초 확인하고 목표 보정을 서서히 이동시킵니다. 모델모드로 바뀌면 이 항은 서서히 해제됩니다. [lane_path.py](../controls/lib/lane_path.py)
 - 근거리 앞차 및 예측 커브 속도가 레인/모델 선택에 관여합니다. 모드마다 다른 경로·보정이 이어지면 움직였다 복귀하는 느낌이 생길 수 있습니다. [close_lead_mode.py](../controls/lib/close_lead_mode.py), [controlsd.py](../controls/controlsd.py)
 
 이는 현재 코드로 확인한 원인 후보입니다. 실제 원인 확정에는 해당 시점의 lateralControlMode, 모델/차선 경로, 차선 확률, 조향 목표와 장치에 저장된 보정값을 함께 확인해야 합니다. 파라미터 정리 커밋 `52a402c`에서는 조향 제어를 변경하지 않았습니다. 후속 수정에서는 레인모드의 중복 `LanePositionGuard` 연결을 제거했습니다. 레인모드 진입 시 이 보정 상태를 초기화하고 레인플래너의 위치·경계 보정을 사용합니다. 모델모드의 기존 보정은 유지합니다. 기존 controlsState.debugMsg1의 `LPG=`는 위치 복귀 보정, `LCF=model`은 근거리 앞차에 따른 모델모드 유지, `MLG=`는 모델 경계 보정을 확인할 단서입니다.
@@ -125,7 +125,7 @@ CAN-FD 차량의 HDA2 조향 메시지 구성을 선택합니다. 0은 강제 �
 
 차선 경로 계산에 쓰는 카메라 기준 오프셋입니다(단위 m). 수동 항은 음수가 왼쪽, 양수가 오른쪽 방향이며, 기존 계산은 0.04m를 보정 기준으로 사용합니다. 자동 차로 위치 프로필이 이 값을 보상할 수 있으므로 표시값과 실제 횡이동량은 같지 않습니다. 모델 직접 조향의 고정 이동량도 아닙니다.
 
-사용처: [controlsd.py](../../../openpilot/selfdrive/controls/controlsd.py), [lane_planner_2.py](../../../openpilot/selfdrive/controls/lib/lane_planner_2.py), [lateral_planner.py](../../../openpilot/selfdrive/controls/lib/lateral_planner.py), [ldw.py](../../../openpilot/selfdrive/controls/lib/ldw.py)
+사용처: [controlsd.py](../../../openpilot/selfdrive/controls/controlsd.py), [lane_path.py](../../../openpilot/selfdrive/controls/lib/lane_path.py), [lateral_planner.py](../../../openpilot/selfdrive/controls/lib/lateral_planner.py), [ldw.py](../../../openpilot/selfdrive/controls/lib/ldw.py)
 
 ### 차선 중심 위치 선호(m) · `LaneCenterOffset`
 
@@ -133,7 +133,7 @@ CAN-FD 차량의 HDA2 조향 메시지 구성을 선택합니다. 0은 강제 �
 
 차선 중심에 더하는 수동 위치 선호입니다(단위 m). 음수는 왼쪽, 양수는 오른쪽이며 레인모드에서 커브·차선변경 시 줄어듭니다. 레인모드에서는 레인플래너만 위치를 보정하며 추가 LanePositionGuard는 사용하지 않습니다. 모델모드에서는 음수 설정에 한해 일정 속도·차선 조건에서 왼쪽 복귀 보정에도 사용합니다. 0은 이 수동 선호만 해제하며 자동 위치·경계 보정은 남습니다.
 
-사용처: [controlsd.py](../../../openpilot/selfdrive/controls/controlsd.py), [lane_planner_2.py](../../../openpilot/selfdrive/controls/lib/lane_planner_2.py)
+사용처: [controlsd.py](../../../openpilot/selfdrive/controls/controlsd.py), [lane_path.py](../../../openpilot/selfdrive/controls/lib/lane_path.py)
 
 ### Steer Ratio(Manual) · `ManualSteeringRatio`
 
@@ -221,7 +221,7 @@ CAN-FD 차량의 HDA2 조향 메시지 구성을 선택합니다. 0은 강제 �
 
 왼쪽 도로경계가 인식될 때 사용하는 레거시 모델모드 경로 계산 보정입니다(단위 m, 음수 왼쪽·양수 오른쪽). 0은 해당 보정을 끕니다. 현재 모델 직접 조향은 이 경로를 그대로 사용하지 않으므로 모델모드 차량 위치를 고정 이동시키는 효과는 보장되지 않습니다.
 
-사용처: [lane_planner_2.py](../../../openpilot/selfdrive/controls/lib/lane_planner_2.py)
+사용처: [lane_path.py](../../../openpilot/selfdrive/controls/lib/lane_path.py)
 
 ### 오른쪽 엣지 치우침 조정 · `RightEdgeOffset`
 
@@ -229,7 +229,7 @@ CAN-FD 차량의 HDA2 조향 메시지 구성을 선택합니다. 0은 강제 �
 
 오른쪽 도로경계가 인식될 때 사용하는 레거시 모델모드 경로 계산 보정입니다(단위 m, 음수 왼쪽·양수 오른쪽). 0은 해당 보정을 끕니다. 현재 모델 직접 조향은 이 경로를 그대로 사용하지 않으므로 모델모드 차량 위치를 고정 이동시키는 효과는 보장되지 않습니다.
 
-사용처: [lane_planner_2.py](../../../openpilot/selfdrive/controls/lib/lane_planner_2.py)
+사용처: [lane_path.py](../../../openpilot/selfdrive/controls/lib/lane_path.py)
 
 ## LONG
 

@@ -10,8 +10,8 @@ import openpilot.cereal.messaging as messaging
 from openpilot.cereal import log
 
 from openpilot.common.params import Params
-#from openpilot.selfdrive.controls.lib.lane_planner import LanePlanner
-from openpilot.selfdrive.controls.lib.lane_planner_2 import LanePlanner
+# KYD: Build the lane-based reference path before lateral MPC.
+from openpilot.selfdrive.controls.lib.lane_path import LanePlanner
 
 TRAJECTORY_SIZE = 33
 CAMERA_OFFSET = Params().get("CameraLateralOffsetM", return_default=True) if Params().get("CameraLateralOffsetM", return_default=True) is not None else 0.04 # default 0.04

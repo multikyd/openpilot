@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-from openpilot.selfdrive.controls.lib import lane_planner_2 as lane_module
+from openpilot.selfdrive.controls.lib import lane_path as lane_module
 from openpilot.selfdrive.controls.lib.lateral_planner import get_lane_center_curvature
 
 

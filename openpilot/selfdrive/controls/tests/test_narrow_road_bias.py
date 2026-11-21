@@ -106,7 +106,7 @@ class TestNarrowRoadBias(unittest.TestCase):
 
 class TestNarrowPlannerWiring(unittest.TestCase):
   def test_global_profiles_and_manual_parameters_remain_original(self):
-    source=(Path(__file__).parents[1]/'lib/lane_planner_2.py').read_text(encoding='utf8')
+    source=(Path(__file__).parents[1]/'lib/lane_path.py').read_text(encoding='utf8')
     import ast
     tree=ast.parse(source)
     profiles=next(ast.literal_eval(n.value) for n in tree.body if isinstance(n,ast.Assign) and
@@ -134,7 +134,7 @@ class TestNarrowPathIntegration(unittest.TestCase):
       'openpilot.cereal':NS(log=NS(Desire=NS(laneChangeLeft=3,laneChangeRight=4))),
       'openpilot.common.realtime':NS(DT_MDL=.05),
       'openpilot.common.params':NS(Params=lambda:NS(get=lambda k,**kw:params[k]))}
-    spec=importlib.util.spec_from_file_location('narrow_path_actual',Path(__file__).parents[1]/'lib/lane_planner_2.py')
+    spec=importlib.util.spec_from_file_location('narrow_path_actual',Path(__file__).parents[1]/'lib/lane_path.py')
     module=importlib.util.module_from_spec(spec)
     with patch.dict(sys.modules,dependencies):spec.loader.exec_module(module)
     cs=NS(vEgo=8.,leftBlinker=False,rightBlinker=False,steeringPressed=False,leftLaneLine=21)

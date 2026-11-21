@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-from openpilot.selfdrive.controls.lib import lane_planner_2 as lane_module
+from openpilot.selfdrive.controls.lib import lane_path as lane_module
 
 
 class TestLaneCameraProfile(unittest.TestCase):
