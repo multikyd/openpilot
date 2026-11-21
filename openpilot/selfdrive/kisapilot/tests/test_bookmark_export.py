@@ -175,10 +175,11 @@ class BookmarkHistoryTest(BookmarkFixture, unittest.TestCase):
         self.segment(number=1)
         self.assertEqual(self.export_at(5., adjacent=0)['bookmark_metadata']['included_segments'], ['old--1'])
 
-    def event(self, kind, seconds, sentinel_type=None, wall_time=0):
+    def event(self, kind, seconds, sentinel_type=None, wall_time=0, valid=True):
         return SimpleNamespace(which=lambda: kind, logMonoTime=int(seconds * 1e9),
                                sentinel=SimpleNamespace(type=sentinel_type),
-                               initData=SimpleNamespace(wallTimeNanos=int(wall_time * 1e9)))
+                               initData=SimpleNamespace(wallTimeNanos=int(wall_time * 1_000_000_000)),
+                               clocks=SimpleNamespace(wallTimeNanos=int(wall_time * 1_000_000_000)), valid=valid)
 
     def test_uses_segment_sentinel_not_repeated_route_init_time(self):
         events = [self.event('initData', 100), self.event('sentinel', 700, 'startOfSegment'),
@@ -191,6 +192,16 @@ class BookmarkHistoryTest(BookmarkFixture, unittest.TestCase):
                   self.event('sentinel', 700, 'startOfSegment'),
                   self.event('userBookmark', 729.5)]
         self.assertEqual(b.bookmark_timing(events), (29.5, wall + 629.5))
+
+    def test_nearby_clock_sample_supersedes_stale_route_time(self):
+        wall = 1795230643
+        events = [self.event('initData', 100, wall_time=1793372706),
+                  self.event('sentinel', 700, 'startOfSegment'),
+                  self.event('clocks', 728., wall_time=wall - 30),
+                  self.event('userBookmark', 729.5),
+                  self.event('clocks', 729.5, wall_time=wall - 30, valid=False),
+                  self.event('clocks', 729.75, wall_time=wall)]
+        self.assertEqual(b.bookmark_timing(events), (29.5, wall - .25))
 
     def test_multiple_bookmarks_use_earliest_event_including_bookmark_button(self):
         events = [self.event('sentinel', 100, 'startOfRoute'), self.event('userBookmark', 145),

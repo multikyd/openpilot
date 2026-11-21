@@ -117,7 +117,8 @@ def bookmark_timing(events):
     """Return the earliest bookmark's segment offset and recording wall time."""
     start = None
     bookmark = None
-    anchor = None
+    route_clock = None
+    clocks = []
     for event in events:
         kind = event.which()
         if kind == 'sentinel' and str(event.sentinel.type) in ('startOfSegment', 'startOfRoute'):
@@ -125,18 +126,23 @@ def bookmark_timing(events):
         elif kind in ('userBookmark', 'bookmarkButton'):
             bookmark = event.logMonoTime if bookmark is None else min(bookmark, event.logMonoTime)
         elif kind == 'initData' and event.initData.wallTimeNanos:
-            anchor = (event.logMonoTime, event.initData.wallTimeNanos)
+            route_clock = (event.logMonoTime, event.initData.wallTimeNanos)
+        elif kind == 'clocks' and event.valid and 946684800_000000000 <= event.clocks.wallTimeNanos < 4102444800_000000000:
+            clocks.append((event.logMonoTime, event.clocks.wallTimeNanos))
     if start is None or bookmark is None:
         return None, None
     offset = (bookmark - start) / 1e9
     if not 0 <= offset <= 60:
         return None, None
-    timestamp = None
-    if anchor is not None and bookmark >= anchor[0]:
-        stamp = (anchor[1] + bookmark - anchor[0]) / 1e9
-        if 946684800 <= stamp < 4102444800:  # Some old logs had no valid wall clock.
-            timestamp = stamp
-    return offset, timestamp
+    # The route clock can predate the device's time synchronization.
+    nearest = min(clocks, key=lambda sample: abs(sample[0] - bookmark), default=None)
+    if nearest is not None and abs(nearest[0] - bookmark) <= 5_000_000_000:
+        return offset, (nearest[1] + bookmark - nearest[0]) / 1_000_000_000
+    if route_clock is not None and bookmark >= route_clock[0]:
+        stamp = (route_clock[1] + bookmark - route_clock[0]) / 1_000_000_000
+        if 946684800 <= stamp < 4102444800:
+            return offset, stamp
+    return offset, None
 
 
 def bookmark_offset(events):
