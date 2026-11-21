@@ -25,6 +25,29 @@ from openpilot.selfdrive.kisapilot.crash_diagnostics import read_fatal_stack
 import importlib.util
 
 
+# KYD: Reap a crashed navigation process after a delay so the normal manager can restart it.
+class KisaNavigationRecovery:
+  RETRY_SECONDS = 5.
+
+  def __init__(self):
+    self.failed_process = None
+    self.retry_at = 0.
+
+  def update(self, process, wanted, now):
+    child = process.proc
+    if not wanted or process.shutting_down or child is None or child.exitcode is None:
+      self.failed_process = None
+      return
+
+    if child is not self.failed_process:
+      self.failed_process = child
+      self.retry_at = now + self.RETRY_SECONDS
+    elif now >= self.retry_at:
+      process.stop()
+      self.failed_process = None
+      cloudlog.event('kisa_navigation_restart_requested', pid=child.pid, exit_code=child.exitcode)
+
+
 class KisaAgentFlaskSetup:
   RETRY_SECONDS = 30
   INSTALL_TIMEOUT_SECONDS = 60
@@ -193,6 +216,7 @@ def manager_thread(kisa_flask: KisaAgentFlaskSetup) -> None:
   started_prev = False
   ignition_prev = False
   reported_kisa_exits = {}
+  kisa_navigation_recovery = KisaNavigationRecovery()
 
   while True:
     sm.update(1000)
@@ -240,6 +264,10 @@ def manager_thread(kisa_flask: KisaAgentFlaskSetup) -> None:
           cloudlog.event('kisa_process_exit', name=process.name, pid=process.pid, exit_code=process.exitCode,
                          fatal_stack=read_fatal_stack(process.pid) if process.exitCode < 0 else '', error=True)
           reported_kisa_exits[process.name] = process.pid
+
+    navigation = managed_processes['kisa_navigation']
+    kisa_navigation_recovery.update(navigation, navigation.enabled and navigation.name not in not_run,
+                                    time.monotonic())
 
     # kick AGNOS power monitoring watchdog
     try:
