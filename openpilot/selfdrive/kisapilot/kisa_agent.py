@@ -1576,6 +1576,9 @@ def udp_broadcast_loop():
 # =========================
 def main():
     global bookmark_server
+    # KYD: Save fatal stacks for bookmark and route diagnostics.
+    from openpilot.selfdrive.kisapilot.crash_diagnostics import enable_crash_diagnostics
+    enable_crash_diagnostics()
     if params is not None:
         from openpilot.selfdrive.kisapilot.bookmark_upload_api import UploadApi
         bookmark_server = UploadApi(app, params, Params('/dev/shm/params'))

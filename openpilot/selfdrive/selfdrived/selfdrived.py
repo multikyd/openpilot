@@ -147,9 +147,10 @@ class SelfdriveD:
 
     self.lane_change_delay = self.params.get("LaneChangeDelaySec", return_default=True)
 
-    self.ignored_processes = set()
+    # KYD: The phone companion can fail without preventing engagement.
+    self.ignored_processes = {'kisa_agent'}
     if HARDWARE.get_device_type() == 'tici' and os.path.exists('/dev/nvme0'):
-      self.ignored_processes = {'loggerd', }
+      self.ignored_processes.add('loggerd')
 
     # Determine startup event
     self.startup_event = EventName.startup

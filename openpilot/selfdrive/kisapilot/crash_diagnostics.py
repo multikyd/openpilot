@@ -9,6 +9,24 @@ import time
 
 FAULT_DIR = Path('/data/kisa_crash')
 _fault_file = None
+MAX_FAULT_BYTES = 16 * 1024
+
+
+# KYD: Include a bounded native crash trace in the recorded process-exit event.
+def read_fatal_stack(pid, directory=FAULT_DIR):
+  # A PID can be reused. Read only the newest matching trace, and require a fatal header.
+  try:
+    path = max(Path(directory).glob(f'kisa-fault-*-{pid}.log'), key=lambda p: p.stat().st_mtime, default=None)
+    if path is not None:
+      with path.open('rb') as stream:
+        stream.seek(max(0, path.stat().st_size - MAX_FAULT_BYTES))
+        text = stream.read(MAX_FAULT_BYTES).decode(errors='replace')
+      _, header, stack = text.rpartition('Fatal Python error:')
+      if header:
+        return header + stack
+  except OSError:
+    pass
+  return ''
 
 
 def enable_crash_diagnostics(directory=FAULT_DIR):

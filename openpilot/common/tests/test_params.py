@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 import datetime
 import os
 import threading
@@ -40,6 +41,21 @@ class TestParams(OpenpilotTestCase):
     self.params.put("AthenadPid", 123, block=True)
     assert self.params.get("DongleId") == "bob"
     assert self.params.get("AthenadPid") == 123
+
+  def test_concurrent_nonblocking_writes_flush_on_close(self):
+    keys = ("TrafficLightContext", "TrafficLight", "DongleId", "Version")
+    writer = Params()
+
+    def write_many(key):
+      for sequence in range(32):
+        writer.put(key, str(sequence))
+
+    with ThreadPoolExecutor(max_workers=len(keys)) as pool:
+      list(pool.map(write_many, keys))
+    del writer
+
+    for key in keys:
+      assert self.params.get(key) == "31"
 
   def test_params_get_block(self):
     def _delayed_writer():

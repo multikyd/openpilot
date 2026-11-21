@@ -9,7 +9,6 @@
 #include <unordered_map>
 
 #include "common/params_keys.h"
-#include "common/queue.h"
 #include "common/swaglog.h"
 #include "common/util.h"
 #include "common/hardware/hw.h"
@@ -224,19 +223,28 @@ void Params::clearAll(ParamKeyFlag key_flag) {
   fsync_dir(getParamPath());
 }
 
+// KYD: Serialize enqueue and the async worker idle transition to avoid races.
 void Params::putNonBlocking(const std::string &key, const std::string &val) {
-   queue.push(std::make_pair(key, val));
-  // start thread on demand
-  if (!future.valid() || future.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
+  std::scoped_lock lock(write_mutex);
+  if (!writer_running) {
     future = std::async(std::launch::async, &Params::asyncWriteThread, this);
+    writer_running = true;
   }
+  queue.emplace(key, val);
 }
 
 void Params::asyncWriteThread() {
-  // TODO: write the latest one if a key has multiple values in the queue.
-  std::pair<std::string, std::string> p;
-  while (queue.try_pop(p, 0)) {
-    // Params::put is Thread-Safe
-    put(p.first, p.second);
+  while (true) {
+    std::pair<std::string, std::string> pending;
+    {
+      std::scoped_lock lock(write_mutex);
+      if (queue.empty()) {
+        writer_running = false;
+        return;
+      }
+      pending = std::move(queue.front());
+      queue.pop();
+    }
+    put(pending.first, pending.second);
   }
 }

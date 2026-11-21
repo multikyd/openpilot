@@ -20,6 +20,7 @@ from openpilot.system.athena.registration import register, UNREGISTERED_DONGLE_I
 from openpilot.common.swaglog import cloudlog, add_file_handler
 from openpilot.common.version import get_build_metadata
 from openpilot.common.hardware.hw import Paths
+from openpilot.selfdrive.kisapilot.crash_diagnostics import read_fatal_stack
 
 import importlib.util
 
@@ -191,6 +192,7 @@ def manager_thread(kisa_flask: KisaAgentFlaskSetup) -> None:
 
   started_prev = False
   ignition_prev = False
+  reported_kisa_exits = {}
 
   while True:
     sm.update(1000)
@@ -199,6 +201,7 @@ def manager_thread(kisa_flask: KisaAgentFlaskSetup) -> None:
 
     if started and not started_prev:
       params.clear_all(ParamKeyFlag.CLEAR_ON_ONROAD_TRANSITION)
+      reported_kisa_exits.clear()
     elif not started and started_prev:
       params.clear_all(ParamKeyFlag.CLEAR_ON_OFFROAD_TRANSITION)
 
@@ -225,8 +228,18 @@ def manager_thread(kisa_flask: KisaAgentFlaskSetup) -> None:
 
     # send managerState
     msg = messaging.new_message('managerState', valid=True)
-    msg.managerState.processes = [p.get_process_state_msg() for p in managed_processes.values()]
+    processes = [p.get_process_state_msg() for p in managed_processes.values()]
+    msg.managerState.processes = processes
     pm.send('managerState', msg)
+
+    # KYD: Record each crash once in the current drive, including the local fatal stack.
+    if started:
+      for process in processes:
+        if (process.name in ('kisa_agent', 'kisa_navigation') and process.shouldBeRunning and
+            not process.running and process.exitCode != 0 and reported_kisa_exits.get(process.name) != process.pid):
+          cloudlog.event('kisa_process_exit', name=process.name, pid=process.pid, exit_code=process.exitCode,
+                         fatal_stack=read_fatal_stack(process.pid) if process.exitCode < 0 else '', error=True)
+          reported_kisa_exits[process.name] = process.pid
 
     # kick AGNOS power monitoring watchdog
     try:

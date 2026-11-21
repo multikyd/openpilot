@@ -2,13 +2,14 @@
 
 #include <future>
 #include <map>
+#include <mutex>
 #include <optional>
+#include <queue>
 #include <string>
 #include <tuple>
 #include <utility>
 #include <vector>
 
-#include "common/queue.h"
 
 enum ParamKeyFlag {
   PERSISTENT = 0x02,
@@ -84,7 +85,9 @@ private:
   std::string params_path;
   std::string params_prefix;
 
-  // for nonblocking write
+  // KYD: Synchronize Params writes shared by multiple native callers.
+  std::mutex write_mutex;
   std::future<void> future;
-  SafeQueue<std::pair<std::string, std::string>> queue;
+  std::queue<std::pair<std::string, std::string>> queue;
+  bool writer_running = false;
 };
