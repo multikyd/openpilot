@@ -15,20 +15,20 @@ sys.modules[spec.name] = layout
 spec.loader.exec_module(layout)
 
 
-def drawing_class(state, ray):
+def drawing_class(state, ray, name="HudRenderer"):
   tree = ast.parse((ROOT / "mici/onroad/hud_renderer.py").read_text(encoding="utf-8-sig"))
-  methods = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "HudRenderer")
-  wanted = {"_draw_lower_left", "_draw_car_stat"}
+  methods = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == name)
+  wanted = {"_draw_lower_left", "_draw_car_stat", "_draw_steering_wheel"} if name == "HudRenderer" else {"_render"}
   methods.body = [n for n in methods.body if isinstance(n, ast.FunctionDef) and n.name in wanted]
   methods.bases = []
   methods.decorator_list = []
-  namespace = dict(rl=ray, ui_state=state, time=time, KM_TO_MILE=.621371,
+  namespace = dict(rl=ray, ui_state=state, UIStatus=NS(DISENGAGED=0), time=time, KM_TO_MILE=.621371,
                    LEFT_CENTER=layout.LEFT_CENTER, lower_notice_box=layout.lower_notice_box,
                    left_car_box=layout.left_car_box, gap_bar_boxes=layout.gap_bar_boxes,
                    select_road_notice=layout.select_road_notice,
                    measure_text_cached=lambda f,t,s:NS(x=len(t)*s*.6,y=s))
   exec(compile(ast.Module(body=[methods],type_ignores=[]),str(ROOT / "mici/onroad/hud_renderer.py"),"exec"),namespace)
-  return namespace["HudRenderer"]
+  return namespace[name]
 
 
 class LayoutTest(unittest.TestCase):
@@ -99,6 +99,26 @@ class DrawingTest(unittest.TestCase):
     self.hud._draw_lower_left(self.rect)
     self.assertEqual(self.hud._draw_steering_wheel.call_count,2)
     self.ray.draw_text_ex.assert_not_called()
+  def test_rotating_wheel_and_lane_change_icons_pass_vector_origins(self):
+    self.state.sm = {"carState": NS(steeringAngleDeg=15)}
+    self.state.status = 1
+    self.hud._txt_wheel = NS(width=40, height=38)
+    self.hud._wheel_alpha_filter = MagicMock(x=230)
+    self.hud._wheel_y_filter = MagicMock(x=0)
+    intent = drawing_class(self.state, self.ray, "TurnIntent")()
+    intent._rect = self.rect
+    intent._turn_intent_direction = 1
+    intent._turn_intent_alpha_filter = NS(x=0.8)
+    intent._turn_intent_rotation_filter = NS(x=20.0)
+    intent._txt_turn_intent_left = NS(width=24, height=30)
+    intent._txt_turn_intent_right = NS(width=26, height=30)
+    self.hud._turn_intent = NS(render=intent._render)
+
+    type(self.hud)._draw_steering_wheel(self.hud, self.rect)
+
+    turn, wheel = self.ray.draw_texture_pro.call_args_list
+    self.assertEqual(turn.args[3:5], (self.ray.Vector2(13, 120), 20.0))
+    self.assertEqual(wheel.args[3:5], (self.ray.Vector2(20, 19), -15))
   def test_larger_notice_numbers_fit_below_car(self):
     for kind, speed, distance, min_speed_size, min_distance_size in (
         (22, 30, 80, 40, 28), (1, 50, 140, 37, 28), (1, 110, 1450, 25, 24)):
