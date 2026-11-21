@@ -217,9 +217,10 @@ class SftpClient:
       return 'already_done'
     partial=self.stat(final+'.part')
     if partial is not None and partial>size: raise TransferError('REMOTE_CONFLICT')
-    # reput resumes this immutable, content-addressed ZIP. rename executes only
-    # after reput succeeds; a power loss never exposes a partial final ZIP.
-    code, _, err=self.batch(self.prepare_directory()+['@reput '+quote(local.as_posix())+' '+quote(final+'.part'),
+    # OpenSSH expects reput's destination to exist and be smaller than the source.
+    # Rewrite an equal-size temporary file since size alone cannot verify its contents.
+    transfer = 'reput' if partial is not None and 0 < partial < size else 'put'
+    code, _, err=self.batch(self.prepare_directory()+['@'+transfer+' '+quote(local.as_posix())+' '+quote(final+'.part'),
                             '@rename '+quote(final+'.part')+' '+quote(final)])
     if code: raise TransferError(error_code(err, 'SFTP_UPLOAD_FAILED'))
     if self.stat(final) != size: raise TransferError('REMOTE_SIZE')

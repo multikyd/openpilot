@@ -177,6 +177,20 @@ class TestBookmarkUpload(unittest.TestCase):
 
 
 class TestSftpContract(unittest.TestCase):
+  def test_upload_uses_resume_only_for_a_shorter_existing_temporary_file(self):
+    from openpilot.selfdrive.kisapilot.bookmark_sftp import read_config
+    with tempfile.TemporaryDirectory() as directory:
+      archive = Path(directory) / 'bookmark.zip'
+      archive.write_bytes(b'data')
+      client = SftpClient(read_config(Params()))
+      for partial, command in ((None, '@put'), (0, '@put'), (2, '@reput'), (4, '@put')):
+        with self.subTest(partial=partial), patch.object(client, 'stat', side_effect=[None, partial, 4]), \
+             patch.object(client, 'batch', return_value=(0, '', '')) as batch:
+          self.assertEqual(client.upload(archive, 'a'*64), 'saved')
+          transfer, rename = batch.call_args.args[0][-2:]
+          self.assertTrue(transfer.startswith(command+' '))
+          self.assertTrue(rename.startswith('@rename '))
+
   def test_upload_status_distinguishes_stat_upload_and_rename_failures(self):
     from openpilot.selfdrive.kisapilot.bookmark_sftp import read_config
     with tempfile.TemporaryDirectory() as directory:
