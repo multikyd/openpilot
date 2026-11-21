@@ -254,18 +254,21 @@ class LanePlanner:
     geometry = self.lane_position_geometry
     values = (self.lane_width_left, self.lane_width_right, self.l_prob, self.r_prob,
               self.total_camera_offset, self.d_prob)
-    valid = geometry is not None and np.all(np.isfinite((*geometry, *values)))
+    geometry_valid = geometry is not None and np.all(np.isfinite((*geometry, *values)))
     observing = (self.lane_position_ready and self.lane_change_multiplier > .5 and
                not CS.leftBlinker and not CS.rightBlinker)
     # Observe while the driver steers; application still yields to the driver.
     enabled = observing and laneline_active and not getattr(CS, 'steeringPressed', False)
     candidate = 'unknown'
-    if valid:
+    right_with_weak_paint = False
+    valid = False
+    if geometry_valid:
       outer_left, outer_right, std_left, std_right, edge_left, edge_right, lane_left, lane_right = geometry
       width = lane_right-lane_left
       single_reference = self.single_lane_reference.supported
-      valid = ((2.6 < width < 4.2 and min(self.l_prob, self.r_prob) >= .75) or single_reference)
-    if observing and valid:
+      normal_width = 2.6 < width < 4.2
+      valid = (normal_width and min(self.l_prob, self.r_prob) >= .75) or single_reference
+    if observing and geometry_valid:
       left_close = 0. <= std_left < .6 and -.1 <= lane_left-edge_left <= 1.8
       right_close = 0. <= std_right < .6 and -.1 <= edge_right-lane_right <= 1.8
       left_neighbor = self.lane_width_left > 2.2 and outer_left > .3 and not left_close
@@ -274,7 +277,14 @@ class LanePlanner:
       left_code = getattr(CS, 'leftLaneLine', 0)
       left_yellow = np.isfinite(left_code) and 20 <= left_code < 30
       left_white = np.isfinite(left_code) and 10 <= left_code < 20
-      if single_reference:
+      # KYD: A clear curb/shoulder and a confirmed left neighbor can bridge weak right paint.
+      right_with_weak_paint = (normal_width and self.l_prob >= .75 and self.r_prob >= .50 and
+                               right_close and std_right < .50 and self.lane_width_right < 1.8 and
+                               left_neighbor and left_white and outer_right < .2)
+      if not valid:
+        if right_with_weak_paint:
+          candidate = 'right'
+      elif single_reference:
         candidate = 'single'
       elif (right_close and not right_neighbor and self.lane_width_right < 1.8 and
           ((left_yellow and outer_right < .2) or
@@ -307,6 +317,7 @@ class LanePlanner:
         self.lane_position_class = 'unknown'
 
     target = self.lane_position_offset if enabled and self.lane_position_class != 'unknown' and self.lane_position_missing <= 1.5 else 0.
+    valid = valid or (right_with_weak_paint and self.lane_position_class == 'right')
     if enabled and valid:
       self.lane_position_camera_target = LANE_CAMERA_PROFILES[self.lane_position_class]
       # CameraLateralOffsetM currently contributes once to lane geometry (weighted

@@ -44,6 +44,32 @@ class TestLaneCameraProfile(unittest.TestCase):
           self.assertEqual(self.p.lane_position_class, kind)
           self.assertAlmostEqual(self.p.effective_camera_offset, expected)
 
+  def test_rightmost_profile_keeps_confirmation_with_weak_paint(self):
+    self.geometry('right')
+    self.p.total_camera_offset = .01
+    for _ in range(20):
+      self.p.r_prob = .9
+      self.settle(5)
+      self.p.r_prob = .55
+      self.settle(3)
+
+    self.assertEqual(self.p.lane_position_class, 'right')
+    self.assertAlmostEqual(self.p.effective_camera_offset, .04)
+
+  def test_weak_paint_needs_close_right_edge_and_left_neighbor(self):
+    for geometry_index, value in [(3, .55), (5, 4.), (0, .1), (1, .4)]:
+      with self.subTest(geometry_index=geometry_index):
+        self.setUp()
+        self.geometry('right')
+        geometry = list(self.p.lane_position_geometry)
+        geometry[geometry_index] = value
+        self.p.lane_position_geometry = tuple(geometry)
+        self.p.r_prob = .55
+        self.p.total_camera_offset = .01
+        self.settle()
+        self.assertEqual(self.p.lane_position_class, 'unknown')
+        self.assertAlmostEqual(self.p.effective_camera_offset, .01)
+
   def test_single_reference_preserves_profile_with_weak_right_line(self):
     self.geometry('single')
     self.p.l_prob=.9;self.p.r_prob=.25
